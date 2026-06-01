@@ -316,11 +316,6 @@ export default function App() {
   return (
     <div style={{ minHeight: '100vh', position: 'relative' }}>
       <div className="bg-mesh" />
-      {sidebarOpen && (
-        <div onClick={() => setSidebarOpen(false)} style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 19, backdropFilter: 'blur(2px)'
-        }} />
-      )}
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', minHeight: '100vh' }}>
         <aside className="sidebar" style={{
           width: 220, flexShrink: 0, padding: '24px 12px',
@@ -359,6 +354,13 @@ export default function App() {
             </button>
           ))}
         </aside>
+
+        {sidebarOpen && (
+          <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 19,
+            backdropFilter: 'blur(2px)', WebkitBackdropFilter: 'blur(2px)'
+          }} />
+        )}
 
         <main style={{ flex: 1, padding: '24px 20px', maxWidth: 900, minWidth: 0, marginLeft: 220 }} className="main-content">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }} className="mobile-header">
@@ -537,6 +539,7 @@ export default function App() {
         @media (min-width: 768px) {
           .sidebar { left: 0 !important; }
           .mobile-header { display: none !important; }
+          .sidebar-overlay { display: none !important; }
         }
         @media (max-width: 767px) {
           .sidebar { left: ${sidebarOpen ? '0' : '-220px'} !important; transition: left 0.25s ease; }
