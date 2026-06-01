@@ -8,7 +8,7 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   getWishlistItems, addWishlistItem, updateWishlistItem, deleteWishlistItem,
   getWishlistCategories,
   addWishlistCategory, updateWishlistCategory, deleteWishlistCategory, exportData, importData,
-  exportTransactionsCSV, resetBudget, resetCategory, resetCategoriesForIncome,
+  exportTransactionsCSV, clearAllData, resetBudget, resetCategory, resetCategoriesForIncome,
   addIncome, updateIncome, deleteIncome, getIncomeEvents, recordIncomeReceived, deleteIncomeEvent,
   addVariable, updateVariable, deleteVariable } from './db';
 import { calcNextReset, evaluateFormula, fmt } from './utils';
@@ -198,6 +198,14 @@ export default function App() {
     }
     setModal(null);
   }, [pendingImport]);
+
+  const handleFullReset = useCallback(async () => {
+    await clearAllData();
+    localStorage.removeItem('finesse.activeAccountId');
+    const account = await ensureDefaultAccount();
+    setActiveAccountId(account?.id || null);
+    setModal(null);
+  }, []);
 
   // ── Income handlers ──────────────────────────────────────────────────────
   const handleIncomeHoldToggle = useCallback(async (id) => {
@@ -429,7 +437,8 @@ export default function App() {
           {view === 'settings' && (
             <SettingsView onExport={handleExport} onExportCSV={handleExportCSV}
               onImport={handleImport} onResetBudget={() => resetBudget(activeAccountId)}
-              incomes={incomes} onResetIncome={(incomeId) => resetCategoriesForIncome(incomeId, undefined, activeAccountId)} />
+              incomes={incomes} onResetIncome={(incomeId) => resetCategoriesForIncome(incomeId, undefined, activeAccountId)}
+              onFullReset={handleFullReset} />
           )}
         </main>
       </div>

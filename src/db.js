@@ -678,6 +678,33 @@ export async function resetCategoriesForIncome(incomeId, resetAt = new Date().to
 }
 
 // ── Export / Import ──────────────────────────────────────────────────────────
+export async function clearAllData() {
+  await db.transaction('rw',
+    db.accountTransfers,
+    db.incomeEvents,
+    db.accounts,
+    db.settings,
+    db.categories,
+    db.transactions,
+    db.wishlist,
+    db.wishlistCategories,
+    db.incomes,
+    db.variables,
+    async () => {
+      await db.accountTransfers.clear();
+      await db.incomeEvents.clear();
+      await db.accounts.clear();
+      await db.settings.clear();
+      await db.categories.clear();
+      await db.transactions.clear();
+      await db.wishlist.clear();
+      await db.wishlistCategories.clear();
+      await db.incomes.clear();
+      await db.variables.clear();
+    }
+  );
+}
+
 export async function exportData() {
   const [accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, variables] = await Promise.all([
     db.accounts.toArray(),

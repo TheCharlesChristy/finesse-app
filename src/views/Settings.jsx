@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
-import { Download, Upload, FileText, RefreshCcw } from 'lucide-react';
+import { Download, Upload, FileText, RefreshCcw, Trash2 } from 'lucide-react';
 
-export default function Settings({ onExport, onImport, onExportCSV, onResetBudget, incomes = [], onResetIncome }) {
+export default function Settings({ onExport, onImport, onExportCSV, onResetBudget, incomes = [], onResetIncome, onFullReset }) {
   const [resetIncomeId, setResetIncomeId] = useState('');
   const [resetStatus, setResetStatus] = useState('');
+  const [fullResetStatus, setFullResetStatus] = useState('');
+  const [isFullResetting, setIsFullResetting] = useState(false);
 
   const selectedIncomeId = useMemo(() => {
     if (incomes.some(income => String(income.id) === String(resetIncomeId))) return resetIncomeId;
@@ -37,6 +39,24 @@ export default function Settings({ onExport, onImport, onExportCSV, onResetBudge
 
     const count = await onResetIncome(selectedIncome.id);
     setResetStatus(`${count} categor${count === 1 ? 'y' : 'ies'} reset for ${selectedIncome.name}.`);
+  };
+
+  const handleFullReset = async () => {
+    if (!onFullReset) return;
+
+    const typed = window.prompt('This permanently deletes all accounts, budgets, transactions, wishlist items, incomes, variables, transfers, and settings. Type DELETE to confirm.');
+    if (typed !== 'DELETE') return;
+
+    setIsFullResetting(true);
+    setFullResetStatus('');
+    try {
+      await onFullReset();
+      setResetIncomeId('');
+      setResetStatus('');
+      setFullResetStatus('All data was deleted. A blank Main Account has been created.');
+    } finally {
+      setIsFullResetting(false);
+    }
   };
 
   return (
@@ -106,6 +126,22 @@ export default function Settings({ onExport, onImport, onExportCSV, onResetBudge
         </div>
         <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10 }}>
           Import will ask whether to replace or merge existing data.
+        </div>
+
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 18, paddingTop: 18 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--danger)', marginBottom: 6 }}>Full Reset</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
+            Permanently deletes every account and all saved finance data from this browser.
+          </div>
+          <button className="btn-danger" onClick={handleFullReset} disabled={isFullResetting}
+            style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <Trash2 size={14} /> {isFullResetting ? 'Deleting...' : 'Delete All Data'}
+          </button>
+          {fullResetStatus && (
+            <div style={{ color: 'var(--good)', fontSize: 12, marginTop: 10 }}>
+              {fullResetStatus}
+            </div>
+          )}
         </div>
       </div>
     </div>
