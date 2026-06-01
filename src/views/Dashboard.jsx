@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { TrendingUp, TrendingDown, AlertCircle, Zap, Clock, Pencil, Trash2, Check, X } from 'lucide-react';
+import { TrendingUp, TrendingDown, AlertCircle, Zap, Clock, Pencil, Trash2, Gift } from 'lucide-react';
 import {
   fmt,
   projectedEndBalance,
@@ -24,47 +24,15 @@ function ordinal(n) {
   return s[(v - 20) % 10] || s[v] || s[0];
 }
 
-const codeStyle = {
-  fontFamily: 'monospace',
-  background: 'rgba(79,255,176,0.1)',
-  color: 'var(--accent-mint)',
-  padding: '1px 5px',
-  borderRadius: 4,
-  fontSize: 11,
-};
-
 export default function Dashboard({
   categories, settings, transactions, incomes = [],
-  variables = [], onAddVariable, onUpdateVariable, onDeleteVariable,
-  onAddTx, onAddCategory, onAddIncome,
+  onAddTx, onAddCategory, onAddIncome, onAddOneOffIncome,
   onIncomeHoldToggle, onIncomeFastForward,
+  onEditIncome, onDeleteIncome,
   onEditCategory, onDeleteCategory,
 }) {
-  // Variables section local state
-  const [newVarName, setNewVarName]   = useState('');
-  const [newVarValue, setNewVarValue] = useState('');
-  const [editingVarId, setEditingVarId] = useState(null);
-  const [editVarName, setEditVarName]   = useState('');
-  const [editVarValue, setEditVarValue] = useState('');
-
-  const handleAddVar = () => {
-    if (!newVarName.trim() || newVarValue === '') return;
-    onAddVariable({ name: newVarName.trim(), value: parseFloat(newVarValue) || 0 });
-    setNewVarName('');
-    setNewVarValue('');
-  };
-
-  const startVarEdit = (v) => {
-    setEditingVarId(v.id);
-    setEditVarName(v.name);
-    setEditVarValue(String(v.value));
-  };
-
-  const commitVarEdit = () => {
-    if (!editVarName.trim()) return;
-    onUpdateVariable(editingVarId, { name: editVarName.trim(), value: parseFloat(editVarValue) || 0 });
-    setEditingVarId(null);
-  };
+  const [showAllIncomes, setShowAllIncomes] = useState(false);
+  const [showAllCategories, setShowAllCategories] = useState(false);
 
   // Derived totals
   const totalIncome = incomes.length > 0
@@ -89,6 +57,11 @@ export default function Dashboard({
     const catMap = Object.fromEntries(categories.map(c => [c.id, c]));
     return transactions.slice(0, 10).map(tx => ({ ...tx, cat: catMap[tx.categoryId] }));
   }, [transactions, categories]);
+
+  const visibleIncomes = showAllIncomes ? incomes : incomes.slice(0, 4);
+  const visibleCategories = showAllCategories ? categories : categories.slice(0, 5);
+  const hiddenIncomeCount = Math.max(0, incomes.length - visibleIncomes.length);
+  const hiddenCategoryCount = Math.max(0, categories.length - visibleCategories.length);
 
   const spendPct   = totalAllowances > 0 ? Math.min(100, (totalSpent / totalAllowances) * 100) : 0;
   const spendColor = spendPct > 90 ? 'var(--danger)' : spendPct > 70 ? 'var(--warn)' : 'var(--good)';
@@ -169,17 +142,24 @@ export default function Dashboard({
       <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>Income Sources</div>
-          <button className="btn-primary" onClick={onAddIncome} style={{ padding: '7px 14px', fontSize: 12 }}>
-            + Add Income
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <button className="btn-secondary" onClick={onAddOneOffIncome}
+              style={{ padding: '7px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Gift size={12} /> One-Off
+            </button>
+            <button className="btn-primary" onClick={onAddIncome} style={{ padding: '7px 14px', fontSize: 12 }}>
+              + Add Income
+            </button>
+          </div>
         </div>
         {incomes.length === 0 ? (
           <div style={{ color: 'var(--text-muted)', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>
             No income sources yet — add one to track your earnings
           </div>
         ) : (
-          <div style={{ maxHeight: 160, overflowY: 'auto', paddingRight: 4, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {incomes.map(income => {
+          <>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {visibleIncomes.map(income => {
               const freq = income.resetFrequency || (income.payDayOfMonth ? 'monthly' : null);
               const nextPay = freq
                 ? calcNextReset(freq, income.payDayOfMonth, income.lastPaid ? new Date(income.lastPaid) : new Date())
@@ -224,11 +204,26 @@ export default function Dashboard({
                       style={{ padding: '5px 10px', fontSize: 11, borderRadius: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
                       <Clock size={11} /> {income.holdActive ? 'Unhold' : 'Hold'}
                     </button>
+                    <button className="btn-icon" onClick={() => onEditIncome(income)} title="Edit income"
+                      style={{ width: 28, height: 28, opacity: 0.65 }}>
+                      <Pencil size={12} />
+                    </button>
+                    <button className="btn-icon" onClick={() => onDeleteIncome(income)} title="Delete income"
+                      style={{ width: 28, height: 28, opacity: 0.5 }}>
+                      <Trash2 size={12} />
+                    </button>
                   </div>
                 </div>
               );
             })}
           </div>
+          {hiddenIncomeCount > 0 || showAllIncomes ? (
+            <button className="btn-secondary" onClick={() => setShowAllIncomes(v => !v)}
+              style={{ marginTop: 12, width: '100%', padding: '8px 12px', fontSize: 12 }}>
+              {showAllIncomes ? 'Show fewer incomes' : `Show ${hiddenIncomeCount} more income${hiddenIncomeCount === 1 ? '' : 's'}`}
+            </button>
+          ) : null}
+          </>
         )}
       </div>
 
@@ -237,7 +232,9 @@ export default function Dashboard({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>Category Breakdown</div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn-secondary" onClick={onAddCategory} style={{ padding: '7px 14px', fontSize: 12 }}>
+            <button className="btn-secondary" onClick={onAddCategory} disabled={incomes.length === 0}
+              title={incomes.length === 0 ? 'Add an income before creating categories' : 'Add category'}
+              style={{ padding: '7px 14px', fontSize: 12 }}>
               + Category
             </button>
             <button className="btn-primary" onClick={onAddTx} style={{ padding: '7px 14px', fontSize: 12 }}>
@@ -247,11 +244,12 @@ export default function Dashboard({
         </div>
         {categories.length === 0 ? (
           <div style={{ color: 'var(--text-muted)', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>
-            No categories yet — add one above
+            {incomes.length === 0 ? 'Add an income first, then create funded categories.' : 'No categories yet — add one above'}
           </div>
         ) : (
-          <div style={{ maxHeight: 160, overflowY: 'auto', paddingRight: 4, display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {categories.map(cat => {
+          <>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {visibleCategories.map(cat => {
               const pct      = cat.allowance > 0 ? Math.min(100, ((cat.spent || 0) / cat.allowance) * 100) : 0;
               const left     = (cat.allowance || 0) - (cat.spent || 0);
               const barColor = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warn)' : 'var(--accent-mint)';
@@ -315,12 +313,12 @@ export default function Dashboard({
                           {left < 0 ? '-' : ''}{fmt(Math.abs(left))} left
                         </span>
                       </div>
-                      <button className="btn-icon" onClick={() => onEditCategory(cat)} style={{ width: 28, height: 28, opacity: 0.6 }}>
+                      <button className="btn-icon" onClick={() => onEditCategory(cat)} title="Edit category" style={{ width: 28, height: 28, opacity: 0.6 }}>
                         <Pencil size={12} />
                       </button>
                       <button className="btn-icon" onClick={() => {
                         if (window.confirm(`Delete "${cat.name}" and all its transactions?`)) onDeleteCategory(cat.id);
-                      }} style={{ width: 28, height: 28, opacity: 0.5 }}>
+                      }} title="Delete category" style={{ width: 28, height: 28, opacity: 0.5 }}>
                         <Trash2 size={12} />
                       </button>
                     </div>
@@ -332,73 +330,14 @@ export default function Dashboard({
               );
             })}
           </div>
+          {hiddenCategoryCount > 0 || showAllCategories ? (
+            <button className="btn-secondary" onClick={() => setShowAllCategories(v => !v)}
+              style={{ marginTop: 12, width: '100%', padding: '8px 12px', fontSize: 12 }}>
+              {showAllCategories ? 'Show fewer categories' : `Show ${hiddenCategoryCount} more categor${hiddenCategoryCount === 1 ? 'y' : 'ies'}`}
+            </button>
+          ) : null}
+          </>
         )}
-      </div>
-
-      {/* ── Variables ── */}
-      <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>Variables</div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.5 }}>
-            Named values for use in category allowance formulas — reference with <span style={codeStyle}>$varName</span>
-          </div>
-        </div>
-
-        {variables.length > 0 && (
-          <div style={{ maxHeight: 160, overflowY: 'auto', paddingRight: 4, display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {variables.map(v => (
-              editingVarId === v.id ? (
-                <div key={v.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <input className="glass-input"
-                    value={editVarName}
-                    onChange={e => setEditVarName(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
-                    style={{ flex: 2 }}
-                    onKeyDown={e => e.key === 'Enter' && commitVarEdit()} />
-                  <input className="glass-input" type="number" step="0.01"
-                    value={editVarValue}
-                    onChange={e => setEditVarValue(e.target.value)}
-                    style={{ flex: 1 }}
-                    onKeyDown={e => e.key === 'Enter' && commitVarEdit()} />
-                  <button className="btn-icon" onClick={commitVarEdit} title="Save" style={{ width: 28, height: 28 }}><Check size={13} /></button>
-                  <button className="btn-icon" onClick={() => setEditingVarId(null)} title="Cancel" style={{ width: 28, height: 28 }}><X size={13} /></button>
-                </div>
-              ) : (
-                <div key={v.id} style={{
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '9px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: 10,
-                }}>
-                  <span style={{ ...codeStyle, flex: 1, fontSize: 12 }}>{v.name}</span>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>{fmt(v.value)}</span>
-                  <button className="btn-icon" onClick={() => startVarEdit(v)} style={{ width: 28, height: 28, opacity: 0.6 }}><Pencil size={11} /></button>
-                  <button className="btn-icon" onClick={() => onDeleteVariable(v.id)} style={{ width: 28, height: 28, opacity: 0.45 }}><Trash2 size={11} /></button>
-                </div>
-              )
-            ))}
-          </div>
-        )}
-
-        {/* Add variable form */}
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <div style={{ flex: '2 1 130px' }}>
-            <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Name</label>
-            <input className="glass-input" placeholder="e.g. salary"
-              value={newVarName}
-              onChange={e => setNewVarName(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
-              onKeyDown={e => e.key === 'Enter' && handleAddVar()} />
-          </div>
-          <div style={{ flex: '1 1 100px' }}>
-            <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Value (£)</label>
-            <input className="glass-input" type="number" step="0.01" placeholder="0.00"
-              value={newVarValue}
-              onChange={e => setNewVarValue(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleAddVar()} />
-          </div>
-          <button className="btn-primary" onClick={handleAddVar}
-            disabled={!newVarName.trim() || newVarValue === ''}
-            style={{ flexShrink: 0 }}>
-            Add
-          </button>
-        </div>
       </div>
 
       {/* ── Recent Transactions ── */}

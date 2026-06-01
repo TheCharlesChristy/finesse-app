@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Trash2, Check, Clock, ChevronDown, ChevronRight, ExternalLink, Plus, ShoppingBag, X } from 'lucide-react';
+import { Pencil, Trash2, Check, Clock, ChevronDown, ChevronRight, ExternalLink, Plus, ShoppingBag, X } from 'lucide-react';
 import { fmt, wishlistAffordability } from '../utils';
 
 const LIST_COLORS = ['#4fffb0','#5db8ff','#c084fc','#fbbf70','#ff6b8a','#67e8f9','#a78bfa','#fb923c'];
@@ -32,7 +32,7 @@ function AffordabilityBadge({ aff }) {
   return null;
 }
 
-function ItemRow({ item, expenseCategories, settings, onDelete }) {
+function ItemRow({ item, expenseCategories, settings, onEdit, onDelete }) {
   const aff = wishlistAffordability(item, expenseCategories, settings);
   const assignedCats = (item.categoryIds || []).map(id => expenseCategories.find(c => c.id === id)).filter(Boolean);
 
@@ -71,14 +71,17 @@ function ItemRow({ item, expenseCategories, settings, onDelete }) {
       </div>
       <span className="font-display" style={{ fontSize: 15, letterSpacing: '-0.02em', flexShrink: 0 }}>{fmt(item.price || 0)}</span>
       <AffordabilityBadge aff={aff} />
-      <button className="btn-icon" onClick={() => onDelete(item.id)} style={{ width: 27, height: 27, opacity: 0.4, flexShrink: 0 }}>
+      <button className="btn-icon" onClick={() => onEdit(item)} title="Edit item" style={{ width: 27, height: 27, opacity: 0.58, flexShrink: 0 }}>
+        <Pencil size={12} />
+      </button>
+      <button className="btn-icon" onClick={() => onDelete(item.id)} title="Delete item" style={{ width: 27, height: 27, opacity: 0.4, flexShrink: 0 }}>
         <Trash2 size={12} />
       </button>
     </div>
   );
 }
 
-function ListSection({ node, depth, allItems, expenseCategories, settings, onDeleteItem, onAddToList, onDeleteList, onAddList, totalListCount, expanded, onToggle }) {
+function ListSection({ node, depth, allItems, expenseCategories, settings, onEditItem, onDeleteItem, onAddToList, onEditList, onDeleteList, onAddList, totalListCount, expanded, onToggle }) {
   const [showSubInput, setShowSubInput] = useState(false);
   const [subName, setSubName] = useState('');
 
@@ -132,7 +135,13 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onDel
         style={{ padding: '3px 8px', fontSize: 11, borderRadius: 7, display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
         <Plus size={9} /> List
       </button>
+      <button onClick={e => { e.stopPropagation(); onEditList(node); }} className="btn-icon"
+        title="Edit list"
+        style={{ width: 26, height: 26, opacity: 0.58, flexShrink: 0 }}>
+        <Pencil size={11} />
+      </button>
       <button onClick={e => { e.stopPropagation(); onDeleteList(node.id); }} className="btn-icon"
+        title="Delete list"
         style={{ width: 26, height: 26, opacity: 0.38, flexShrink: 0 }}>
         <Trash2 size={11} />
       </button>
@@ -145,7 +154,8 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onDel
       {node.children.map(child => (
         <ListSection key={child.id} node={child} depth={depth + 1}
           allItems={allItems} expenseCategories={expenseCategories} settings={settings}
-          onDeleteItem={onDeleteItem} onAddToList={onAddToList} onDeleteList={onDeleteList}
+          onEditItem={onEditItem} onDeleteItem={onDeleteItem} onAddToList={onAddToList}
+          onEditList={onEditList} onDeleteList={onDeleteList}
           onAddList={onAddList} totalListCount={totalListCount}
           expanded={expanded} onToggle={onToggle} />
       ))}
@@ -160,7 +170,7 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onDel
             style={{ flex: 1 }} />
           <button className="btn-primary" onClick={handleCreateSub} disabled={!subName.trim()}
             style={{ flexShrink: 0, padding: '6px 12px', fontSize: 11 }}>Create</button>
-          <button className="btn-icon" onClick={() => { setShowSubInput(false); setSubName(''); }} style={{ width: 28, height: 28 }}>
+          <button className="btn-icon" onClick={() => { setShowSubInput(false); setSubName(''); }} title="Cancel list creation" style={{ width: 28, height: 28 }}>
             <X size={12} />
           </button>
         </div>
@@ -170,7 +180,7 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onDel
       {directItems.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: node.children.length > 0 || showSubInput ? 6 : 0 }}>
           {directItems.map(item => (
-            <ItemRow key={item.id} item={item} expenseCategories={expenseCategories} settings={settings} onDelete={onDeleteItem} />
+            <ItemRow key={item.id} item={item} expenseCategories={expenseCategories} settings={settings} onEdit={onEditItem} onDelete={onDeleteItem} />
           ))}
         </div>
       )}
@@ -203,7 +213,7 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onDel
   );
 }
 
-export default function Wishlist({ items, wishlistCategories, expenseCategories, settings, onAddItem, onDeleteItem, onAddWishlistCat, onDeleteWishlistCat, onAddItemToFolder }) {
+export default function Wishlist({ items, wishlistCategories, expenseCategories, settings, onAddItem, onEditItem, onDeleteItem, onAddWishlistCat, onEditWishlistCat, onDeleteWishlistCat, onAddItemToFolder }) {
   const [expanded, setExpanded] = useState(() => new Set([...wishlistCategories.map(c => c.id), 'uncategorized']));
   const [showNewList, setShowNewList] = useState(false);
   const [newListName, setNewListName] = useState('');
@@ -294,8 +304,8 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
       {tree.map(node => (
         <ListSection key={node.id} node={node} depth={0}
           allItems={items} expenseCategories={expenseCategories} settings={settings}
-          onDeleteItem={onDeleteItem} onAddToList={onAddItemToFolder}
-          onDeleteList={handleDeleteList} onAddList={onAddWishlistCat}
+          onEditItem={onEditItem} onDeleteItem={onDeleteItem} onAddToList={onAddItemToFolder}
+          onEditList={onEditWishlistCat} onDeleteList={handleDeleteList} onAddList={onAddWishlistCat}
           totalListCount={wishlistCategories.length}
           expanded={expanded} onToggle={toggleList} />
       ))}
@@ -315,7 +325,7 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
           {expanded.has('uncategorized') && (
             <div style={{ padding: '8px 14px 12px', display: 'flex', flexDirection: 'column', gap: 5 }}>
               {uncategorizedItems.map(item => (
-                <ItemRow key={item.id} item={item} expenseCategories={expenseCategories} settings={settings} onDelete={onDeleteItem} />
+                <ItemRow key={item.id} item={item} expenseCategories={expenseCategories} settings={settings} onEdit={onEditItem} onDelete={onDeleteItem} />
               ))}
             </div>
           )}

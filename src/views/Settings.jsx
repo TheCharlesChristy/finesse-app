@@ -1,6 +1,19 @@
-import { Download, Upload, FileText } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Download, Upload, FileText, RefreshCcw } from 'lucide-react';
 
-export default function Settings({ onExport, onImport, onExportCSV, onResetBudget }) {
+export default function Settings({ onExport, onImport, onExportCSV, onResetBudget, incomes = [], onResetIncome }) {
+  const [resetIncomeId, setResetIncomeId] = useState('');
+  const [resetStatus, setResetStatus] = useState('');
+
+  const selectedIncomeId = useMemo(() => {
+    if (incomes.some(income => String(income.id) === String(resetIncomeId))) return resetIncomeId;
+    return incomes[0]?.id ? String(incomes[0].id) : '';
+  }, [incomes, resetIncomeId]);
+  const selectedIncome = useMemo(
+    () => incomes.find(income => String(income.id) === String(selectedIncomeId)),
+    [incomes, selectedIncomeId]
+  );
+
   const handleFileImport = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -17,17 +30,60 @@ export default function Settings({ onExport, onImport, onExportCSV, onResetBudge
     e.target.value = '';
   };
 
+  const handleIncomeReset = async () => {
+    if (!selectedIncome || !onResetIncome) return;
+
+    if (!window.confirm(`Reset spending counters for categories funded by "${selectedIncome.name}"?`)) return;
+
+    const count = await onResetIncome(selectedIncome.id);
+    setResetStatus(`${count} categor${count === 1 ? 'y' : 'ies'} reset for ${selectedIncome.name}.`);
+  };
+
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Budget reset */}
       <div className="glass" style={{ borderRadius: 18, padding: '24px' }}>
         <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Manual Budget Reset</div>
         <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14 }}>
-          Resets all category spend counters to zero. Transactions are kept for history.
+          Resets every category spend counter to zero. Transactions are kept for history.
         </div>
         <button className="btn-danger" onClick={() => { if (window.confirm('Reset all category spending counters to zero?')) onResetBudget(); }}>
           Reset Budget Now
         </button>
+      </div>
+
+      {/* Income reset */}
+      <div className="glass" style={{ borderRadius: 18, padding: '24px' }}>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Reset by Income</div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14 }}>
+          Reset only the categories covered by a specific income source.
+        </div>
+
+        {incomes.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            Add income sources on the Dashboard to enable income-specific resets.
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+              <select className="glass-input" value={selectedIncomeId} onChange={e => { setResetIncomeId(e.target.value); setResetStatus(''); }}
+                style={{ flex: '1 1 220px', maxWidth: 320 }}>
+                {incomes.map(income => (
+                  <option key={income.id} value={income.id}>{income.name}</option>
+                ))}
+              </select>
+              <button className="btn-secondary" onClick={handleIncomeReset}
+                style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
+                <RefreshCcw size={14} /> Reset Funded Categories
+              </button>
+            </div>
+            {resetStatus && (
+              <div style={{ color: 'var(--good)', fontSize: 12, marginTop: 10 }}>
+                {resetStatus}
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Data management */}

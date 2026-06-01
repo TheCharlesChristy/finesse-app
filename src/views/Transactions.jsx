@@ -1,9 +1,9 @@
 import { useState, useMemo } from 'react';
-import { Trash2, Search } from 'lucide-react';
+import { Pencil, Trash2, Search } from 'lucide-react';
 import { fmt } from '../utils';
 import { format } from 'date-fns';
 
-export default function Transactions({ transactions, categories, onDelete, onAdd }) {
+export default function Transactions({ transactions, categories, onDelete, onEdit, onAdd }) {
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState('all');
 
@@ -20,6 +20,12 @@ export default function Transactions({ transactions, categories, onDelete, onAdd
   }, [transactions, filterCat, search, catMap]);
 
   const totalFiltered = filtered.reduce((s, tx) => s + tx.amount, 0);
+
+  const handleDelete = (tx) => {
+    if (window.confirm(`Delete "${tx.note || catMap[tx.categoryId]?.name || 'Expense'}"?`)) {
+      onDelete(tx.id);
+    }
+  };
 
   // Group by date
   const grouped = useMemo(() => {
@@ -49,14 +55,31 @@ export default function Transactions({ transactions, categories, onDelete, onAdd
         <button className="btn-primary" onClick={onAdd} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
           + Add Expense
         </button>
+        <div style={{
+          fontSize: 12,
+          color: 'var(--text-muted)',
+          flexBasis: '100%',
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 12,
+          flexWrap: 'wrap',
+        }}>
+          <span>{filtered.length} of {transactions.length} transaction{transactions.length === 1 ? '' : 's'}</span>
+          <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>Filtered total: {fmt(totalFiltered)}</span>
+        </div>
       </div>
 
       {/* Transaction list */}
       {grouped.length === 0 ? (
         <div className="glass" style={{ borderRadius: 16, padding: '40px 24px', textAlign: 'center' }}>
-          <div style={{ color: 'var(--text-muted)', fontSize: 14 }}>
+          <div style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: transactions.length === 0 ? 14 : 0 }}>
             {transactions.length === 0 ? 'No expenses logged yet. Add your first one!' : 'No transactions match your filter.'}
           </div>
+          {transactions.length === 0 && (
+            <button className="btn-primary" onClick={onAdd}>
+              Add Expense
+            </button>
+          )}
         </div>
       ) : (
         grouped.map(([date, txs]) => (
@@ -85,7 +108,11 @@ export default function Transactions({ transactions, categories, onDelete, onAdd
                     <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--accent-warm)', flexShrink: 0 }}>
                       -{fmt(tx.amount)}
                     </div>
-                    <button className="btn-icon" onClick={() => onDelete(tx.id)} style={{ opacity: 0.6 }}
+                    <button className="btn-icon" onClick={() => onEdit(tx)} style={{ opacity: 0.68 }}
+                      title="Edit transaction">
+                      <Pencil size={13} />
+                    </button>
+                    <button className="btn-icon" onClick={() => handleDelete(tx)} style={{ opacity: 0.6 }}
                       title="Delete transaction">
                       <Trash2 size={13} />
                     </button>

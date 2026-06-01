@@ -3,9 +3,55 @@ import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend
 } from 'recharts';
-import { fmt, buildMonthlyHistory, getProjectedSpend, getDailyBurnRate, daysUntilReset, projectedEndBalance } from '../utils';
+import { differenceInDays, format, startOfDay } from 'date-fns';
+import {
+  fmt,
+  buildMonthlyHistory,
+  getProjectedSpend,
+  getDailyBurnRate,
+  daysUntilReset,
+  projectedEndBalance,
+  calcNextReset,
+  getCategoryIncomeAllocationAmount,
+  normalizeIncomeAllocations,
+} from '../utils';
 
 const COLORS = ['#4fffb0', '#5db8ff', '#c084fc', '#fbbf70', '#ff6b8a', '#67e8f9', '#a78bfa'];
+const FREQ_LABEL = { weekly: 'Weekly', fortnightly: 'Fortnightly', '4weekly': 'Every 4 weeks', monthly: 'Monthly' };
+
+function getNextIncomeReset(income, categories, now = new Date()) {
+  const freq = income.resetFrequency || (income.payDayOfMonth ? 'monthly' : null);
+  const linkedCategories = categories.filter(cat =>
+    normalizeIncomeAllocations(cat.incomeAllocations)
+      .some(allocation => allocation.incomeId === Number(income.id))
+  );
+
+  const allocated = linkedCategories.reduce(
+    (sum, cat) => sum + getCategoryIncomeAllocationAmount(cat, income.id),
+    0
+  );
+
+  if (!freq) {
+    return { income, freq: null, linkedCategories, allocated, held: income.holdActive, next: null, days: null };
+  }
+
+  let next = calcNextReset(freq, income.payDayOfMonth, income.lastPaid ? new Date(income.lastPaid) : now);
+  let guard = 0;
+  while (next <= now && guard < 120) {
+    next = calcNextReset(freq, income.payDayOfMonth, next);
+    guard += 1;
+  }
+
+  return {
+    income,
+    freq,
+    linkedCategories,
+    allocated,
+    held: income.holdActive,
+    next,
+    days: Math.max(0, differenceInDays(startOfDay(next), startOfDay(now))),
+  };
+}
 
 const GlassTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
@@ -36,8 +82,21 @@ export default function Forecasting({ categories, settings, transactions, income
   const monthlyHistory = useMemo(() => buildMonthlyHistory(transactions, categories), [transactions, categories]);
   const projectedSpend = useMemo(() => getProjectedSpend(categories, settings), [categories, settings]);
   const dailyBurnRate  = useMemo(() => getDailyBurnRate(categories, settings), [categories, settings]);
-  const days           = daysUntilReset(settings);
+  const legacyDays     = daysUntilReset(settings);
   const projBalance    = projectedEndBalance(categories, settings, incomes);
+
+  const incomeResetSchedule = useMemo(() => (
+    incomes
+      .map(income => getNextIncomeReset(income, categories))
+      .sort((a, b) => {
+        if (a.held !== b.held) return a.held ? 1 : -1;
+        if (!a.next && !b.next) return a.income.name.localeCompare(b.income.name);
+        if (!a.next) return 1;
+        if (!b.next) return -1;
+        return a.next - b.next;
+      })
+  ), [incomes, categories]);
+  const nextIncomeReset = incomeResetSchedule.find(entry => !entry.held && entry.next);
 
   const totalIncome     = incomes.length > 0 ? incomes.reduce((s, i) => s + (i.amount || 0), 0) : (settings?.income || 0);
   const totalAllowances = categories.reduce((s, c) => s + (c.allowance || 0), 0);
@@ -85,9 +144,15 @@ export default function Forecasting({ categories, settings, transactions, income
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>across all categories</div>
         </div>
         <div className="glass" style={{ borderRadius: 16, padding: '18px 20px' }}>
-          <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Days Until Reset</div>
-          <div className="font-display" style={{ fontSize: 28, color: 'var(--accent-blue)' }}>{days ?? '—'}</div>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>days remaining</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Next Income Reset</div>
+          <div className="font-display" style={{ fontSize: 28, color: 'var(--accent-blue)' }}>
+            {nextIncomeReset ? `${nextIncomeReset.days}d` : (incomes.length > 0 ? '—' : (legacyDays ?? '—'))}
+          </div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>
+            {nextIncomeReset
+              ? `${nextIncomeReset.income.name} · ${format(nextIncomeReset.next, 'd MMM')}`
+              : incomes.length > 0 ? 'income resets are held or unscheduled' : 'legacy schedule'}
+          </div>
         </div>
         <div className="glass" style={{ borderRadius: 16, padding: '18px 20px' }}>
           <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Projected End Balance</div>
@@ -97,6 +162,52 @@ export default function Forecasting({ categories, settings, transactions, income
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>at current burn rate</div>
         </div>
       </div>
+
+      {/* ── Income reset schedule ── */}
+      {incomeResetSchedule.length > 0 && (
+        <div className="glass" style={{ borderRadius: 18, padding: '20px 22px' }}>
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Income Reset Schedule</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 14 }}>
+            Category spend resets follow the income source that funds each category.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {incomeResetSchedule.map((entry, i) => (
+              <div key={entry.income.id} style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                gap: 12,
+                alignItems: 'center',
+                padding: '10px 12px',
+                borderRadius: 12,
+                background: 'rgba(255,255,255,0.04)',
+                border: entry.held ? '1px solid rgba(251,191,112,0.18)' : '1px solid transparent',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: COLORS[i % COLORS.length], flexShrink: 0 }} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {entry.income.name}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      {entry.freq ? FREQ_LABEL[entry.freq] : 'No schedule'}
+                      {entry.held && <span style={{ color: 'var(--warn)' }}> · Held</span>}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: entry.next && !entry.held ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+                  {entry.next && !entry.held
+                    ? `${format(entry.next, 'd MMM yyyy')} · ${entry.days}d`
+                    : entry.held ? 'Reset held' : 'Not scheduled'}
+                </div>
+                <div style={{ fontSize: 12, textAlign: 'right', color: 'var(--text-muted)' }}>
+                  <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{fmt(entry.allocated)}</span>
+                  {' '}across {entry.linkedCategories.length} categor{entry.linkedCategories.length === 1 ? 'y' : 'ies'}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Pie charts ── */}
       {(totalAllowances > 0 || allocationData.length > 0) && (

@@ -1,28 +1,38 @@
 import { useState, useEffect, useCallback } from 'react';
-import { LayoutDashboard, ListOrdered, TrendingUp, ShoppingBag, Settings as SettingsIcon } from 'lucide-react';
+import { LayoutDashboard, ListOrdered, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 
-import { db, getSettings, saveSettings, addCategory, updateCategory, deleteCategory,
-  addTransaction, deleteTransaction, addWishlistItem, updateWishlistItem, deleteWishlistItem,
-  addWishlistCategory, deleteWishlistCategory, exportData, importData,
+import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
+  getSettings, saveSettings, getCategories, addCategory, updateCategory, deleteCategory,
+  getTransactions, addTransaction, updateTransaction, deleteTransaction,
+  getWishlistItems, addWishlistItem, updateWishlistItem, deleteWishlistItem,
+  getWishlistCategories,
+  addWishlistCategory, updateWishlistCategory, deleteWishlistCategory, exportData, importData,
   exportTransactionsCSV, resetBudget, resetCategory, resetCategoriesForIncome,
-  addIncome, updateIncome, deleteIncome,
+  addIncome, updateIncome, deleteIncome, getIncomeEvents, recordIncomeReceived, deleteIncomeEvent,
   addVariable, updateVariable, deleteVariable } from './db';
-import { calcNextReset, evaluateFormula } from './utils';
+import { calcNextReset, evaluateFormula, fmt } from './utils';
 
 import Dashboard from './views/Dashboard';
 import Transactions from './views/Transactions';
 import Forecasting from './views/Forecasting';
 import Wishlist from './views/Wishlist';
+import PurchaseCheck from './views/PurchaseCheck';
+import Accounts from './views/Accounts';
 import SettingsView from './views/Settings';
+import Variables from './views/Variables';
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
-  AddCategoryModal, AddIncomeModal, EditCategoryModal } from './components/Modals';
+  AddOneOffIncomeModal,
+  AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal } from './components/Modals';
 
 const NAV = [
   { id: 'dashboard',   label: 'Dashboard',   Icon: LayoutDashboard },
+  { id: 'accounts',    label: 'Accounts',    Icon: Wallet },
   { id: 'transactions',label: 'Transactions', Icon: ListOrdered },
+  { id: 'purchase',    label: 'Can I Purchase It', Icon: ShoppingCart },
   { id: 'forecasting', label: 'Forecasting',  Icon: TrendingUp },
   { id: 'wishlist',    label: 'Wishlist',      Icon: ShoppingBag },
+  { id: 'variables',   label: 'Variables',     Icon: SlidersHorizontal },
   { id: 'settings',    label: 'Settings',     Icon: SettingsIcon },
 ];
 
@@ -51,15 +61,47 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [fastForwardIncomeId, setFastForwardIncomeId] = useState(null);
   const [editingCategory, setEditingCategory] = useState(null);
+  const [editingIncome, setEditingIncome] = useState(null);
+  const [editingTransaction, setEditingTransaction] = useState(null);
+  const [editingWishlistItem, setEditingWishlistItem] = useState(null);
+  const [editingWishlistList, setEditingWishlistList] = useState(null);
   const [wishlistDefaultCatId, setWishlistDefaultCatId] = useState(null);
+  const [transactionDefaults, setTransactionDefaults] = useState(null);
+  const [activeAccountId, setActiveAccountId] = useState(() => {
+    const stored = Number(localStorage.getItem('finesse.activeAccountId'));
+    return Number.isFinite(stored) && stored > 0 ? stored : null;
+  });
 
-  const settings  = useLiveQuery(() => getSettings(), []);
-  const categories = useLiveQuery(() => db.categories.toArray(), []) || [];
-  const transactions = useLiveQuery(() => db.transactions.orderBy('date').reverse().toArray(), []) || [];
-  const wishlistItems = useLiveQuery(() => db.wishlist.toArray(), []) || [];
-  const wishlistCategories = useLiveQuery(() => db.wishlistCategories.toArray(), []) || [];
-  const incomes   = useLiveQuery(() => db.incomes.toArray(), []) || [];
-  const variables = useLiveQuery(() => db.variables.toArray(), []) || [];
+  const accountsQuery = useLiveQuery(() => db.accounts.toArray(), []);
+  const accounts = accountsQuery || [];
+  const activeAccount = accounts.find(account => Number(account.id) === Number(activeAccountId)) || null;
+
+  useEffect(() => {
+    if (!accountsQuery) return;
+    if (accountsQuery.length === 0) ensureDefaultAccount();
+  }, [accountsQuery]);
+
+  useEffect(() => {
+    if (!accounts.length) return;
+    const currentExists = accounts.some(account => Number(account.id) === Number(activeAccountId));
+    if (!activeAccountId || !currentExists) {
+      setActiveAccountId(accounts[0].id);
+    }
+  }, [accounts, activeAccountId]);
+
+  useEffect(() => {
+    if (activeAccountId) localStorage.setItem('finesse.activeAccountId', String(activeAccountId));
+  }, [activeAccountId]);
+
+  const settings  = useLiveQuery(() => activeAccountId ? getSettings(activeAccountId) : null, [activeAccountId]);
+  const categories = useLiveQuery(() => activeAccountId ? getCategories(activeAccountId) : [], [activeAccountId]) || [];
+  const transactions = useLiveQuery(() => activeAccountId ? getTransactions(activeAccountId) : [], [activeAccountId]) || [];
+  const wishlistItems = useLiveQuery(() => activeAccountId ? getWishlistItems(activeAccountId) : [], [activeAccountId]) || [];
+  const wishlistCategories = useLiveQuery(() => activeAccountId ? getWishlistCategories(activeAccountId) : [], [activeAccountId]) || [];
+  const accountTransfers = useLiveQuery(() => db.accountTransfers.toArray(), []) || [];
+  const incomeEvents = useLiveQuery(() => activeAccountId ? getIncomeEvents(activeAccountId) : [], [activeAccountId]) || [];
+  const incomes   = useLiveQuery(() => activeAccountId ? db.incomes.where('accountId').equals(Number(activeAccountId)).toArray() : [], [activeAccountId]) || [];
+  const variables = useLiveQuery(() => activeAccountId ? db.variables.where('accountId').equals(Number(activeAccountId)).toArray() : [], [activeAccountId]) || [];
 
   // Per-category auto-reset for legacy categories without income funding.
   useEffect(() => {
@@ -87,17 +129,25 @@ export default function App() {
         if (!due) continue;
 
         const resetAt = due.toISOString();
-        await resetCategoriesForIncome(income.id, resetAt);
+        await recordIncomeReceived({
+          accountId: activeAccountId,
+          incomeId: income.id,
+          name: income.name,
+          amount: income.amount,
+          date: resetAt,
+          type: 'recurring',
+        });
+        await resetCategoriesForIncome(income.id, resetAt, activeAccountId);
         await updateIncome(income.id, { lastPaid: resetAt, holdActive: false });
         if (!latestReset || due > latestReset) latestReset = due;
       }
 
       if (latestReset) {
-        const current = await getSettings();
-        if (current) await saveSettings({ ...current, lastReset: latestReset.toISOString() });
+        const current = await getSettings(activeAccountId);
+        if (current) await saveSettings({ ...current, lastReset: latestReset.toISOString() }, activeAccountId);
       }
     })();
-  }, [incomes]);
+  }, [incomes, activeAccountId]);
 
   // Formula recomputation: runs whenever variables or categories change
   useEffect(() => {
@@ -126,7 +176,7 @@ export default function App() {
   }, []);
 
   const handleExportCSV = useCallback(async () => {
-    const csv = await exportTransactionsCSV();
+    const csv = await exportTransactionsCSV(activeAccountId);
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -134,7 +184,7 @@ export default function App() {
     a.download = `transactions-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, []);
+  }, [activeAccountId]);
 
   const handleImport = useCallback((data) => {
     setPendingImport(data);
@@ -157,12 +207,49 @@ export default function App() {
   }, []);
 
   const handleIncomeFastForward = useCallback(async (id, isoDate) => {
+    const income = await db.incomes.get(id);
+    if (!income) return;
+    await recordIncomeReceived({
+      accountId: activeAccountId,
+      incomeId: id,
+      name: income.name,
+      amount: income.amount,
+      date: isoDate,
+      type: 'recurring',
+    });
     await updateIncome(id, { lastPaid: isoDate, holdActive: false });
-    await resetCategoriesForIncome(id, isoDate);
+    await resetCategoriesForIncome(id, isoDate, activeAccountId);
     // Keep settings.lastReset current so forecasting burn rates stay accurate
-    const current = await getSettings();
-    if (current) await saveSettings({ ...current, lastReset: isoDate });
+    const current = await getSettings(activeAccountId);
+    if (current) await saveSettings({ ...current, lastReset: isoDate }, activeAccountId);
+  }, [activeAccountId]);
+
+  const handleAddOneOffIncome = useCallback(async (data) => {
+    await recordIncomeReceived({
+      ...data,
+      accountId: activeAccountId,
+      incomeId: null,
+      type: 'one-off',
+    });
+  }, [activeAccountId]);
+
+  const handleEditIncome = useCallback((income) => {
+    setEditingIncome(income);
+    setModal('editIncome');
   }, []);
+
+  const handleDeleteIncome = useCallback(async (income) => {
+    const linkedCategories = categories.filter(cat =>
+      cat.incomeAllocations?.some(allocation => Number(allocation.incomeId) === Number(income.id))
+    );
+    if (linkedCategories.length > 0) {
+      alert(`"${income.name}" funds ${linkedCategories.length} categor${linkedCategories.length === 1 ? 'y' : 'ies'}: ${linkedCategories.map(c => c.name).join(', ')}.\n\nReallocate those categories before deleting this income.`);
+      return;
+    }
+    if (window.confirm(`Delete income "${income.name}"?`)) {
+      await deleteIncome(income.id);
+    }
+  }, [categories]);
 
   // ── Category handlers ────────────────────────────────────────────────────
   const handleEditCategory = useCallback((cat) => {
@@ -170,8 +257,49 @@ export default function App() {
     setModal('editCategory');
   }, []);
 
+  const handleEditTransaction = useCallback((transaction) => {
+    setEditingTransaction(transaction);
+    setModal('editTx');
+  }, []);
+
+  const handleEditWishlistItem = useCallback((item) => {
+    setEditingWishlistItem(item);
+    setModal('editWish');
+  }, []);
+
+  const handleEditWishlistList = useCallback((list) => {
+    setEditingWishlistList(list);
+    setModal('editWishList');
+  }, []);
+
+  const handleLogPurchase = useCallback((draft) => {
+    setTransactionDefaults(draft);
+    setModal('addTx');
+  }, []);
+
+  const handleAddAccount = useCallback((account) => addAccount(account), []);
+  const handleUpdateAccount = useCallback((id, data) => updateAccount(id, data), []);
+  const handleDeleteAccount = useCallback(async (account) => {
+    if (accounts.length <= 1) {
+      alert('Keep at least one account.');
+      return;
+    }
+    if (!window.confirm(`Delete account "${account.name}" and all of its data?`)) return;
+    await deleteAccount(account.id);
+    if (Number(activeAccountId) === Number(account.id)) {
+      const next = accounts.find(item => Number(item.id) !== Number(account.id));
+      setActiveAccountId(next?.id || null);
+    }
+  }, [accounts, activeAccountId]);
+  const handleTransferMoney = useCallback((transfer) => transferMoney(transfer), []);
+  const handleDeleteIncomeEvent = useCallback(async (event) => {
+    if (event.type !== 'one-off') return;
+    if (!window.confirm(`Delete one-off income "${event.name || 'Income'}" and remove it from the account balance?`)) return;
+    await deleteIncomeEvent(event.id);
+  }, []);
+
   // ── Variable handlers ────────────────────────────────────────────────────
-  const handleAddVariable    = useCallback(v    => addVariable(v), []);
+  const handleAddVariable    = useCallback(v    => addVariable(v, activeAccountId), [activeAccountId]);
   const handleUpdateVariable = useCallback((id, d) => updateVariable(id, d), []);
   const handleDeleteVariable = useCallback(id   => deleteVariable(id), []);
 
@@ -199,10 +327,28 @@ export default function App() {
             <div className="font-display" style={{ fontSize: 20, letterSpacing: '-0.02em' }}>Finesse</div>
             <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 2 }}>Personal finance</div>
           </div>
-          {NAV.map(({ id, label, Icon }) => (
-            <div key={id} className={`nav-item ${view === id ? 'active' : ''}`} onClick={() => navigate(id)}>
-              <Icon size={16} /><span>{label}</span>
+          {accounts.length > 0 && (
+            <div style={{ padding: '4px 4px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: 8 }}>
+              <label style={{ color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', margin: '0 10px 6px' }}>
+                Account
+              </label>
+              <select className="glass-input" value={activeAccountId || ''} onChange={e => setActiveAccountId(Number(e.target.value))}
+                style={{ padding: '8px 10px', fontSize: 12, borderRadius: 9 }}>
+                {accounts.map(account => (
+                  <option key={account.id} value={account.id}>{account.name}</option>
+                ))}
+              </select>
+              {activeAccount && (
+                <div style={{ color: 'var(--text-muted)', fontSize: 11, margin: '6px 10px 0' }}>
+                  {fmt(activeAccount.balance || 0)}
+                </div>
+              )}
             </div>
+          )}
+          {NAV.map(({ id, label, Icon }) => (
+            <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} onClick={() => navigate(id)} type="button">
+              <Icon size={16} /><span>{label}</span>
+            </button>
           ))}
         </aside>
 
@@ -228,41 +374,69 @@ export default function App() {
               onAddTx={() => setModal('addTx')}
               onAddCategory={() => setModal('addCategory')}
               onAddIncome={() => setModal('addIncome')}
+              onAddOneOffIncome={() => setModal('addOneOffIncome')}
               onIncomeHoldToggle={handleIncomeHoldToggle}
               onIncomeFastForward={(id) => { setFastForwardIncomeId(id); setModal('fastForwardIncome'); }}
+              onEditIncome={handleEditIncome}
+              onDeleteIncome={handleDeleteIncome}
               onEditCategory={handleEditCategory}
               onDeleteCategory={deleteCategory}
-              onAddVariable={handleAddVariable}
-              onUpdateVariable={handleUpdateVariable}
-              onDeleteVariable={handleDeleteVariable}
+            />
+          )}
+          {view === 'accounts' && (
+            <Accounts
+              accounts={accounts}
+              activeAccountId={activeAccountId}
+              transfers={accountTransfers}
+              incomeEvents={incomeEvents}
+              onSelectAccount={setActiveAccountId}
+              onAddAccount={handleAddAccount}
+              onUpdateAccount={handleUpdateAccount}
+              onDeleteAccount={handleDeleteAccount}
+              onTransfer={handleTransferMoney}
+              onDeleteIncomeEvent={handleDeleteIncomeEvent}
             />
           )}
           {view === 'transactions' && (
             <Transactions transactions={transactions} categories={categories}
-              onDelete={deleteTransaction} onAdd={() => setModal('addTx')} />
+              onDelete={deleteTransaction} onEdit={handleEditTransaction} onAdd={() => setModal('addTx')} />
           )}
           {view === 'forecasting' && (
             <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes} />
+          )}
+          {view === 'purchase' && (
+            <PurchaseCheck categories={categories} onLogPurchase={handleLogPurchase} />
           )}
           {view === 'wishlist' && (
             <Wishlist items={wishlistItems} wishlistCategories={wishlistCategories}
               expenseCategories={categories} settings={settings}
               onAddItem={() => { setWishlistDefaultCatId(null); setModal('addWish'); }}
+              onEditItem={handleEditWishlistItem}
               onDeleteItem={deleteWishlistItem}
-              onAddWishlistCat={addWishlistCategory}
+              onAddWishlistCat={(data) => addWishlistCategory(data, activeAccountId)}
+              onEditWishlistCat={handleEditWishlistList}
               onDeleteWishlistCat={deleteWishlistCategory}
               onAddItemToFolder={(catId) => { setWishlistDefaultCatId(catId); setModal('addWish'); }} />
           )}
+          {view === 'variables' && (
+            <Variables
+              variables={variables}
+              onAddVariable={handleAddVariable}
+              onUpdateVariable={handleUpdateVariable}
+              onDeleteVariable={handleDeleteVariable}
+            />
+          )}
           {view === 'settings' && (
             <SettingsView onExport={handleExport} onExportCSV={handleExportCSV}
-              onImport={handleImport} onResetBudget={resetBudget} />
+              onImport={handleImport} onResetBudget={() => resetBudget(activeAccountId)}
+              incomes={incomes} onResetIncome={(incomeId) => resetCategoriesForIncome(incomeId, undefined, activeAccountId)} />
           )}
         </main>
       </div>
 
       {/* ── Modals ── */}
       {modal === 'addCategory' && (
-        <AddCategoryModal onAdd={addCategory} onClose={() => setModal(null)}
+        <AddCategoryModal onAdd={(data) => addCategory(data, activeAccountId)} onClose={() => setModal(null)}
           variables={variables} categories={categories} incomes={incomes} />
       )}
       {modal === 'editCategory' && editingCategory && (
@@ -276,7 +450,17 @@ export default function App() {
         />
       )}
       {modal === 'addIncome' && (
-        <AddIncomeModal onAdd={addIncome} onClose={() => setModal(null)} />
+        <AddIncomeModal onAdd={(data) => addIncome(data, activeAccountId)} onClose={() => setModal(null)} />
+      )}
+      {modal === 'addOneOffIncome' && (
+        <AddOneOffIncomeModal onAdd={handleAddOneOffIncome} onClose={() => setModal(null)} />
+      )}
+      {modal === 'editIncome' && editingIncome && (
+        <AddIncomeModal
+          income={editingIncome}
+          onSave={(id, data) => { updateIncome(id, data); setModal(null); setEditingIncome(null); }}
+          onClose={() => { setModal(null); setEditingIncome(null); }}
+        />
       )}
       {modal === 'fastForwardIncome' && fastForwardIncomeId !== null && (
         <FastForwardModal
@@ -285,7 +469,20 @@ export default function App() {
         />
       )}
       {modal === 'addTx' && categories.length > 0 && (
-        <AddTransactionModal categories={categories} onAdd={addTransaction} onClose={() => setModal(null)} />
+        <AddTransactionModal
+          categories={categories}
+          onAdd={(data) => addTransaction({ ...data, accountId: activeAccountId })}
+          initial={transactionDefaults}
+          onClose={() => { setModal(null); setTransactionDefaults(null); }}
+        />
+      )}
+      {modal === 'editTx' && editingTransaction && categories.length > 0 && (
+        <AddTransactionModal
+          categories={categories}
+          transaction={editingTransaction}
+          onSave={(id, data) => { updateTransaction(id, data); setModal(null); setEditingTransaction(null); }}
+          onClose={() => { setModal(null); setEditingTransaction(null); }}
+        />
       )}
       {modal === 'addTx' && categories.length === 0 && (
         <div className="modal-overlay" onClick={() => setModal(null)}>
@@ -302,8 +499,25 @@ export default function App() {
       )}
       {modal === 'addWish' && (
         <AddWishlistItemModal expenseCategories={categories} wishlistCategories={wishlistCategories}
-          onAdd={addWishlistItem} onClose={() => setModal(null)}
+          onAdd={(data) => addWishlistItem(data, activeAccountId)} onClose={() => setModal(null)}
           defaultCategoryId={wishlistDefaultCatId} />
+      )}
+      {modal === 'editWish' && editingWishlistItem && (
+        <AddWishlistItemModal
+          expenseCategories={categories}
+          wishlistCategories={wishlistCategories}
+          item={editingWishlistItem}
+          onSave={(id, data) => { updateWishlistItem(id, data); setModal(null); setEditingWishlistItem(null); }}
+          onClose={() => { setModal(null); setEditingWishlistItem(null); }}
+        />
+      )}
+      {modal === 'editWishList' && editingWishlistList && (
+        <EditWishlistListModal
+          list={editingWishlistList}
+          wishlistCategories={wishlistCategories}
+          onSave={(id, data) => { updateWishlistCategory(id, data); setModal(null); setEditingWishlistList(null); }}
+          onClose={() => { setModal(null); setEditingWishlistList(null); }}
+        />
       )}
       {modal === 'importMode' && (
         <ImportModeModal onConfirm={handleImportConfirm}

@@ -443,20 +443,26 @@ function FormulaInput({ value, onChange, onKeyDown: externalKeyDown, placeholder
 }
 
 // ── Add Transaction Modal ────────────────────────────────────────────────────
-export function AddTransactionModal({ categories, onAdd, onClose }) {
-  const [catId, setCatId] = useState(categories[0]?.id || '');
-  const [amount, setAmount] = useState('');
-  const [note, setNote] = useState('');
-  const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+export function AddTransactionModal({ categories, onAdd, onClose, transaction = null, onSave, initial = null }) {
+  const [catId, setCatId] = useState(transaction?.categoryId || initial?.categoryId || categories[0]?.id || '');
+  const [amount, setAmount] = useState(transaction?.amount != null ? String(transaction.amount) : initial?.amount != null ? String(initial.amount) : '');
+  const [note, setNote] = useState(transaction?.note || initial?.note || '');
+  const [date, setDate] = useState(format(transaction?.date ? new Date(transaction.date) : new Date(), 'yyyy-MM-dd'));
+  const isEditing = Boolean(transaction);
 
   const handleSubmit = () => {
     if (!catId || !amount) return;
-    onAdd({
+    const data = {
       categoryId: Number(catId),
       amount: parseFloat(amount),
       note: note.trim(),
       date: new Date(date).toISOString(),
-    });
+    };
+    if (isEditing && onSave) {
+      onSave(transaction.id, data);
+    } else {
+      onAdd(data);
+    }
     onClose();
   };
 
@@ -464,8 +470,8 @@ export function AddTransactionModal({ categories, onAdd, onClose }) {
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal-box">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-          <div className="font-display" style={{ fontSize: 22 }}>Log Expense</div>
-          <button className="btn-icon" onClick={onClose}><X size={15} /></button>
+          <div className="font-display" style={{ fontSize: 22 }}>{isEditing ? 'Edit Expense' : 'Log Expense'}</div>
+          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
@@ -493,7 +499,7 @@ export function AddTransactionModal({ categories, onAdd, onClose }) {
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
               disabled={!catId || !amount}>
-              Add Expense
+              {isEditing ? 'Save Changes' : 'Add Expense'}
             </button>
           </div>
         </div>
@@ -510,17 +516,20 @@ function flattenWishlistCategories(cats, parentId = null, depth = 0) {
     .flatMap(c => [{ ...c, depth }, ...flattenWishlistCategories(cats, c.id, depth + 1)]);
 }
 
-export function AddWishlistItemModal({ expenseCategories, wishlistCategories, onAdd, onClose, defaultCategoryId = null }) {
-  const [name, setName] = useState('');
-  const [price, setPrice] = useState('');
-  const [note, setNote] = useState('');
-  const [link, setLink] = useState('');
+export function AddWishlistItemModal({ expenseCategories, wishlistCategories, onAdd, onClose, defaultCategoryId = null, item = null, onSave }) {
+  const [name, setName] = useState(item?.name || '');
+  const [price, setPrice] = useState(item?.price != null ? String(item.price) : '');
+  const [note, setNote] = useState(item?.note || '');
+  const [link, setLink] = useState(item?.link || '');
   const [wishCatId, setWishCatId] = useState(
-    defaultCategoryId != null ? String(defaultCategoryId) : ''
+    item?.wishlistCategoryId != null ? String(item.wishlistCategoryId)
+      : defaultCategoryId != null ? String(defaultCategoryId)
+      : ''
   );
+  const isEditing = Boolean(item);
 
   const flatLists = useMemo(() => flattenWishlistCategories(wishlistCategories), [wishlistCategories]);
-  const [selectedExpCats, setSelectedExpCats] = useState([]);
+  const [selectedExpCats, setSelectedExpCats] = useState(item?.categoryIds || []);
 
   const toggleExpCat = (id) => {
     setSelectedExpCats(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -528,14 +537,19 @@ export function AddWishlistItemModal({ expenseCategories, wishlistCategories, on
 
   const handleSubmit = () => {
     if (!name.trim() || !price) return;
-    onAdd({
+    const data = {
       name: name.trim(),
       price: parseFloat(price),
       note: note.trim(),
       link: link.trim() || null,
       wishlistCategoryId: wishCatId ? Number(wishCatId) : null,
       categoryIds: selectedExpCats,
-    });
+    };
+    if (isEditing && onSave) {
+      onSave(item.id, data);
+    } else {
+      onAdd(data);
+    }
     onClose();
   };
 
@@ -543,8 +557,8 @@ export function AddWishlistItemModal({ expenseCategories, wishlistCategories, on
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal-box">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-          <div className="font-display" style={{ fontSize: 22 }}>Add to Wishlist</div>
-          <button className="btn-icon" onClick={onClose}><X size={15} /></button>
+          <div className="font-display" style={{ fontSize: 22 }}>{isEditing ? 'Edit Wishlist Item' : 'Add to Wishlist'}</div>
+          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
@@ -611,7 +625,82 @@ export function AddWishlistItemModal({ expenseCategories, wishlistCategories, on
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
               disabled={!name.trim() || !price}>
-              Add to Wishlist
+              {isEditing ? 'Save Changes' : 'Add to Wishlist'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function collectDescendantIds(cats, id, acc = new Set()) {
+  for (const child of cats.filter(c => c.parentId === id)) {
+    acc.add(child.id);
+    collectDescendantIds(cats, child.id, acc);
+  }
+  return acc;
+}
+
+export function EditWishlistListModal({ list, wishlistCategories, onSave, onClose }) {
+  const [name, setName] = useState(list.name || '');
+  const [color, setColor] = useState(list.color || PALETTE[0]);
+  const [parentId, setParentId] = useState(list.parentId != null ? String(list.parentId) : '');
+
+  const blockedIds = useMemo(() => collectDescendantIds(wishlistCategories, list.id).add(list.id), [wishlistCategories, list.id]);
+  const parentOptions = useMemo(
+    () => flattenWishlistCategories(wishlistCategories).filter(cat => !blockedIds.has(cat.id)),
+    [wishlistCategories, blockedIds]
+  );
+
+  const handleSubmit = () => {
+    if (!name.trim()) return;
+    onSave(list.id, {
+      name: name.trim(),
+      color,
+      parentId: parentId ? Number(parentId) : null,
+    });
+    onClose();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal-box">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
+          <div className="font-display" style={{ fontSize: 22 }}>Edit List</div>
+          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Name</label>
+            <input className="glass-input" value={name} onChange={e => setName(e.target.value)} autoFocus />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Parent List</label>
+            <select className="glass-input" value={parentId} onChange={e => setParentId(e.target.value)}>
+              <option value="">Top level</option>
+              {parentOptions.map(cat => (
+                <option key={cat.id} value={cat.id}>
+                  {'-'.repeat(cat.depth)}{cat.depth > 0 ? ' ' : ''}{cat.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Colour</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {PALETTE.map(c => (
+                <button key={c} onClick={() => setColor(c)} title={c} style={{
+                  width: 28, height: 28, borderRadius: '50%', background: c, cursor: 'pointer',
+                  border: color === c ? '3px solid white' : '3px solid transparent', outline: 'none',
+                }} />
+              ))}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+            <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!name.trim()}>
+              Save Changes
             </button>
           </div>
         </div>
@@ -677,7 +766,7 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
       <div className="modal-box">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
           <div className="font-display" style={{ fontSize: 22 }}>Add Category</div>
-          <button className="btn-icon" onClick={onClose}><X size={15} /></button>
+          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
@@ -800,7 +889,7 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
       <div className="modal-box">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
           <div className="font-display" style={{ fontSize: 22 }}>Edit Category</div>
-          <button className="btn-icon" onClick={onClose}><X size={15} /></button>
+          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
@@ -864,22 +953,28 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
 }
 
 // ── Add Income Modal ─────────────────────────────────────────────────────────
-export function AddIncomeModal({ onAdd, onClose }) {
-  const [name, setName] = useState('');
-  const [amount, setAmount] = useState('');
-  const [resetFrequency, setResetFrequency] = useState('monthly');
-  const [payDayOfMonth, setPayDayOfMonth] = useState('');
+export function AddIncomeModal({ onAdd, onClose, income = null, onSave }) {
+  const [name, setName] = useState(income?.name || '');
+  const [amount, setAmount] = useState(income?.amount != null ? String(income.amount) : '');
+  const [resetFrequency, setResetFrequency] = useState(income?.resetFrequency || 'monthly');
+  const [payDayOfMonth, setPayDayOfMonth] = useState(String(income?.payDayOfMonth || ''));
+  const isEditing = Boolean(income);
 
   const handleSubmit = () => {
     if (!name.trim() || !amount) return;
-    onAdd({
+    const data = {
       name: name.trim(),
       amount: parseFloat(amount),
       resetFrequency,
       payDayOfMonth: resetFrequency === 'monthly' ? (parseInt(payDayOfMonth) || null) : null,
-      holdActive: false,
-      lastPaid: null,
-    });
+      holdActive: income?.holdActive || false,
+      lastPaid: income?.lastPaid || null,
+    };
+    if (isEditing && onSave) {
+      onSave(income.id, data);
+    } else {
+      onAdd(data);
+    }
     onClose();
   };
 
@@ -887,8 +982,8 @@ export function AddIncomeModal({ onAdd, onClose }) {
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal-box">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-          <div className="font-display" style={{ fontSize: 22 }}>Add Income</div>
-          <button className="btn-icon" onClick={onClose}><X size={15} /></button>
+          <div className="font-display" style={{ fontSize: 22 }}>{isEditing ? 'Edit Income' : 'Add Income'}</div>
+          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
@@ -909,7 +1004,70 @@ export function AddIncomeModal({ onAdd, onClose }) {
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
               disabled={!name.trim() || !amount}>
-              Add Income
+              {isEditing ? 'Save Changes' : 'Add Income'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Add One-Off Income Modal ─────────────────────────────────────────────────
+export function AddOneOffIncomeModal({ onAdd, onClose }) {
+  const [name, setName] = useState('');
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [note, setNote] = useState('');
+  const parsedAmount = parseFloat(amount) || 0;
+
+  const handleSubmit = () => {
+    if (!name.trim() || parsedAmount <= 0 || !date) return;
+    onAdd({
+      name: name.trim(),
+      amount: parsedAmount,
+      date: new Date(date).toISOString(),
+      note: note.trim(),
+    });
+    onClose();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal-box">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
+          <div className="font-display" style={{ fontSize: 22 }}>One-Off Income</div>
+          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Source</label>
+            <input className="glass-input" placeholder="e.g. Gift or refund" value={name}
+              onChange={e => setName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+              autoFocus />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Amount (£)</label>
+            <input className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
+              onChange={e => setAmount(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Date received</label>
+            <input className="glass-input" type="date" value={date} onChange={e => setDate(e.target.value)} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Note</label>
+            <input className="glass-input" placeholder="Optional" value={note}
+              onChange={e => setNote(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
+          </div>
+          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+            <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
+              disabled={!name.trim() || parsedAmount <= 0 || !date}>
+              Add to Account
             </button>
           </div>
         </div>
@@ -927,10 +1085,10 @@ export function FastForwardModal({ onConfirm, onClose }) {
       <div className="modal-box">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div className="font-display" style={{ fontSize: 22 }}>Early Pay</div>
-          <button className="btn-icon" onClick={onClose}><X size={15} /></button>
+          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
         </div>
         <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 18, lineHeight: 1.6 }}>
-          Got paid early? Set the actual date you received this income. This updates the next expected pay date.
+          Got paid early? Set the actual date you received this income. This credits the active account and updates the next expected pay date.
         </div>
         <div style={{ marginBottom: 18 }}>
           <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Pay received date</label>

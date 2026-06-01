@@ -1,5 +1,5 @@
-@import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Serif+Display:ital@0;1&display=swap');
+@import "tailwindcss";
 
 
 
@@ -68,17 +68,30 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
   padding: 10px 14px;
   border-radius: 12px;
+  background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.2s ease;
+  font-family: 'DM Sans', sans-serif;
   font-size: 14px;
   font-weight: 500;
+  text-align: left;
   border: 1px solid transparent;
 }
 .nav-item:hover { background: var(--glass-bg); color: var(--text-primary); border-color: var(--glass-border); }
 .nav-item.active { background: var(--glass-bg-strong); color: var(--text-primary); border-color: var(--glass-border-strong); box-shadow: 0 4px 16px rgba(0,0,0,0.2), 0 1px 0 rgba(255,255,255,0.08) inset; }
+.nav-item:focus-visible,
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+.btn-danger:focus-visible,
+.btn-icon:focus-visible,
+.glass-input:focus-visible {
+  outline: 2px solid rgba(93,184,255,0.7);
+  outline-offset: 2px;
+}
 
 .btn-primary {
   background: linear-gradient(135deg, rgba(79,255,176,0.3), rgba(93,184,255,0.3));
@@ -137,6 +150,23 @@ body {
   flex-shrink: 0;
 }
 .btn-icon:hover { background: var(--glass-bg-hover); color: var(--text-primary); border-color: var(--glass-border-strong); }
+
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.btn-danger:disabled,
+.btn-icon:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+.btn-primary:disabled:hover,
+.btn-secondary:disabled:hover,
+.btn-danger:disabled:hover,
+.btn-icon:disabled:hover {
+  transform: none;
+  box-shadow: none;
+}
 
 .glass-input {
   background: rgba(255,255,255,0.06);
