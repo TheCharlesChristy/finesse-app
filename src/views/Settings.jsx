@@ -39,7 +39,29 @@ export default function Settings({
     reader.onload = async (ev) => {
       try {
         const data = JSON.parse(ev.target.result);
-        onImport(data);
+        const payload = (data?.data && typeof data.data === 'object' && !Array.isArray(data.data)) ? data.data : data;
+        const tableKeys = [
+          'accounts',
+          'accountTransfers',
+          'incomeEvents',
+          'settings',
+          'categories',
+          'transactions',
+          'wishlist',
+          'wishlistCategories',
+          'incomes',
+          'subscriptions',
+          'variables',
+        ];
+        const hasKnownTable = tableKeys.some(key => {
+          const value = payload?.[key];
+          return Array.isArray(value) || (value && typeof value === 'object');
+        });
+        if (!hasKnownTable) {
+          await showAlert('The selected file does not look like a Finesse backup.', { title: 'Invalid backup format' });
+          return;
+        }
+        onImport(payload);
       } catch {
         await showAlert('The selected file is not a valid Finesse backup.', { title: 'Invalid file' });
       }

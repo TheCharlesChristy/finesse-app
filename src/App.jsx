@@ -233,12 +233,75 @@ export default function App() {
   }, []);
 
   const handleImportConfirm = useCallback(async (mode) => {
-    if (pendingImport) {
-      await importData(pendingImport, mode);
-      setPendingImport(null);
+    if (!pendingImport) {
+      setModal(null);
+      return;
     }
-    setModal(null);
-  }, [pendingImport]);
+
+    try {
+      const summary = await importData(pendingImport, mode);
+      setPendingImport(null);
+      setModal(null);
+
+      const tableOrder = [
+        'accounts',
+        'settings',
+        'categories',
+        'transactions',
+        'subscriptions',
+        'incomes',
+        'incomeEvents',
+        'wishlist',
+        'wishlistCategories',
+        'variables',
+        'accountTransfers',
+      ];
+      const labels = {
+        accounts: 'Accounts',
+        settings: 'Settings',
+        categories: 'Categories',
+        transactions: 'Transactions',
+        subscriptions: 'Subscriptions',
+        incomes: 'Incomes',
+        incomeEvents: 'Income events',
+        wishlist: 'Wishlist items',
+        wishlistCategories: 'Wishlist lists',
+        variables: 'Variables',
+        accountTransfers: 'Transfers',
+      };
+
+      const lines = [
+        `${mode === 'replace' ? 'Replace' : 'Merge'} import complete.`,
+        '',
+        `Imported: ${summary?.totals?.imported || 0}`,
+      ];
+
+      if ((summary?.totals?.skipped || 0) > 0) {
+        lines.push(`Skipped duplicates: ${summary.totals.skipped}`);
+      }
+
+      lines.push('');
+      lines.push('Details:');
+
+      for (const key of tableOrder) {
+        const row = summary?.tables?.[key];
+        if (!row) continue;
+        const imported = Number(row.imported) || 0;
+        const skipped = Number(row.skipped) || 0;
+        lines.push(`- ${labels[key]}: ${imported}${skipped > 0 ? ` (${skipped} skipped)` : ''}`);
+      }
+
+      if (summary?.createdDefaultAccount) {
+        lines.push('');
+        lines.push('Note: Backup had no accounts, so a Main Account was created automatically.');
+      }
+
+      await showAlert(lines.join('\n'), { title: 'Import complete' });
+    } catch (error) {
+      console.error('Import failed', error);
+      await showAlert('Import failed. Make sure this is a valid Finesse backup file and try again.', { title: 'Import failed' });
+    }
+  }, [pendingImport, showAlert]);
 
   const handleSaveSettings = useCallback((data) => saveSettings(data, activeAccountId), [activeAccountId]);
 

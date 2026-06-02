@@ -886,6 +886,19 @@ export async function exportData() {
 }
 
 export async function importData(data, mode = 'replace') {
+  if (!data || typeof data !== 'object') {
+    return {
+      mode,
+      totals: { imported: 0, skipped: 0 },
+      tables: {},
+      createdDefaultAccount: false,
+    };
+  }
+
+  const payload = (data.data && typeof data.data === 'object' && !Array.isArray(data.data))
+    ? data.data
+    : data;
+
   if (mode === 'replace') {
     await db.accountTransfers.clear();
     await db.incomeEvents.clear();
@@ -903,8 +916,69 @@ export async function importData(data, mode = 'replace') {
   const preserveIds = mode === 'replace';
   const rows = (items = []) => preserveIds ? items : items.map(stripId);
 
-  if (data.accounts?.length) await db.accounts.bulkAdd(rows(data.accounts));
+  const isConstraintError = (error) => error?.name === 'ConstraintError';
+  const addRowsSafely = async (table, items = [], { ignoreConstraint = false } = {}) => {
+    if (!items.length) return { imported: 0, skipped: 0 };
+    try {
+      await table.bulkAdd(items);
+      return { imported: items.length, skipped: 0 };
+    } catch (error) {
+      if (!ignoreConstraint || !isConstraintError(error)) throw error;
+      let imported = 0;
+      let skipped = 0;
+      for (const item of items) {
+        try {
+          await table.add(item);
+          imported += 1;
+        } catch (itemError) {
+          if (!isConstraintError(itemError)) throw itemError;
+          skipped += 1;
+        }
+      }
+      return { imported, skipped };
+    }
+  };
+
+  const summary = {
+    mode,
+    totals: { imported: 0, skipped: 0 },
+    tables: {},
+    createdDefaultAccount: false,
+  };
+
+  const setSummary = (tableName, result = { imported: 0, skipped: 0 }) => {
+    const normalized = {
+      imported: Number(result.imported) || 0,
+      skipped: Number(result.skipped) || 0,
+    };
+    summary.tables[tableName] = normalized;
+    summary.totals.imported += normalized.imported;
+    summary.totals.skipped += normalized.skipped;
+  };
+
+  const toArray = (value) => {
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === 'object') return [value];
+    return [];
+  };
+
+  const dataTables = {
+    accounts: toArray(payload.accounts),
+    accountTransfers: toArray(payload.accountTransfers),
+    incomeEvents: toArray(payload.incomeEvents),
+    settings: toArray(payload.settings),
+    categories: toArray(payload.categories),
+    transactions: toArray(payload.transactions),
+    wishlist: toArray(payload.wishlist),
+    wishlistCategories: toArray(payload.wishlistCategories),
+    incomes: toArray(payload.incomes),
+    subscriptions: toArray(payload.subscriptions),
+    variables: toArray(payload.variables),
+  };
+
+  setSummary('accounts', await addRowsSafely(db.accounts, rows(dataTables.accounts), { ignoreConstraint: true }));
   const fallbackAccountId = await getDefaultAccountId();
+  summary.createdDefaultAccount = !dataTables.accounts.length;
 
   const accountRows = (items = []) => rows(items).map(item => ({
     ...item,
@@ -916,24 +990,37 @@ export async function importData(data, mode = 'replace') {
     return next;
   });
 
-  if (data.settings?.length) await db.settings.bulkAdd(accountRows(data.settings));
-  if (data.categories?.length) await db.categories.bulkAdd(accountRows(data.categories));
-  if (data.transactions?.length) await db.transactions.bulkAdd(accountRows(data.transactions));
-  if (data.wishlist?.length) await db.wishlist.bulkAdd(accountRows(data.wishlist));
-  if (data.wishlistCategories?.length) await db.wishlistCategories.bulkAdd(accountRows(data.wishlistCategories));
-  if (data.incomes?.length) await db.incomes.bulkAdd(accountRows(data.incomes));
-  if (data.subscriptions?.length) await db.subscriptions.bulkAdd(accountRows(data.subscriptions));
-  if (data.variables?.length) await db.variables.bulkAdd(accountRows(data.variables));
-  if (data.incomeEvents?.length) {
-    for (const event of incomeEventRows(data.incomeEvents)) {
-      try {
-        await db.incomeEvents.add(event);
-      } catch (error) {
-        if (error?.name !== 'ConstraintError') throw error;
-      }
+  const transactionRows = accountRows(dataTables.transactions).map(item => {
+    const next = { ...item };
+    if (!next.subscriptionRunKey) delete next.subscriptionRunKey;
+    return next;
+  });
+
+  setSummary('settings', await addRowsSafely(db.settings, accountRows(dataTables.settings)));
+  setSummary('categories', await addRowsSafely(db.categories, accountRows(dataTables.categories)));
+  setSummary('transactions', await addRowsSafely(db.transactions, transactionRows, { ignoreConstraint: true }));
+  setSummary('wishlist', await addRowsSafely(db.wishlist, accountRows(dataTables.wishlist)));
+  setSummary('wishlistCategories', await addRowsSafely(db.wishlistCategories, accountRows(dataTables.wishlistCategories)));
+  setSummary('incomes', await addRowsSafely(db.incomes, accountRows(dataTables.incomes)));
+  setSummary('subscriptions', await addRowsSafely(db.subscriptions, accountRows(dataTables.subscriptions)));
+  setSummary('variables', await addRowsSafely(db.variables, accountRows(dataTables.variables)));
+
+  let incomeEventsImported = 0;
+  let incomeEventsSkipped = 0;
+  for (const event of incomeEventRows(dataTables.incomeEvents)) {
+    try {
+      await db.incomeEvents.add(event);
+      incomeEventsImported += 1;
+    } catch (error) {
+      if (!isConstraintError(error)) throw error;
+      incomeEventsSkipped += 1;
     }
   }
-  if (data.accountTransfers?.length) await db.accountTransfers.bulkAdd(rows(data.accountTransfers));
+  setSummary('incomeEvents', { imported: incomeEventsImported, skipped: incomeEventsSkipped });
+
+  setSummary('accountTransfers', await addRowsSafely(db.accountTransfers, rows(dataTables.accountTransfers)));
+
+  return summary;
 }
 
 export async function exportTransactionsCSV(accountId = null) {
