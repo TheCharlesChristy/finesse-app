@@ -161,10 +161,29 @@ export function getPacedAllowanceIntervalDays(interval = 1, unit = 'day', date =
   return amount;
 }
 
-export function getPacedAllowanceMonthlyTotal(amount, interval = 1, unit = 'day', date = new Date()) {
+/**
+ * Returns the number of days in one income reset cycle.
+ * Defaults to the current calendar-month length when the frequency is monthly
+ * or unrecognised.
+ */
+export function getIncomeCycleDays(resetFrequency, date = new Date()) {
+  switch (resetFrequency) {
+    case 'weekly':      return 7;
+    case 'fortnightly': return 14;
+    case '4weekly':     return 28;
+    case 'monthly':
+    default:            return getDaysInMonth(date);
+  }
+}
+
+/**
+ * Total allowance for one income reset cycle given a repeating spend rate.
+ * Pass `cycleDays` to use the income cycle length instead of the calendar month.
+ */
+export function getPacedAllowanceMonthlyTotal(amount, interval = 1, unit = 'day', date = new Date(), cycleDays = null) {
   const intervalDays = getPacedAllowanceIntervalDays(interval, unit, date);
-  const daysInMonth = getDaysInMonth(date);
-  return roundMoney((Number(amount) || 0) * (daysInMonth / intervalDays));
+  const periodDays = cycleDays != null ? cycleDays : getDaysInMonth(date);
+  return roundMoney((Number(amount) || 0) * (periodDays / intervalDays));
 }
 
 export function formatPacedAllowancePeriod(interval = 1, unit = 'day') {
@@ -179,19 +198,34 @@ export function formatPacedAllowancePeriod(interval = 1, unit = 'day') {
   return `${amount} days`;
 }
 
-export function getPacedAllowanceStatus(category, date = new Date()) {
+/**
+ * Real-time pace status for a paced-allowance category.
+ * Pass `cycleDays` (from `getIncomeCycleDays`) to track against the income
+ * reset cycle instead of the calendar month.  When cycleDays is provided,
+ * `category.lastReset` is used to determine how far into the cycle we are.
+ */
+export function getPacedAllowanceStatus(category, date = new Date(), cycleDays = null) {
   const config = getPacedAllowanceConfig(category);
   if (!config) return null;
 
   const day = getDate(date);
   const daysInMonth = getDaysInMonth(date);
   const intervalDays = getPacedAllowanceIntervalDays(config.interval, config.unit, date);
-  const allowance = roundMoney(category.allowance || getPacedAllowanceMonthlyTotal(config.amount, config.interval, config.unit, date));
+  const allowance = roundMoney(category.allowance || getPacedAllowanceMonthlyTotal(config.amount, config.interval, config.unit, date, cycleDays));
   const spent = roundMoney(category.spent || 0);
-  const allowedToDate = roundMoney(allowance * (day / daysInMonth));
+
+  let allowedToDate, daysRemaining;
+  if (cycleDays != null && category.lastReset) {
+    const daysSinceReset = Math.max(0, differenceInDays(startOfDay(date), startOfDay(new Date(category.lastReset))));
+    allowedToDate = roundMoney(allowance * Math.min(1, daysSinceReset / cycleDays));
+    daysRemaining = Math.max(1, cycleDays - daysSinceReset);
+  } else {
+    allowedToDate = roundMoney(allowance * (day / daysInMonth));
+    daysRemaining = Math.max(1, daysInMonth - day + 1);
+  }
+
   const paceBalance = roundMoney(allowedToDate - spent);
   const remaining = roundMoney(allowance - spent);
-  const daysRemaining = Math.max(1, daysInMonth - day + 1);
   const periodsRemaining = Math.max(1, daysRemaining / intervalDays);
 
   return {

@@ -12,7 +12,7 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   addIncome, updateIncome, deleteIncome, getIncomeEvents, recordIncomeReceived, deleteIncomeEvent,
   getSubscriptions, addSubscription, updateSubscription, deleteSubscription, processDueSubscriptions,
   addVariable, updateVariable, deleteVariable } from './db';
-import { calcNextReset, evaluateFormula, fmt, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal } from './utils';
+import { calcNextReset, evaluateFormula, fmt, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations } from './utils';
 
 import Dashboard from './views/Dashboard';
 import Transactions from './views/Transactions';
@@ -129,19 +129,26 @@ export default function App() {
   }, [categories]);
 
   // Paced allowance categories derive their period allowance from a repeating amount.
+  // The period is the income reset cycle (weekly, fortnightly, etc.) rather than
+  // the calendar month, so that the stored allowance is consistent with income.amount.
   useEffect(() => {
     if (!categories.length) return;
     (async () => {
       for (const cat of categories) {
         const pace = getPacedAllowanceConfig(cat);
         if (!pace) continue;
-        const expectedAllowance = getPacedAllowanceMonthlyTotal(pace.amount, pace.interval, pace.unit);
+        const allocs = normalizeIncomeAllocations(cat.incomeAllocations);
+        const linkedFreqs = [...new Set(
+          allocs.map(a => incomes.find(i => Number(i.id) === a.incomeId)?.resetFrequency).filter(Boolean)
+        )];
+        const cycleDays = linkedFreqs.length === 1 ? getIncomeCycleDays(linkedFreqs[0]) : null;
+        const expectedAllowance = getPacedAllowanceMonthlyTotal(pace.amount, pace.interval, pace.unit, undefined, cycleDays);
         if (Math.abs((Number(cat.allowance) || 0) - expectedAllowance) > 0.005) {
           await updateCategory(cat.id, { allowance: expectedAllowance });
         }
       }
     })();
-  }, [categories]);
+  }, [categories, incomes]);
 
   // Subscriptions are logged automatically when their due date arrives.
   useEffect(() => {

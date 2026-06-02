@@ -10,6 +10,7 @@ import {
   formatPacedAllowancePeriod,
   fmt,
   getAllocationPercentTotal,
+  getIncomeCycleDays,
   getIncomeAllocationUsage,
   getPacedAllowanceMonthlyTotal,
   normalizeIncomeAllocations,
@@ -908,6 +909,28 @@ function ColourPicker({ color, onChange }) {
   );
 }
 
+// ── Paced-allowance cycle helpers ─────────────────────────────────────────────
+
+const INCOME_CYCLE_LABELS = {
+  weekly: 'week',
+  fortnightly: 'fortnight',
+  '4weekly': '4-week cycle',
+  monthly: 'month',
+};
+
+/**
+ * Returns the single reset frequency shared by all linked incomes, or null if
+ * the category has no allocations, missing incomes, or mixed frequencies.
+ */
+function getLinkedCycleFreq(incomeAllocations, incomes) {
+  const allocs = normalizeIncomeAllocations(incomeAllocations);
+  if (!allocs.length) return null;
+  const freqs = [...new Set(
+    allocs.map(a => incomes.find(i => Number(i.id) === a.incomeId)?.resetFrequency).filter(Boolean)
+  )];
+  return freqs.length === 1 ? freqs[0] : null;
+}
+
 // ── Add Category Modal ───────────────────────────────────────────────────────
 export function AddCategoryModal({ onAdd, onClose, variables = [], categories = [], incomes = [] }) {
   const [name, setName] = useState('');
@@ -920,11 +943,20 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
   const [incomeAllocations, setIncomeAllocations] = useState(() => makeAutoIncomeAllocations(0, incomes, categories));
   const [allocTouched, setAllocTouched] = useState(false);
 
+  const incomeCycleFreq = useMemo(
+    () => getLinkedCycleFreq(incomeAllocations, incomes),
+    [incomeAllocations, incomes],
+  );
+  const incomeCycleDays  = incomeCycleFreq ? getIncomeCycleDays(incomeCycleFreq) : null;
+  const incomeCycleLabel = INCOME_CYCLE_LABELS[incomeCycleFreq] ?? 'month';
+
   const isFormula = !pacedAllowanceEnabled && isFormulaInput(allowanceInput);
   const pacedMonthlyAllowance = getPacedAllowanceMonthlyTotal(
     parseFloat(pacedAllowanceAmount) || 0,
     pacedAllowanceInterval,
-    pacedAllowanceUnit
+    pacedAllowanceUnit,
+    undefined,
+    incomeCycleDays,
   );
   const pacedPeriodLabel = formatPacedAllowancePeriod(pacedAllowanceInterval, pacedAllowanceUnit);
   const formulaResult = useMemo(
@@ -1016,7 +1048,7 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
                 <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
                   {fmt(parseFloat(pacedAllowanceAmount) || 0)} every {pacedPeriodLabel}
                   {' · '}
-                  this month: <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(pacedMonthlyAllowance)}</span>
+                  per {incomeCycleLabel}: <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(pacedMonthlyAllowance)}</span>
                 </div>
               </div>
             ) : (
@@ -1086,11 +1118,20 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
   ));
   const [allocTouched, setAllocTouched] = useState(() => Boolean(category.incomeAllocations?.length));
 
+  const incomeCycleFreq = useMemo(
+    () => getLinkedCycleFreq(incomeAllocations, incomes),
+    [incomeAllocations, incomes],
+  );
+  const incomeCycleDays  = incomeCycleFreq ? getIncomeCycleDays(incomeCycleFreq) : null;
+  const incomeCycleLabel = INCOME_CYCLE_LABELS[incomeCycleFreq] ?? 'month';
+
   const isFormula = !pacedAllowanceEnabled && isFormulaInput(allowanceInput);
   const pacedMonthlyAllowance = getPacedAllowanceMonthlyTotal(
     parseFloat(pacedAllowanceAmount) || 0,
     pacedAllowanceInterval,
-    pacedAllowanceUnit
+    pacedAllowanceUnit,
+    undefined,
+    incomeCycleDays,
   );
   const pacedPeriodLabel = formatPacedAllowancePeriod(pacedAllowanceInterval, pacedAllowanceUnit);
   const formulaResult = useMemo(
@@ -1178,7 +1219,7 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
                 <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
                   {fmt(parseFloat(pacedAllowanceAmount) || 0)} every {pacedPeriodLabel}
                   {' · '}
-                  this month: <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(pacedMonthlyAllowance)}</span>
+                  per {incomeCycleLabel}: <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(pacedMonthlyAllowance)}</span>
                 </div>
               </div>
             ) : (

@@ -4,6 +4,7 @@ import {
   fmt,
   calcNextReset,
   getAllocationPercentTotal,
+  getIncomeCycleDays,
   getIncomeAllocationUsage,
   getPacedAllowanceStatus,
   normalizeIncomeAllocations,
@@ -295,7 +296,11 @@ export default function Dashboard({
               const fundingOk = allocations.length > 0
                 && Math.abs(allocationTotal - 100) <= 0.01
                 && allocations.every(allocation => incomeMap.has(allocation.incomeId));
-              const pacedStatus = getPacedAllowanceStatus(cat);
+              const catAllocFreqs = [...new Set(
+                allocations.map(a => incomeMap.get(a.incomeId)?.resetFrequency).filter(Boolean)
+              )];
+              const catCycleDays = catAllocFreqs.length === 1 ? getIncomeCycleDays(catAllocFreqs[0]) : null;
+              const pacedStatus = getPacedAllowanceStatus(cat, undefined, catCycleDays);
               return (
                 <div key={cat.id}>
                   <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 }}>
