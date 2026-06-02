@@ -3,6 +3,7 @@ import { CreditCard, Layers3, Pencil, Trash2, Search } from 'lucide-react';
 import { fmt } from '../utils';
 import { format } from 'date-fns';
 import CategorySelect from '../components/CategorySelect';
+import { IconButton } from '../components/ui';
 
 export default function Transactions({ transactions, categories, onDelete, onEdit, onAdd, onBulkAdd, onAddSubscription }) {
   const [search, setSearch] = useState('');
@@ -22,11 +23,6 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
 
   const totalFiltered = filtered.reduce((s, tx) => s + tx.amount, 0);
 
-  const handleDelete = (tx) => {
-    if (window.confirm(`Delete "${tx.note || catMap[tx.categoryId]?.name || 'Expense'}"?`)) {
-      onDelete(tx.id);
-    }
-  };
 
   // Group by date
   const grouped = useMemo(() => {
@@ -46,7 +42,7 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
         <div style={{ position: 'relative', flex: '1 1 200px' }}>
           <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', pointerEvents: 'none' }} />
           <input className="glass-input" placeholder="Search transactions…" value={search}
-            onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 34 }} />
+            aria-label="Search transactions" onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 34 }} />
         </div>
         <CategorySelect
           categories={categories}
@@ -54,6 +50,7 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
           onChange={setFilterCat}
           includeAll
           allLabel="All Categories"
+          aria-label="Filter by category"
           style={{ flex: '1 1 180px' }}
         />
         <button className="btn-secondary mobile-full" onClick={onBulkAdd} disabled={categories.length === 0}
@@ -130,14 +127,14 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
                     <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--accent-warm)', flexShrink: 0 }}>
                       -{fmt(tx.amount)}
                     </div>
-                    <button className="btn-icon" onClick={() => onEdit(tx)} style={{ opacity: 0.68 }}
-                      title="Edit transaction">
+                    <IconButton onClick={() => onEdit(tx)} style={{ opacity: 0.68 }}
+                      label={`Edit ${tx.note || cat?.name || 'expense'}`}>
                       <Pencil size={13} />
-                    </button>
-                    <button className="btn-icon" onClick={() => handleDelete(tx)} style={{ opacity: 0.6 }}
-                      title="Delete transaction">
+                    </IconButton>
+                    <IconButton onClick={() => onDelete(tx)} style={{ opacity: 0.6 }}
+                      label={`Delete ${tx.note || cat?.name || 'expense'}`}>
                       <Trash2 size={13} />
-                    </button>
+                    </IconButton>
                   </div>
                 );
               })}

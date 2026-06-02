@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { differenceInDays, format, getDaysInMonth, startOfDay } from 'date-fns';
 import { CreditCard, ExternalLink, Pause, Pencil, Play, Plus, Search, Trash2 } from 'lucide-react';
 import { fmt } from '../utils';
+import { CardTitle, IconButton } from '../components/ui';
 
 function formatRecurrence(subscription) {
   const interval = Number(subscription.interval) || 1;
@@ -100,9 +101,9 @@ export default function Subscriptions({
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
         <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <CreditCard size={18} color="var(--accent-warm)" />
+            <CreditCard size={18} color="var(--accent-warm)" aria-hidden="true" />
             <div>
-              <div style={{ fontSize: 17, fontWeight: 800 }}>Subscriptions</div>
+              <CardTitle as="h2" style={{ fontSize: 17 }}>Subscriptions</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>Recurring expenses and account management links</div>
             </div>
           </div>
@@ -124,7 +125,7 @@ export default function Subscriptions({
         ].map(([label, value, hint]) => (
           <div key={label} className="glass" style={{ borderRadius: 14, padding: '15px 16px' }}>
             <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 5 }}>{label}</div>
-            <div style={{ fontSize: 20, fontWeight: 850 }}>{value}</div>
+            <div style={{ fontSize: 20, fontWeight: 700 }}>{value}</div>
             <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 3 }}>{hint}</div>
           </div>
         ))}
@@ -133,17 +134,17 @@ export default function Subscriptions({
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '16px' }}>
         <div className="mobile-row-stack" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
           <div style={{ position: 'relative', flex: '1 1 240px' }}>
-            <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            <Search size={15} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
             <input className="glass-input" placeholder="Search subscriptions, categories, or links" value={search}
-              onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 36 }} />
+              aria-label="Search subscriptions" onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 36 }} />
           </div>
-          <div className="mobile-actions" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <div className="mobile-actions" role="group" aria-label="Filter subscriptions" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {[
               ['all', 'All'],
               ['active', 'Active'],
               ['paused', 'Paused'],
             ].map(([id, label]) => (
-              <button key={id} className={filter === id ? 'btn-primary' : 'btn-secondary'}
+              <button key={id} type="button" aria-pressed={filter === id} className={filter === id ? 'btn-primary' : 'btn-secondary'}
                 onClick={() => setFilter(id)} style={{ padding: '9px 12px', fontSize: 12 }}>
                 {label}
               </button>
@@ -153,7 +154,7 @@ export default function Subscriptions({
 
         {subscriptions.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '34px 16px' }}>
-            <div style={{ fontSize: 15, fontWeight: 750, marginBottom: 7 }}>No subscriptions yet</div>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 7 }}>No subscriptions yet</div>
             <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>
               Add rent, streaming, insurance, memberships, or anything else that repeats.
             </div>
@@ -185,7 +186,7 @@ export default function Subscriptions({
                     <div style={{ minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                         <span style={{ width: 9, height: 9, borderRadius: '50%', background: category?.color || 'var(--accent-warm)', flexShrink: 0 }} />
-                        <div className="mobile-no-nowrap" style={{ fontSize: 15, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <div className="mobile-no-nowrap" style={{ fontSize: 15, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {subscription.name}
                         </div>
                       </div>
@@ -206,7 +207,7 @@ export default function Subscriptions({
                       )}
                     </div>
                     <div className="mobile-center-left" style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: 17, fontWeight: 850, color: 'var(--accent-warm)' }}>
+                      <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--accent-warm)' }}>
                         -{fmt(subscription.amount || 0)}
                       </div>
                       <div style={{
@@ -236,10 +237,10 @@ export default function Subscriptions({
                       style={{ padding: '7px 10px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
                       <Pencil size={13} /> Edit
                     </button>
-                    <button className="btn-icon" onClick={() => onDeleteSubscription(subscription)}
-                      title="Delete subscription" style={{ width: 34, height: 34, opacity: 0.68 }}>
+                    <IconButton onClick={() => onDeleteSubscription(subscription)}
+                      label={`Delete ${subscription.name}`} size={34} style={{ opacity: 0.68 }}>
                       <Trash2 size={13} />
-                    </button>
+                    </IconButton>
                   </div>
                 </div>
               );

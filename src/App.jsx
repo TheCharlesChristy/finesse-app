@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { CalendarDays, CreditCard, LayoutDashboard, ListOrdered, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { CalendarDays, CreditCard, LayoutDashboard, ListOrdered, Menu, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
@@ -16,7 +16,7 @@ import { calcNextReset, evaluateFormula, fmt, getPacedAllowanceConfig, getPacedA
 
 import Dashboard from './views/Dashboard';
 import Transactions from './views/Transactions';
-import Forecasting from './views/Forecasting';
+const Forecasting = lazy(() => import('./views/Forecasting'));
 import Wishlist from './views/Wishlist';
 import PurchaseCheck from './views/PurchaseCheck';
 import Accounts from './views/Accounts';
@@ -27,6 +27,8 @@ import Variables from './views/Variables';
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal } from './components/Modals';
+import { Modal } from './components/ui';
+import { useDialog } from './components/useDialog';
 
 const NAV = [
   { id: 'dashboard',   label: 'Dashboard',   Icon: LayoutDashboard },
@@ -60,6 +62,8 @@ function getLatestDueIncomeReset(income, now = new Date()) {
 }
 
 export default function App() {
+  const { dialogEl, showConfirm, showAlert, showPrompt } = useDialog();
+
   const [view, setView] = useState('dashboard');
   const [modal, setModal] = useState(null);
   const [pendingImport, setPendingImport] = useState(null);
@@ -283,13 +287,17 @@ export default function App() {
       cat.incomeAllocations?.some(allocation => Number(allocation.incomeId) === Number(income.id))
     );
     if (linkedCategories.length > 0) {
-      alert(`"${income.name}" funds ${linkedCategories.length} categor${linkedCategories.length === 1 ? 'y' : 'ies'}: ${linkedCategories.map(c => c.name).join(', ')}.\n\nReallocate those categories before deleting this income.`);
+      await showAlert(
+        `"${income.name}" funds ${linkedCategories.length} categor${linkedCategories.length === 1 ? 'y' : 'ies'}: ${linkedCategories.map(c => c.name).join(', ')}.\n\nReallocate those categories before deleting this income.`,
+        { title: 'Cannot delete income' },
+      );
       return;
     }
-    if (window.confirm(`Delete income "${income.name}"?`)) {
-      await deleteIncome(income.id);
-    }
-  }, [categories]);
+    const ok = await showConfirm(`Delete income "${income.name}"?`, {
+      title: 'Delete Income', confirmText: 'Delete', danger: true,
+    });
+    if (ok) await deleteIncome(income.id);
+  }, [categories, showAlert, showConfirm]);
 
   const handleAddSubscription = useCallback((subscription) => addSubscription(subscription, activeAccountId), [activeAccountId]);
   const handleEditSubscription = useCallback((subscription) => {
@@ -298,9 +306,12 @@ export default function App() {
   }, []);
   const handleUpdateSubscription = useCallback((id, data) => updateSubscription(id, data), []);
   const handleDeleteSubscription = useCallback(async (subscription) => {
-    if (!window.confirm(`Delete subscription "${subscription.name}"? Past logged expenses will stay.`)) return;
+    const ok = await showConfirm(`Delete "${subscription.name}"? Past logged expenses will stay.`, {
+      title: 'Delete Subscription', confirmText: 'Delete', danger: true,
+    });
+    if (!ok) return;
     await deleteSubscription(subscription.id);
-  }, []);
+  }, [showConfirm]);
   const handleToggleSubscription = useCallback((subscription) => {
     updateSubscription(subscription.id, { active: subscription.active === false });
   }, []);
@@ -339,22 +350,48 @@ export default function App() {
   const handleUpdateAccount = useCallback((id, data) => updateAccount(id, data), []);
   const handleDeleteAccount = useCallback(async (account) => {
     if (accounts.length <= 1) {
-      alert('Keep at least one account.');
+      await showAlert('You need at least one account — add another before deleting this one.', {
+        title: 'Cannot delete account',
+      });
       return;
     }
-    if (!window.confirm(`Delete account "${account.name}" and all of its data?`)) return;
+    const ok = await showConfirm(`Delete account "${account.name}" and all of its data?`, {
+      title: 'Delete Account', confirmText: 'Delete', danger: true,
+    });
+    if (!ok) return;
     await deleteAccount(account.id);
     if (Number(activeAccountId) === Number(account.id)) {
       const next = accounts.find(item => Number(item.id) !== Number(account.id));
       setActiveAccountId(next?.id || null);
     }
-  }, [accounts, activeAccountId]);
+  }, [accounts, activeAccountId, showAlert, showConfirm]);
   const handleTransferMoney = useCallback((transfer) => transferMoney(transfer), []);
   const handleDeleteIncomeEvent = useCallback(async (event) => {
     if (event.type !== 'one-off') return;
-    if (!window.confirm(`Delete one-off income "${event.name || 'Income'}" and remove it from the account balance?`)) return;
+    const ok = await showConfirm(`Delete "${event.name || 'Income'}" and remove it from the account balance?`, {
+      title: 'Delete one-off income', confirmText: 'Delete', danger: true,
+    });
+    if (!ok) return;
     await deleteIncomeEvent(event.id);
-  }, []);
+  }, [showConfirm]);
+
+  // ── Transaction / category delete (confirmation owned here) ─────────────────
+  const handleDeleteTransaction = useCallback(async (tx) => {
+    const cat = categories.find(c => c.id === tx.categoryId);
+    const label = tx.note || cat?.name || 'Expense';
+    const ok = await showConfirm(`Delete "${label}"?`, {
+      title: 'Delete Transaction', confirmText: 'Delete', danger: true,
+    });
+    if (ok) deleteTransaction(tx.id);
+  }, [categories, showConfirm]);
+
+  const handleDeleteCategory = useCallback(async (catId) => {
+    const cat = categories.find(c => c.id === catId);
+    const ok = await showConfirm(`Delete "${cat?.name || 'category'}" and all its transactions?`, {
+      title: 'Delete Category', confirmText: 'Delete', danger: true,
+    });
+    if (ok) deleteCategory(catId);
+  }, [categories, showConfirm]);
 
   // ── Variable handlers ────────────────────────────────────────────────────
   const handleAddVariable    = useCallback(v    => addVariable(v, activeAccountId), [activeAccountId]);
@@ -367,7 +404,7 @@ export default function App() {
     <div style={{ minHeight: '100vh', position: 'relative' }}>
       <div className="bg-mesh" />
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', minHeight: '100vh' }}>
-        <aside className="sidebar" style={{
+        <aside id="app-sidebar" className="sidebar" aria-label="Sidebar" style={{
           width: 220, flexShrink: 0, padding: '24px 12px',
           display: 'flex', flexDirection: 'column', gap: 4,
           borderRight: '1px solid rgba(255,255,255,0.07)',
@@ -382,10 +419,10 @@ export default function App() {
           </div>
           {accounts.length > 0 && (
             <div style={{ padding: '4px 4px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: 8 }}>
-              <label style={{ color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', margin: '0 10px 6px' }}>
+              <label htmlFor="account-switcher" style={{ color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', margin: '0 10px 6px' }}>
                 Account
               </label>
-              <select className="glass-input" value={activeAccountId || ''} onChange={e => setActiveAccountId(Number(e.target.value))}
+              <select id="account-switcher" className="glass-input" value={activeAccountId || ''} onChange={e => setActiveAccountId(Number(e.target.value))}
                 style={{ padding: '8px 10px', fontSize: 12, borderRadius: 9 }}>
                 {accounts.map(account => (
                   <option key={account.id} value={account.id}>{account.name}</option>
@@ -398,11 +435,14 @@ export default function App() {
               )}
             </div>
           )}
-          {NAV.map(({ id, label, Icon }) => (
-            <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} onClick={() => navigate(id)} type="button">
-              <Icon size={16} /><span>{label}</span>
-            </button>
-          ))}
+          <nav aria-label="Primary" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {NAV.map(({ id, label, Icon }) => (
+              <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} onClick={() => navigate(id)} type="button"
+                aria-current={view === id ? 'page' : undefined}>
+                <Icon size={16} aria-hidden="true" /><span>{label}</span>
+              </button>
+            ))}
+          </nav>
         </aside>
 
         {sidebarOpen && (
@@ -413,17 +453,24 @@ export default function App() {
         )}
 
         <main style={{ flex: 1, padding: '24px 20px', maxWidth: 900, minWidth: 0, marginLeft: 220 }} className="main-content">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }} className="mobile-header">
-            <button onClick={() => setSidebarOpen(v => !v)} style={{
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }} className="page-header">
+            <button type="button" className="mobile-menu-btn" onClick={() => setSidebarOpen(v => !v)}
+              aria-label={sidebarOpen ? 'Close navigation' : 'Open navigation'}
+              aria-expanded={sidebarOpen} aria-controls="app-sidebar" style={{
               background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
               borderRadius: 10, width: 38, height: 38, cursor: 'pointer', color: 'white',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 18
-            }}>☰</button>
-            <div className="font-display" style={{ fontSize: 18 }}>
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+            }}><Menu size={18} aria-hidden="true" /></button>
+            <h1 className="font-display" style={{ fontSize: 20, fontWeight: 400, margin: 0 }}>
               {NAV.find(n => n.id === view)?.label}
-            </div>
+            </h1>
           </div>
 
+          {!accountsQuery ? (
+            <div className="glass" aria-busy="true" style={{ borderRadius: 16, padding: '64px 24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
+              Loading your finances…
+            </div>
+          ) : (<>
           {view === 'dashboard' && (
             <Dashboard
               categories={categories}
@@ -441,7 +488,7 @@ export default function App() {
               onEditIncome={handleEditIncome}
               onDeleteIncome={handleDeleteIncome}
               onEditCategory={handleEditCategory}
-              onDeleteCategory={deleteCategory}
+              onDeleteCategory={handleDeleteCategory}
             />
           )}
           {view === 'accounts' && (
@@ -460,12 +507,18 @@ export default function App() {
           )}
           {view === 'transactions' && (
             <Transactions transactions={transactions} categories={categories}
-              onDelete={deleteTransaction} onEdit={handleEditTransaction} onAdd={() => setModal('addTx')}
+              onDelete={handleDeleteTransaction} onEdit={handleEditTransaction} onAdd={() => setModal('addTx')}
               onBulkAdd={() => setModal('bulkAddTx')}
               onAddSubscription={() => setModal('addSubscription')} />
           )}
           {view === 'forecasting' && (
-            <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes} />
+            <Suspense fallback={
+              <div className="glass" style={{ borderRadius: 16, padding: '48px 24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
+                Loading charts…
+              </div>
+            }>
+              <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes} />
+            </Suspense>
           )}
           {view === 'purchase' && (
             <PurchaseCheck categories={categories} onLogPurchase={handleLogPurchase} />
@@ -500,7 +553,8 @@ export default function App() {
               onAddWishlistCat={(data) => addWishlistCategory(data, activeAccountId)}
               onEditWishlistCat={handleEditWishlistList}
               onDeleteWishlistCat={deleteWishlistCategory}
-              onAddItemToFolder={(catId) => { setWishlistDefaultCatId(catId); setModal('addWish'); }} />
+              onAddItemToFolder={(catId) => { setWishlistDefaultCatId(catId); setModal('addWish'); }}
+              showConfirm={showConfirm} />
           )}
           {view === 'variables' && (
             <Variables
@@ -515,8 +569,10 @@ export default function App() {
               onImport={handleImport} onResetBudget={() => resetBudget(activeAccountId)}
               categories={categories} settings={settings} onSaveSettings={handleSaveSettings}
               incomes={incomes} onResetIncome={(incomeId) => resetCategoriesForIncome(incomeId, undefined, activeAccountId)}
-              onFullReset={handleFullReset} />
+              onFullReset={handleFullReset}
+              showConfirm={showConfirm} showAlert={showAlert} showPrompt={showPrompt} />
           )}
+          </>)}
         </main>
       </div>
 
@@ -598,17 +654,14 @@ export default function App() {
         />
       )}
       {(modal === 'addTx' || modal === 'bulkAddTx') && categories.length === 0 && (
-        <div className="modal-overlay" onClick={() => setModal(null)}>
-          <div className="modal-box" style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 10 }}>No categories yet</div>
-            <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 18 }}>
-              Add an expense category from the Dashboard first.
-            </div>
-            <button className="btn-primary" onClick={() => { setModal(null); setView('dashboard'); }}>
-              Go to Dashboard
-            </button>
+        <Modal title="No categories yet" onClose={() => setModal(null)}>
+          <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 18 }}>
+            Add an expense category from the Dashboard first.
           </div>
-        </div>
+          <button className="btn-primary" onClick={() => { setModal(null); setView('dashboard'); }}>
+            Go to Dashboard
+          </button>
+        </Modal>
       )}
       {modal === 'addWish' && (
         <AddWishlistItemModal expenseCategories={categories} wishlistCategories={wishlistCategories}
@@ -636,11 +689,12 @@ export default function App() {
         <ImportModeModal onConfirm={handleImportConfirm}
           onClose={() => { setPendingImport(null); setModal(null); }} />
       )}
+      {dialogEl}
 
       <style>{`
         @media (min-width: 768px) {
           .sidebar { left: 0 !important; }
-          .mobile-header { display: none !important; }
+          .mobile-menu-btn { display: none !important; }
           .sidebar-overlay { display: none !important; }
         }
         @media (max-width: 767px) {

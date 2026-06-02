@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeftRight, Check, Pencil, Plus, Trash2, Wallet, X } from 'lucide-react';
 import { fmt } from '../utils';
+import { CardTitle, IconButton } from '../components/ui';
 
 const ACCOUNT_COLORS = ['#4fffb0', '#5db8ff', '#c084fc', '#fbbf70', '#ff6b8a', '#67e8f9'];
 
@@ -106,8 +107,8 @@ export default function Accounts({
 
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-          <Wallet size={17} color="var(--accent-blue)" />
-          <div style={{ fontSize: 15, fontWeight: 600 }}>Your Accounts</div>
+          <Wallet size={17} color="var(--accent-blue)" aria-hidden="true" />
+          <CardTitle as="h2">Your Accounts</CardTitle>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -128,15 +129,15 @@ export default function Accounts({
                 {editing ? (
                   <>
                     <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) minmax(100px, 140px)', gap: 8 }}>
-                      <input className="glass-input" value={editName} onChange={e => setEditName(e.target.value)}
+                      <input className="glass-input" value={editName} aria-label="Account name" onChange={e => setEditName(e.target.value)}
                         onKeyDown={e => e.key === 'Enter' && commitEdit()} autoFocus />
-                      <input className="glass-input" type="number" step="0.01" value={editBalance}
+                      <input className="glass-input" type="number" step="0.01" value={editBalance} aria-label="Account balance"
                         onChange={e => setEditBalance(e.target.value)}
                         onKeyDown={e => e.key === 'Enter' && commitEdit()} />
                     </div>
                     <div className="mobile-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                      <button className="btn-icon" onClick={commitEdit} title="Save account"><Check size={13} /></button>
-                      <button className="btn-icon" onClick={() => setEditingId(null)} title="Cancel"><X size={13} /></button>
+                      <IconButton onClick={commitEdit} label="Save account"><Check size={13} /></IconButton>
+                      <IconButton onClick={() => setEditingId(null)} label="Cancel editing"><X size={13} /></IconButton>
                     </div>
                   </>
                 ) : (
@@ -167,12 +168,12 @@ export default function Accounts({
                       <span className="font-display" style={{ fontSize: 20, color: (account.balance || 0) < 0 ? 'var(--danger)' : 'var(--text-primary)' }}>
                         {fmt(account.balance || 0)}
                       </span>
-                      <button className="btn-icon" onClick={() => startEdit(account)} title="Edit account" style={{ width: 28, height: 28, opacity: 0.65 }}>
+                      <IconButton onClick={() => startEdit(account)} label={`Edit ${account.name}`} size={28} style={{ opacity: 0.65 }}>
                         <Pencil size={12} />
-                      </button>
-                      <button className="btn-icon" onClick={() => onDeleteAccount(account)} title="Delete account" style={{ width: 28, height: 28, opacity: 0.5 }}>
+                      </IconButton>
+                      <IconButton onClick={() => onDeleteAccount(account)} label={`Delete ${account.name}`} size={28} style={{ opacity: 0.5 }}>
                         <Trash2 size={12} />
-                      </button>
+                      </IconButton>
                     </div>
                   </>
                 )}
@@ -183,10 +184,10 @@ export default function Accounts({
 
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: 16, paddingTop: 16 }}>
           <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) minmax(100px, 140px) auto', gap: 10, alignItems: 'center' }}>
-            <input className="glass-input" placeholder="New account name" value={newName}
+            <input className="glass-input" placeholder="New account name" value={newName} aria-label="New account name"
               onChange={e => setNewName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleAddAccount()} />
-            <input className="glass-input" type="number" step="0.01" placeholder="Balance" value={newBalance}
+            <input className="glass-input" type="number" step="0.01" placeholder="Balance" value={newBalance} aria-label="Starting balance"
               onChange={e => setNewBalance(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleAddAccount()} />
             <button className="btn-primary" onClick={handleAddAccount} disabled={!newName.trim()}
@@ -199,33 +200,33 @@ export default function Accounts({
 
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-          <ArrowLeftRight size={17} color="var(--accent-mint)" />
-          <div style={{ fontSize: 15, fontWeight: 600 }}>Transfer Money</div>
+          <ArrowLeftRight size={17} color="var(--accent-mint)" aria-hidden="true" />
+          <CardTitle as="h2">Transfer Money</CardTitle>
         </div>
 
         <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>From</label>
-            <select className="glass-input" value={fromId || ''} onChange={e => setFromId(e.target.value)}>
+            <label htmlFor="transfer-from" className="field-label">From</label>
+            <select id="transfer-from" className="glass-input" value={fromId || ''} onChange={e => setFromId(e.target.value)}>
               <option value="">Select account</option>
               {accounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
             </select>
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>To</label>
-            <select className="glass-input" value={toId || ''} onChange={e => setToId(e.target.value)}>
+            <label htmlFor="transfer-to" className="field-label">To</label>
+            <select id="transfer-to" className="glass-input" value={toId || ''} onChange={e => setToId(e.target.value)}>
               <option value="">Select account</option>
               {accounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
             </select>
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Amount (£)</label>
-            <input className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
+            <label htmlFor="transfer-amount" className="field-label">Amount (£)</label>
+            <input id="transfer-amount" className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
               onChange={e => setAmount(e.target.value)} />
           </div>
         </div>
         <div className="mobile-row-stack" style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
-          <input className="glass-input" placeholder="Note" value={note}
+          <input className="glass-input" placeholder="Note" value={note} aria-label="Transfer note"
             onChange={e => setNote(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleTransfer()}
             style={{ flex: '1 1 220px' }} />
@@ -239,9 +240,9 @@ export default function Accounts({
 
       {recentIncomeEvents.length > 0 && (
         <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
-          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>
+          <CardTitle as="h2" style={{ marginBottom: 12 }}>
             Recent Income{activeAccount ? ` for ${activeAccount.name}` : ''}
-          </div>
+          </CardTitle>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {recentIncomeEvents.map(event => (
               <div key={event.id} className="mobile-stack" style={{
@@ -267,10 +268,10 @@ export default function Accounts({
                 <div className="mobile-actions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent-mint)' }}>+{fmt(event.amount || 0)}</span>
                   {event.type === 'one-off' && (
-                    <button className="btn-icon" onClick={() => onDeleteIncomeEvent?.(event)}
-                      title="Delete one-off income" style={{ width: 28, height: 28, opacity: 0.55 }}>
+                    <IconButton onClick={() => onDeleteIncomeEvent?.(event)}
+                      label={`Delete one-off income ${event.name || ''}`.trim()} size={28} style={{ opacity: 0.55 }}>
                       <Trash2 size={12} />
-                    </button>
+                    </IconButton>
                   )}
                 </div>
               </div>
@@ -281,7 +282,7 @@ export default function Accounts({
 
       {recentTransfers.length > 0 && (
         <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
-          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Recent Transfers</div>
+          <CardTitle as="h2" style={{ marginBottom: 12 }}>Recent Transfers</CardTitle>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {recentTransfers.map(transfer => {
               const from = accountMap.get(Number(transfer.fromAccountId));
@@ -298,7 +299,7 @@ export default function Accounts({
                 }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {from?.name || 'Deleted account'}{' -> '}{to?.name || 'Deleted account'}
+                      {from?.name || 'Deleted account'}{' → '}{to?.name || 'Deleted account'}
                     </div>
                     <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 2 }}>
                       {new Date(transfer.date).toLocaleDateString('en-GB')}{transfer.note ? ` · ${transfer.note}` : ''}

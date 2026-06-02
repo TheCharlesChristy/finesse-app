@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { addMonths, differenceInDays, eachDayOfInterval, endOfMonth, endOfWeek, format, isSameDay, isSameMonth, startOfDay, startOfMonth, startOfWeek, subMonths } from 'date-fns';
 import { CalendarDays, ChevronLeft, ChevronRight, CreditCard, Pause, Pencil, Play, Plus, Trash2, Wallet } from 'lucide-react';
 import { addRecurringInterval, calcNextReset, fmt, normalizeIncomeAllocations } from '../utils';
+import { CardTitle, IconButton } from '../components/ui';
 
 const FREQ_LABEL = {
   weekly: 'Weekly',
@@ -130,20 +131,20 @@ export default function Calendar({
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
         <div className="mobile-row-stack" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <CalendarDays size={18} color="var(--accent-blue)" />
+            <CalendarDays size={18} color="var(--accent-blue)" aria-hidden="true" />
             <div>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>Financial Calendar</div>
+              <CardTitle as="h2" style={{ fontSize: 16 }}>Financial Calendar</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>Paydays, resets, and subscriptions</div>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button className="btn-icon" onClick={() => setMonth(current => subMonths(current, 1))} title="Previous month">
+            <IconButton onClick={() => setMonth(current => subMonths(current, 1))} label="Previous month">
               <ChevronLeft size={15} />
-            </button>
-            <div style={{ minWidth: 130, textAlign: 'center', fontSize: 14, fontWeight: 700 }}>{format(month, 'MMMM yyyy')}</div>
-            <button className="btn-icon" onClick={() => setMonth(current => addMonths(current, 1))} title="Next month">
+            </IconButton>
+            <div aria-live="polite" style={{ minWidth: 130, textAlign: 'center', fontSize: 14, fontWeight: 700 }}>{format(month, 'MMMM yyyy')}</div>
+            <IconButton onClick={() => setMonth(current => addMonths(current, 1))} label="Next month">
               <ChevronRight size={15} />
-            </button>
+            </IconButton>
           </div>
         </div>
 
@@ -179,7 +180,7 @@ export default function Calendar({
 
       <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
         <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Upcoming</div>
+          <CardTitle as="h2" style={{ marginBottom: 12 }}>Upcoming</CardTitle>
           {upcoming.length === 0 ? (
             <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Nothing scheduled in this calendar view.</div>
           ) : (
@@ -204,7 +205,7 @@ export default function Calendar({
                       {event.date >= today ? ` · ${differenceInDays(event.date, today)}d` : ''}
                     </div>
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: event.type === 'income' ? 'var(--accent-mint)' : 'var(--accent-warm)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: event.type === 'income' ? 'var(--accent-mint)' : 'var(--accent-warm)' }}>
                     {event.type === 'income' ? '+' : '-'}{fmt(event.amount)}
                   </div>
                 </div>
@@ -215,7 +216,7 @@ export default function Calendar({
 
         <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
           <div className="mobile-row-stack" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>Subscriptions</div>
+            <CardTitle as="h2">Subscriptions</CardTitle>
             <button className="btn-primary mobile-full" onClick={onAddSubscription}
               disabled={categories.length === 0}
               title={categories.length === 0 ? 'Add categories before creating subscriptions' : 'Add subscription'}
@@ -252,22 +253,22 @@ export default function Calendar({
                           {subscription.active === false ? ' · Paused' : ` · next ${format(new Date(subscription.nextDueAt), 'd MMM')}`}
                         </div>
                       </div>
-                      <div className="mobile-center-left" style={{ fontSize: 13, fontWeight: 800, color: 'var(--accent-warm)', textAlign: 'right' }}>-{fmt(subscription.amount || 0)}</div>
+                      <div className="mobile-center-left" style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent-warm)', textAlign: 'right' }}>-{fmt(subscription.amount || 0)}</div>
                     </div>
                     <div className="mobile-actions" style={{ display: 'flex', gap: 7, justifyContent: 'flex-end', marginTop: 8, flexWrap: 'wrap' }}>
-                      <button className="btn-icon" onClick={() => onToggleSubscription(subscription)}
-                        title={subscription.active === false ? 'Resume subscription' : 'Pause subscription'}
-                        style={{ width: 28, height: 28, opacity: 0.72 }}>
+                      <IconButton onClick={() => onToggleSubscription(subscription)}
+                        label={`${subscription.active === false ? 'Resume' : 'Pause'} ${subscription.name}`}
+                        size={28} style={{ opacity: 0.72 }}>
                         {subscription.active === false ? <Play size={12} /> : <Pause size={12} />}
-                      </button>
-                      <button className="btn-icon" onClick={() => onEditSubscription(subscription)}
-                        title="Edit subscription" style={{ width: 28, height: 28, opacity: 0.72 }}>
+                      </IconButton>
+                      <IconButton onClick={() => onEditSubscription(subscription)}
+                        label={`Edit ${subscription.name}`} size={28} style={{ opacity: 0.72 }}>
                         <Pencil size={12} />
-                      </button>
-                      <button className="btn-icon" onClick={() => onDeleteSubscription(subscription)}
-                        title="Delete subscription" style={{ width: 28, height: 28, opacity: 0.58 }}>
+                      </IconButton>
+                      <IconButton onClick={() => onDeleteSubscription(subscription)}
+                        label={`Delete ${subscription.name}`} size={28} style={{ opacity: 0.58 }}>
                         <Trash2 size={12} />
-                      </button>
+                      </IconButton>
                     </div>
                   </div>
                 );

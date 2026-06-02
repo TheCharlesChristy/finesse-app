@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Pencil, Trash2, Check, X } from 'lucide-react';
 import { fmt } from '../utils';
+import { CardTitle, IconButton } from '../components/ui';
 
 export default function Variables({ variables, onAddVariable, onUpdateVariable, onDeleteVariable }) {
   const [newName, setNewName] = useState('');
@@ -37,7 +38,7 @@ export default function Variables({ variables, onAddVariable, onUpdateVariable, 
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Intro */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>Variables</div>
+        <CardTitle as="h2" style={{ marginBottom: 10 }}>Variables</CardTitle>
         <div style={{ color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.7 }}>
           Define named values you can reference in category allowance formulas using{' '}
           <span style={codeStyle}>$varName</span>.{' '}
@@ -60,16 +61,16 @@ export default function Variables({ variables, onAddVariable, onUpdateVariable, 
             {variables.map(v => (
               editingId === v.id ? (
                 <div key={v.id} className="mobile-row-stack" style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 0' }}>
-                  <input className="glass-input" value={editName}
+                  <input className="glass-input" value={editName} aria-label="Variable name"
                     onChange={e => setEditName(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
                     style={{ flex: 2 }}
                     onKeyDown={e => e.key === 'Enter' && commitEdit()} />
-                  <input className="glass-input" type="number" step="0.01" value={editValue}
+                  <input className="glass-input" type="number" step="0.01" value={editValue} aria-label="Variable value"
                     onChange={e => setEditValue(e.target.value)}
                     style={{ flex: 1 }}
                     onKeyDown={e => e.key === 'Enter' && commitEdit()} />
-                  <button className="btn-icon" onClick={commitEdit} title="Save"><Check size={13} /></button>
-                  <button className="btn-icon" onClick={() => setEditingId(null)} title="Cancel"><X size={13} /></button>
+                  <IconButton onClick={commitEdit} label="Save variable"><Check size={13} /></IconButton>
+                  <IconButton onClick={() => setEditingId(null)} label="Cancel editing"><X size={13} /></IconButton>
                 </div>
               ) : (
                 <div key={v.id} className="mobile-list-row" style={{
@@ -80,14 +81,14 @@ export default function Variables({ variables, onAddVariable, onUpdateVariable, 
                   <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)' }}>
                     {fmt(v.value)}
                   </span>
-                  <button className="btn-icon" onClick={() => startEdit(v)}
-                    style={{ width: 28, height: 28, opacity: 0.6 }} title="Edit">
+                  <IconButton onClick={() => startEdit(v)}
+                    size={28} style={{ opacity: 0.6 }} label={`Edit $${v.name}`}>
                     <Pencil size={12} />
-                  </button>
-                  <button className="btn-icon" onClick={() => onDeleteVariable(v.id)}
-                    style={{ width: 28, height: 28, opacity: 0.5 }} title="Delete">
+                  </IconButton>
+                  <IconButton onClick={() => onDeleteVariable(v.id)}
+                    size={28} style={{ opacity: 0.5 }} label={`Delete $${v.name}`}>
                     <Trash2 size={13} />
-                  </button>
+                  </IconButton>
                 </div>
               )
             ))}
@@ -101,15 +102,15 @@ export default function Variables({ variables, onAddVariable, onUpdateVariable, 
           </div>
           <div className="mobile-row-stack" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <div style={{ flex: '2 1 160px' }}>
-              <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Name</label>
-              <input className="glass-input" placeholder="e.g. salary"
+              <label htmlFor="new-variable-name" style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Name</label>
+              <input id="new-variable-name" className="glass-input" placeholder="e.g. salary"
                 value={newName}
                 onChange={e => setNewName(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
                 onKeyDown={e => e.key === 'Enter' && handleAdd()} />
             </div>
             <div style={{ flex: '1 1 120px' }}>
-              <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Value (£)</label>
-              <input className="glass-input" type="number" step="0.01" placeholder="e.g. 2500"
+              <label htmlFor="new-variable-value" style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Value (£)</label>
+              <input id="new-variable-value" className="glass-input" type="number" step="0.01" placeholder="e.g. 2500"
                 value={newValue}
                 onChange={e => setNewValue(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleAdd()} />

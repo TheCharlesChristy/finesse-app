@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { AlertCircle, Zap, Clock, Pencil, Trash2, Gift, CreditCard } from 'lucide-react';
+import { AlertCircle, Zap, Clock, Pencil, Trash2, Gift, CreditCard, Sparkles } from 'lucide-react';
 import {
   fmt,
   calcNextReset,
@@ -9,6 +9,7 @@ import {
   normalizeIncomeAllocations,
 } from '../utils';
 import { format } from 'date-fns';
+import { CardTitle, IconButton } from '../components/ui';
 
 const FREQ_LABEL = {
   weekly: 'Weekly',
@@ -64,8 +65,41 @@ export default function Dashboard({
   const spendPct   = totalAllowances > 0 ? Math.min(100, (totalSpent / totalAllowances) * 100) : 0;
   const spendColor = spendPct > 90 ? 'var(--danger)' : spendPct > 70 ? 'var(--warn)' : 'var(--good)';
 
+  const isNewUser = incomes.length === 0 && categories.length === 0 && transactions.length === 0;
+
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+      {/* ── First-run onboarding ── */}
+      {isNewUser && (
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px', borderColor: 'rgba(79,255,176,0.28)', background: 'rgba(79,255,176,0.05)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+            <Sparkles size={18} color="var(--accent-mint)" aria-hidden="true" />
+            <CardTitle as="h2">Welcome to Finesse</CardTitle>
+          </div>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 16px', lineHeight: 1.6 }}>
+            Set up your budget in three quick steps. Start by adding the income you want to budget from.
+          </p>
+          <ol style={{ margin: '0 0 18px', paddingLeft: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {[
+              ['1', 'Add an income source', 'Tell Finesse what you earn and how often.'],
+              ['2', 'Create budget categories', 'Split your income into spending allowances.'],
+              ['3', 'Log expenses', 'Track spending and see what is left in real time.'],
+            ].map(([n, title, desc]) => (
+              <li key={n} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                <span style={{ flexShrink: 0, width: 24, height: 24, borderRadius: '50%', background: 'rgba(79,255,176,0.15)', color: 'var(--accent-mint)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700 }}>{n}</span>
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>{title}</span>
+                  <span style={{ display: 'block', fontSize: 12, color: 'var(--text-muted)', marginTop: 1 }}>{desc}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
+          <button className="btn-primary mobile-full" onClick={onAddIncome}>
+            Add your first income
+          </button>
+        </div>
+      )}
 
       {/* ── Budget Summary ── */}
       <div className="glass dashboard-summary-card">
@@ -134,7 +168,7 @@ export default function Dashboard({
       {/* ── Income Sources ── */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
         <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12 }}>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>Income Sources</div>
+          <CardTitle as="h2">Income Sources</CardTitle>
           <div className="mobile-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             <button className="btn-secondary" onClick={onAddOneOffIncome}
               style={{ padding: '7px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -194,14 +228,14 @@ export default function Dashboard({
                       </button>
                     </div>
                     <div className="dashboard-income-icon-actions">
-                      <button className="btn-icon" onClick={() => onEditIncome(income)} title="Edit income"
-                        style={{ width: 28, height: 28, opacity: 0.65 }}>
+                      <IconButton onClick={() => onEditIncome(income)} label={`Edit ${income.name}`}
+                        size={28} style={{ opacity: 0.65 }}>
                         <Pencil size={12} />
-                      </button>
-                      <button className="btn-icon" onClick={() => onDeleteIncome(income)} title="Delete income"
-                        style={{ width: 28, height: 28, opacity: 0.5 }}>
+                      </IconButton>
+                      <IconButton onClick={() => onDeleteIncome(income)} label={`Delete ${income.name}`}
+                        size={28} style={{ opacity: 0.5 }}>
                         <Trash2 size={12} />
-                      </button>
+                      </IconButton>
                     </div>
                   </div>
                 </div>
@@ -221,7 +255,7 @@ export default function Dashboard({
       {/* ── Category Breakdown ── */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
         <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12 }}>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>Category Breakdown</div>
+          <CardTitle as="h2">Category Breakdown</CardTitle>
           <div className="mobile-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button className="btn-secondary" onClick={onAddCategory} disabled={incomes.length === 0}
               title={incomes.length === 0 ? 'Add an income before creating categories' : 'Add category'}
@@ -321,14 +355,12 @@ export default function Dashboard({
                           {left < 0 ? '-' : ''}{fmt(Math.abs(left))} left
                         </span>
                       </div>
-                      <button className="btn-icon" onClick={() => onEditCategory(cat)} title="Edit category" style={{ width: 28, height: 28, opacity: 0.6 }}>
+                      <IconButton onClick={() => onEditCategory(cat)} label={`Edit ${cat.name}`} size={28} style={{ opacity: 0.6 }}>
                         <Pencil size={12} />
-                      </button>
-                      <button className="btn-icon" onClick={() => {
-                        if (window.confirm(`Delete "${cat.name}" and all its transactions?`)) onDeleteCategory(cat.id);
-                      }} title="Delete category" style={{ width: 28, height: 28, opacity: 0.5 }}>
+                      </IconButton>
+                      <IconButton onClick={() => onDeleteCategory(cat.id)} label={`Delete ${cat.name}`} size={28} style={{ opacity: 0.5 }}>
                         <Trash2 size={12} />
-                      </button>
+                      </IconButton>
                     </div>
                   </div>
                   <div className="progress-track">
@@ -351,7 +383,7 @@ export default function Dashboard({
       {/* ── Recent Transactions ── */}
       {recentTxs.length > 0 && (
         <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
-          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 14 }}>Recent Transactions</div>
+          <CardTitle as="h2" style={{ marginBottom: 14 }}>Recent Transactions</CardTitle>
           <div style={{ maxHeight: 400, overflowY: 'auto', paddingRight: 4, display: 'flex', flexDirection: 'column', gap: 10 }}>
             {recentTxs.map(tx => (
               <div key={tx.id} className="mobile-list-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: 10 }}>

@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { Pencil, Trash2, Check, Clock, ChevronDown, ChevronRight, ExternalLink, Plus, ShoppingBag, X } from 'lucide-react';
 import { fmt, wishlistAffordability } from '../utils';
+import { CardTitle, IconButton } from '../components/ui';
 
 const LIST_COLORS = ['#4fffb0','#5db8ff','#c084fc','#fbbf70','#ff6b8a','#67e8f9','#a78bfa','#fb923c'];
 
@@ -71,12 +72,12 @@ function ItemRow({ item, expenseCategories, settings, onEdit, onDelete }) {
       </div>
       <span className="font-display" style={{ fontSize: 15, letterSpacing: '-0.02em', flexShrink: 0 }}>{fmt(item.price || 0)}</span>
       <AffordabilityBadge aff={aff} />
-      <button className="btn-icon" onClick={() => onEdit(item)} title="Edit item" style={{ width: 27, height: 27, opacity: 0.58, flexShrink: 0 }}>
+      <IconButton onClick={() => onEdit(item)} label={`Edit ${item.name}`} size={27} style={{ opacity: 0.58, flexShrink: 0 }}>
         <Pencil size={12} />
-      </button>
-      <button className="btn-icon" onClick={() => onDelete(item.id)} title="Delete item" style={{ width: 27, height: 27, opacity: 0.4, flexShrink: 0 }}>
+      </IconButton>
+      <IconButton onClick={() => onDelete(item.id)} label={`Delete ${item.name}`} size={27} style={{ opacity: 0.4, flexShrink: 0 }}>
         <Trash2 size={12} />
-      </button>
+      </IconButton>
     </div>
   );
 }
@@ -136,16 +137,14 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onEdi
         style={{ padding: '3px 8px', fontSize: 11, borderRadius: 7, display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
         <Plus size={9} /> List
       </button>
-      <button onClick={e => { e.stopPropagation(); onEditList(node); }} className="btn-icon"
-        title="Edit list"
-        style={{ width: 26, height: 26, opacity: 0.58, flexShrink: 0 }}>
+      <IconButton onClick={e => { e.stopPropagation(); onEditList(node); }}
+        label={`Edit list ${node.name}`} size={26} style={{ opacity: 0.58, flexShrink: 0 }}>
         <Pencil size={11} />
-      </button>
-      <button onClick={e => { e.stopPropagation(); onDeleteList(node.id); }} className="btn-icon"
-        title="Delete list"
-        style={{ width: 26, height: 26, opacity: 0.38, flexShrink: 0 }}>
+      </IconButton>
+      <IconButton onClick={e => { e.stopPropagation(); onDeleteList(node.id); }}
+        label={`Delete list ${node.name}`} size={26} style={{ opacity: 0.38, flexShrink: 0 }}>
         <Trash2 size={11} />
-      </button>
+      </IconButton>
     </div>
   );
 
@@ -165,15 +164,15 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onEdi
       {showSubInput && (
         <div className="mobile-row-stack" style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '6px 0', paddingLeft: depth > 0 ? 0 : 2 }}>
           <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--text-muted)', flexShrink: 0 }} />
-          <input className="glass-input" placeholder="New sub-list name…" value={subName} autoFocus
+          <input className="glass-input" placeholder="New sub-list name…" value={subName} autoFocus aria-label="New sub-list name"
             onChange={e => setSubName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleCreateSub(); if (e.key === 'Escape') { setShowSubInput(false); setSubName(''); } }}
             style={{ flex: 1 }} />
           <button className="btn-primary mobile-full" onClick={handleCreateSub} disabled={!subName.trim()}
             style={{ flexShrink: 0, padding: '6px 12px', fontSize: 11 }}>Create</button>
-          <button className="btn-icon" onClick={() => { setShowSubInput(false); setSubName(''); }} title="Cancel list creation" style={{ width: 28, height: 28 }}>
+          <IconButton onClick={() => { setShowSubInput(false); setSubName(''); }} label="Cancel sub-list creation" size={28}>
             <X size={12} />
-          </button>
+          </IconButton>
         </div>
       )}
 
@@ -214,7 +213,7 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onEdi
   );
 }
 
-export default function Wishlist({ items, wishlistCategories, expenseCategories, settings, onAddItem, onEditItem, onDeleteItem, onAddWishlistCat, onEditWishlistCat, onDeleteWishlistCat, onAddItemToFolder }) {
+export default function Wishlist({ items, wishlistCategories, expenseCategories, settings, onAddItem, onEditItem, onDeleteItem, onAddWishlistCat, onEditWishlistCat, onDeleteWishlistCat, onAddItemToFolder, showConfirm }) {
   const [expanded, setExpanded] = useState(() => new Set([...wishlistCategories.map(c => c.id), 'uncategorized']));
   const [showNewList, setShowNewList] = useState(false);
   const [newListName, setNewListName] = useState('');
@@ -240,16 +239,20 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
     setShowNewList(false);
   };
 
-  const handleDeleteList = (id) => {
+  const handleDeleteList = async (id) => {
     const list = wishlistCategories.find(c => c.id === id);
     const hasChildren = wishlistCategories.some(c => c.parentId === id);
     const hasItems = items.some(i => i.wishlistCategoryId === id);
-    const msg = [
-      `Delete list "${list?.name}"?`,
+    const notes = [
       hasChildren && 'Sub-lists will be promoted up one level.',
       hasItems && 'Items in this list will become uncategorised.',
-    ].filter(Boolean).join('\n');
-    if (window.confirm(msg)) onDeleteWishlistCat(id);
+    ].filter(Boolean).join(' ');
+    const ok = await showConfirm(notes || `This cannot be undone.`, {
+      title: `Delete "${list?.name}"?`,
+      confirmText: 'Delete',
+      danger: true,
+    });
+    if (ok) onDeleteWishlistCat(id);
   };
 
   return (
@@ -258,7 +261,7 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
       {/* ── Header ── */}
       <div className="glass mobile-card-pad mobile-row-stack" style={{ borderRadius: 18, padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>Wishlist</div>
+          <CardTitle as="h2">Wishlist</CardTitle>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
             {canAffordTotal > 0
               ? <span style={{ color: 'var(--good)' }}>{canAffordTotal} item{canAffordTotal !== 1 ? 's' : ''} you can afford now</span>
@@ -281,7 +284,7 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
       {showNewList && (
         <div className="glass mobile-card-pad mobile-row-stack" style={{ borderRadius: 14, padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
           <span style={{ width: 9, height: 9, borderRadius: '50%', background: LIST_COLORS[wishlistCategories.length % LIST_COLORS.length], flexShrink: 0 }} />
-          <input className="glass-input" placeholder="List name…" value={newListName} autoFocus
+          <input className="glass-input" placeholder="List name…" value={newListName} autoFocus aria-label="New list name"
             onChange={e => setNewListName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleCreateList(); if (e.key === 'Escape') setShowNewList(false); }}
             style={{ flex: 1 }} />

@@ -3,7 +3,9 @@ import { Plus, Wand2, X } from 'lucide-react';
 import { format } from 'date-fns';
 import CategorySelect from './CategorySelect';
 import DateInput from './DateInput';
+import { Modal, IconButton, Field } from './ui';
 import {
+  dateOnlyToISO,
   evaluateFormula,
   formatPacedAllowancePeriod,
   fmt,
@@ -25,18 +27,20 @@ const FREQ_OPTIONS = [
 function FrequencyFields({ resetFrequency, setResetFrequency, payDayOfMonth, setPayDayOfMonth }) {
   return (
     <>
-      <div>
-        <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Reset Frequency</label>
-        <select className="glass-input" value={resetFrequency} onChange={e => setResetFrequency(e.target.value)}>
-          {FREQ_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-      </div>
+      <Field label="Reset Frequency">
+        {id => (
+          <select id={id} className="glass-input" value={resetFrequency} onChange={e => setResetFrequency(e.target.value)}>
+            {FREQ_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        )}
+      </Field>
       {resetFrequency === 'monthly' && (
-        <div>
-          <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Pay Day of Month (1–31)</label>
-          <input className="glass-input" type="number" min="1" max="31" placeholder="e.g. 25"
-            value={payDayOfMonth} onChange={e => setPayDayOfMonth(e.target.value)} />
-        </div>
+        <Field label="Pay Day of Month (1–31)">
+          {id => (
+            <input id={id} className="glass-input" type="number" min="1" max="31" placeholder="e.g. 25"
+              value={payDayOfMonth} onChange={e => setPayDayOfMonth(e.target.value)} />
+          )}
+        </Field>
       )}
     </>
   );
@@ -270,6 +274,7 @@ function IncomeAllocationEditor({
                           max="100"
                           step="0.01"
                           value={percent}
+                          aria-label={`${incomeName} funding percentage`}
                           onChange={e => setPercent(allocation.incomeId, e.target.value)}
                           style={{ padding: '8px 24px 8px 10px', fontSize: 13 }}
                         />
@@ -278,11 +283,10 @@ function IncomeAllocationEditor({
                       <div className="mobile-center-left" style={{ fontSize: 12, textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>
                         {fmt(thisAmount)}
                       </div>
-                      <button className="btn-icon" onClick={() => removeSource(allocation.incomeId)}
-                        title="Remove source"
-                        style={{ width: 28, height: 28 }}>
+                      <IconButton onClick={() => removeSource(allocation.incomeId)}
+                        label={`Remove ${incomeName} as a funding source`} size={28}>
                         <X size={12} />
-                      </button>
+                      </IconButton>
                     </div>
                     <div className="progress-track" style={{ height: 4, marginTop: 8 }}>
                       <div className="progress-fill" style={{ width: `${usedPct}%`, background: over > 0 ? 'var(--danger)' : 'var(--accent-mint)' }} />
@@ -296,6 +300,7 @@ function IncomeAllocationEditor({
           {availableIncomeOptions.length > 0 && (
             <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center' }}>
               <select className="glass-input" value={sourceToAdd} onChange={e => setSourceToAdd(e.target.value)}
+                aria-label="Funding source to add"
                 style={{ padding: '8px 10px', fontSize: 13 }}>
                 {availableIncomeOptions.map(income => {
                   const available = roundMoney((Number(income.amount) || 0) - (usedByIncome[String(income.id)] || 0));
@@ -457,13 +462,16 @@ export function AddTransactionModal({ categories, onAdd, onClose, transaction = 
   const [date, setDate] = useState(format(transaction?.date ? new Date(transaction.date) : new Date(), 'yyyy-MM-dd'));
   const isEditing = Boolean(transaction);
 
+  const amountValue = parseFloat(amount);
+  const canSubmit = Boolean(catId) && amountValue > 0;
+
   const handleSubmit = () => {
-    if (!catId || !amount) return;
+    if (!canSubmit) return;
     const data = {
       categoryId: Number(catId),
-      amount: parseFloat(amount),
+      amount: amountValue,
       note: note.trim(),
-      date: new Date(date).toISOString(),
+      date: dateOnlyToISO(date),
     };
     if (isEditing && onSave) {
       onSave(transaction.id, data);
@@ -474,39 +482,33 @@ export function AddTransactionModal({ categories, onAdd, onClose, transaction = 
   };
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-          <div className="font-display" style={{ fontSize: 22 }}>{isEditing ? 'Edit Expense' : 'Log Expense'}</div>
-          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Category</label>
-            <CategorySelect categories={categories} value={String(catId)} onChange={setCatId} showAmounts />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Amount (£)</label>
-            <input className="glass-input" type="number" step="0.01" placeholder="0.00" value={amount}
+    <Modal title={isEditing ? 'Edit Expense' : 'Log Expense'} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Field label="Category">
+          <CategorySelect categories={categories} value={String(catId)} onChange={setCatId} showAmounts aria-label="Category" />
+        </Field>
+        <Field label="Amount (£)">
+          {id => (
+            <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
               onChange={e => setAmount(e.target.value)} autoFocus />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Note (optional)</label>
-            <input className="glass-input" placeholder="What was this for?" value={note}
+          )}
+        </Field>
+        <Field label="Note (optional)">
+          {id => (
+            <input id={id} className="glass-input" placeholder="What was this for?" value={note}
               onChange={e => setNote(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
-          </div>
-          <DateInput value={date} onChange={setDate} />
-          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-            <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-              disabled={!catId || !amount}>
-              {isEditing ? 'Save Changes' : 'Add Expense'}
-            </button>
-          </div>
+          )}
+        </Field>
+        <DateInput value={date} onChange={setDate} />
+        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!canSubmit}>
+            {isEditing ? 'Save Changes' : 'Add Expense'}
+          </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -614,30 +616,18 @@ export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCatego
       transactions: validRows.map(row => ({
         amount: row.amount,
         note: row.note,
-        date: new Date(row.date).toISOString(),
+        date: dateOnlyToISO(row.date),
       })),
     });
     onClose();
   };
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box" style={{ maxWidth: 760 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-          <div>
-            <div className="font-display" style={{ fontSize: 22 }}>Bulk Add Expenses</div>
-            <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 3 }}>
-              Add several expenses to one category in one pass.
-            </div>
-          </div>
-          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
-        </div>
-
+    <Modal title="Bulk Add Expenses" subtitle="Add several expenses to one category in one pass." onClose={onClose} maxWidth={760}>
         <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) minmax(170px, 220px)', gap: 12, marginBottom: 16 }}>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Category</label>
-            <CategorySelect categories={categories} value={String(catId)} onChange={setCatId} showAmounts />
-          </div>
+          <Field label="Category">
+            <CategorySelect categories={categories} value={String(catId)} onChange={setCatId} showAmounts aria-label="Category" />
+          </Field>
           <DateInput value={defaultDate} onChange={applyDefaultDate} label="Default date" />
         </div>
 
@@ -675,21 +665,23 @@ export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCatego
           {rows.map((row, index) => (
             <div key={index} className="bulk-expense-row">
               <input className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={row.amount}
+                aria-label={`Row ${index + 1} amount`}
                 onChange={e => updateRow(index, { amount: e.target.value })}
                 onKeyDown={e => e.key === 'Enter' && addRows(1)}
                 style={{ padding: '8px 10px' }}
                 autoFocus={index === 0} />
               <input className="glass-input bulk-expense-note" placeholder="Optional note" value={row.note}
+                aria-label={`Row ${index + 1} note`}
                 onChange={e => updateRow(index, { note: e.target.value })}
                 onKeyDown={e => e.key === 'Enter' && addRows(1)}
                 style={{ padding: '8px 10px' }} />
               <div className="bulk-expense-date">
                 <DateInput value={row.date} onChange={date => updateRow(index, { date })} label={null} />
               </div>
-              <button className="btn-icon" onClick={() => removeRow(index)} disabled={rows.length <= 1}
-                title="Remove row" style={{ width: 34, height: 34 }}>
+              <IconButton onClick={() => removeRow(index)} disabled={rows.length <= 1}
+                label={`Remove row ${index + 1}`} size={34}>
                 <X size={13} />
-              </button>
+              </IconButton>
             </div>
           ))}
         </div>
@@ -702,7 +694,7 @@ export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCatego
           <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
             <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{validRows.length}</span> expense{validRows.length === 1 ? '' : 's'}
             {' · '}
-            <span style={{ color: 'var(--accent-warm)', fontWeight: 800 }}>{fmt(totalAmount)}</span>
+            <span style={{ color: 'var(--accent-warm)', fontWeight: 700 }}>{fmt(totalAmount)}</span>
           </div>
         </div>
 
@@ -713,8 +705,7 @@ export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCatego
             Add {validRows.length || ''} Expense{validRows.length === 1 ? '' : 's'}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -764,27 +755,24 @@ export function AddWishlistItemModal({ expenseCategories, wishlistCategories, on
   };
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-          <div className="font-display" style={{ fontSize: 22 }}>{isEditing ? 'Edit Wishlist Item' : 'Add to Wishlist'}</div>
-          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Item Name</label>
-            <input className="glass-input" placeholder="e.g. New trainers" value={name}
+    <Modal title={isEditing ? 'Edit Wishlist Item' : 'Add to Wishlist'} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Field label="Item Name">
+          {id => (
+            <input id={id} className="glass-input" placeholder="e.g. New trainers" value={name}
               onChange={e => setName(e.target.value)} autoFocus />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Price (£)</label>
-            <input className="glass-input" type="number" step="0.01" placeholder="0.00" value={price}
+          )}
+        </Field>
+        <Field label="Price (£)">
+          {id => (
+            <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={price}
               onChange={e => setPrice(e.target.value)} />
-          </div>
-          {wishlistCategories.length > 0 && (
-            <div>
-              <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Add to List</label>
-              <select className="glass-input" value={wishCatId} onChange={e => setWishCatId(e.target.value)}>
+          )}
+        </Field>
+        {wishlistCategories.length > 0 && (
+          <Field label="Add to List">
+            {id => (
+              <select id={id} className="glass-input" value={wishCatId} onChange={e => setWishCatId(e.target.value)}>
                 <option value="">No list (uncategorised)</option>
                 {flatLists.map(l => (
                   <option key={l.id} value={l.id}>
@@ -792,55 +780,56 @@ export function AddWishlistItemModal({ expenseCategories, wishlistCategories, on
                   </option>
                 ))}
               </select>
-            </div>
-          )}
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 8 }}>
-              Budget Categories for Affordability
-            </label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-              {expenseCategories.map(cat => {
-                const selected = selectedExpCats.includes(cat.id);
-                return (
-                  <button key={cat.id} onClick={() => toggleExpCat(cat.id)} style={{
-                    padding: '5px 12px', borderRadius: 20, fontSize: 12, cursor: 'pointer',
-                    background: selected ? cat.color + '30' : 'rgba(255,255,255,0.06)',
-                    border: `1px solid ${selected ? cat.color + '60' : 'rgba(255,255,255,0.1)'}`,
-                    color: selected ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    transition: 'all 0.15s',
-                    display: 'flex', alignItems: 'center', gap: 5
-                  }}>
-                    <div style={{ width: 6, height: 6, borderRadius: '50%', background: cat.color || 'var(--accent-blue)' }} />
-                    {cat.name}
-                  </button>
-                );
-              })}
-              {expenseCategories.length === 0 && (
-                <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Add expense categories first.</div>
-              )}
-            </div>
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Link (optional)</label>
-            <input className="glass-input" type="url" placeholder="https://…" value={link}
-              onChange={e => setLink(e.target.value)} />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Note (optional)</label>
-            <input className="glass-input" placeholder="Any details…" value={note}
-              onChange={e => setNote(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
-          </div>
-          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-            <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-              disabled={!name.trim() || !price}>
-              {isEditing ? 'Save Changes' : 'Add to Wishlist'}
-            </button>
+            )}
+          </Field>
+        )}
+        <div role="group" aria-label="Budget categories for affordability">
+          <div className="field-label" style={{ marginBottom: 8 }}>Budget Categories for Affordability</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+            {expenseCategories.map(cat => {
+              const selected = selectedExpCats.includes(cat.id);
+              return (
+                <button key={cat.id} type="button" className="toggle-chip" onClick={() => toggleExpCat(cat.id)}
+                  aria-pressed={selected} style={{
+                  padding: '5px 12px', borderRadius: 20, fontSize: 12, cursor: 'pointer',
+                  background: selected ? cat.color + '30' : 'rgba(255,255,255,0.06)',
+                  border: `1px solid ${selected ? cat.color + '60' : 'rgba(255,255,255,0.1)'}`,
+                  color: selected ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  transition: 'all 0.15s',
+                  display: 'flex', alignItems: 'center', gap: 5
+                }}>
+                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: cat.color || 'var(--accent-blue)' }} />
+                  {cat.name}
+                </button>
+              );
+            })}
+            {expenseCategories.length === 0 && (
+              <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Add expense categories first.</div>
+            )}
           </div>
         </div>
+        <Field label="Link (optional)">
+          {id => (
+            <input id={id} className="glass-input" type="url" placeholder="https://…" value={link}
+              onChange={e => setLink(e.target.value)} />
+          )}
+        </Field>
+        <Field label="Note (optional)">
+          {id => (
+            <input id={id} className="glass-input" placeholder="Any details…" value={note}
+              onChange={e => setNote(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
+          )}
+        </Field>
+        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
+            disabled={!name.trim() || !price}>
+            {isEditing ? 'Save Changes' : 'Add to Wishlist'}
+          </button>
+        </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -874,20 +863,14 @@ export function EditWishlistListModal({ list, wishlistCategories, onSave, onClos
   };
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-          <div className="font-display" style={{ fontSize: 22 }}>Edit List</div>
-          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Name</label>
-            <input className="glass-input" value={name} onChange={e => setName(e.target.value)} autoFocus />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Parent List</label>
-            <select className="glass-input" value={parentId} onChange={e => setParentId(e.target.value)}>
+    <Modal title="Edit List" onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Field label="Name">
+          {id => <input id={id} className="glass-input" value={name} onChange={e => setName(e.target.value)} autoFocus />}
+        </Field>
+        <Field label="Parent List">
+          {id => (
+            <select id={id} className="glass-input" value={parentId} onChange={e => setParentId(e.target.value)}>
               <option value="">Top level</option>
               {parentOptions.map(cat => (
                 <option key={cat.id} value={cat.id}>
@@ -895,25 +878,31 @@ export function EditWishlistListModal({ list, wishlistCategories, onSave, onClos
                 </option>
               ))}
             </select>
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Colour</label>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {PALETTE.map(c => (
-                <button key={c} onClick={() => setColor(c)} title={c} style={{
-                  width: 28, height: 28, borderRadius: '50%', background: c, cursor: 'pointer',
-                  border: color === c ? '3px solid white' : '3px solid transparent', outline: 'none',
-                }} />
-              ))}
-            </div>
-          </div>
-          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-            <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!name.trim()}>
-              Save Changes
-            </button>
-          </div>
+          )}
+        </Field>
+        <ColourPicker color={color} onChange={setColor} />
+        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!name.trim()}>
+            Save Changes
+          </button>
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Shared accessible colour picker
+function ColourPicker({ color, onChange }) {
+  return (
+    <div role="group" aria-label="Colour">
+      <div className="field-label">Colour</div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {PALETTE.map(c => (
+          <button key={c} type="button" className="color-swatch" onClick={() => onChange(c)}
+            aria-label={`Colour ${c}`} aria-pressed={color === c} title={c}
+            style={{ background: c }} />
+        ))}
       </div>
     </div>
   );
@@ -990,20 +979,16 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
   };
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-          <div className="font-display" style={{ fontSize: 22 }}>Add Category</div>
-          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
-        </div>
+    <Modal title="Add Category" onClose={onClose}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <Field label="Name">
+            {id => (
+              <input id={id} className="glass-input" placeholder="e.g. Groceries" value={name}
+                onChange={e => setName(e.target.value)} autoFocus />
+            )}
+          </Field>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Name</label>
-            <input className="glass-input" placeholder="e.g. Groceries" value={name}
-              onChange={e => setName(e.target.value)} autoFocus />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Allowance Type</label>
+            <div className="field-label">Allowance Type</div>
             <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
               <button type="button" className={!pacedAllowanceEnabled ? 'btn-primary' : 'btn-secondary'}
                 onClick={() => setPacedAllowanceEnabled(false)} style={{ padding: '8px 10px', fontSize: 12 }}>
@@ -1068,17 +1053,7 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
             categories={categories}
             onAutoAllocate={handleAutoAllocate}
           />
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Colour</label>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {PALETTE.map(c => (
-                <button key={c} onClick={() => setColor(c)} style={{
-                  width: 28, height: 28, borderRadius: '50%', background: c, cursor: 'pointer',
-                  border: color === c ? '3px solid white' : '3px solid transparent', outline: 'none',
-                }} />
-              ))}
-            </div>
-          </div>
+          <ColourPicker color={color} onChange={setColor} />
           <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
@@ -1087,8 +1062,7 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -1170,19 +1144,13 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
   };
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-          <div className="font-display" style={{ fontSize: 22 }}>Edit Category</div>
-          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
-        </div>
+    <Modal title="Edit Category" onClose={onClose}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <Field label="Name">
+            {id => <input id={id} className="glass-input" value={name} onChange={e => setName(e.target.value)} autoFocus />}
+          </Field>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Name</label>
-            <input className="glass-input" value={name} onChange={e => setName(e.target.value)} autoFocus />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Allowance Type</label>
+            <div className="field-label">Allowance Type</div>
             <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
               <button type="button" className={!pacedAllowanceEnabled ? 'btn-primary' : 'btn-secondary'}
                 onClick={() => setPacedAllowanceEnabled(false)} style={{ padding: '8px 10px', fontSize: 12 }}>
@@ -1248,17 +1216,7 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
             excludeCategoryId={category.id}
             onAutoAllocate={handleAutoAllocate}
           />
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Colour</label>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {PALETTE.map(c => (
-                <button key={c} onClick={() => setColor(c)} style={{
-                  width: 28, height: 28, borderRadius: '50%', background: c, cursor: 'pointer',
-                  border: color === c ? '3px solid white' : '3px solid transparent', outline: 'none',
-                }} />
-              ))}
-            </div>
-          </div>
+          <ColourPicker color={color} onChange={setColor} />
           <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
@@ -1267,8 +1225,7 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -1294,7 +1251,7 @@ export function AddSubscriptionModal({ categories = [], onAdd, onClose, subscrip
       name: name.trim(),
       amount: parseFloat(amount),
       categoryId: Number(catId),
-      nextDueAt: new Date(nextDueAt).toISOString(),
+      nextDueAt: dateOnlyToISO(nextDueAt),
       interval: Math.max(1, parseInt(interval) || 1),
       intervalUnit,
       manageUrl: manageUrl.trim(),
@@ -1310,66 +1267,63 @@ export function AddSubscriptionModal({ categories = [], onAdd, onClose, subscrip
   };
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-          <div className="font-display" style={{ fontSize: 22 }}>{isEditing ? 'Edit Subscription' : 'Add Subscription'}</div>
-          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Name</label>
-            <input className="glass-input" placeholder="e.g. Netflix" value={name}
+    <Modal title={isEditing ? 'Edit Subscription' : 'Add Subscription'} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Field label="Name">
+          {id => (
+            <input id={id} className="glass-input" placeholder="e.g. Netflix" value={name}
               onChange={e => setName(e.target.value)} autoFocus />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Category</label>
-            <CategorySelect categories={categories} value={String(catId)} onChange={setCatId} showAmounts />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Amount (£)</label>
-            <input className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
+          )}
+        </Field>
+        <Field label="Category">
+          <CategorySelect categories={categories} value={String(catId)} onChange={setCatId} showAmounts aria-label="Category" />
+        </Field>
+        <Field label="Amount (£)">
+          {id => (
+            <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
               onChange={e => setAmount(e.target.value)} />
+          )}
+        </Field>
+        <DateInput value={nextDueAt} onChange={setNextDueAt} label="Next due date" />
+        <div>
+          <div className="field-label">Repeats</div>
+          <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '96px 1fr', gap: 8 }}>
+            <input className="glass-input" type="number" min="1" step="1" value={interval}
+              aria-label="Repeat interval" onChange={e => setInterval(e.target.value)} />
+            <select className="glass-input" value={intervalUnit} aria-label="Repeat unit" onChange={e => setIntervalUnit(e.target.value)}>
+              <option value="day">Day(s)</option>
+              <option value="week">Week(s)</option>
+              <option value="month">Month(s)</option>
+              <option value="year">Year(s)</option>
+            </select>
           </div>
-          <DateInput value={nextDueAt} onChange={setNextDueAt} label="Next due date" />
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Repeats</label>
-            <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '96px 1fr', gap: 8 }}>
-              <input className="glass-input" type="number" min="1" step="1" value={interval}
-                onChange={e => setInterval(e.target.value)} />
-              <select className="glass-input" value={intervalUnit} onChange={e => setIntervalUnit(e.target.value)}>
-                <option value="day">Day(s)</option>
-                <option value="week">Week(s)</option>
-                <option value="month">Month(s)</option>
-                <option value="year">Year(s)</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Management link</label>
-            <input className="glass-input" type="url" placeholder="Optional, e.g. netflix.com/account" value={manageUrl}
+        </div>
+        <Field label="Management link">
+          {id => (
+            <input id={id} className="glass-input" type="url" placeholder="Optional, e.g. netflix.com/account" value={manageUrl}
               onChange={e => setManageUrl(e.target.value)} />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Note</label>
-            <input className="glass-input" placeholder="Optional" value={note}
+          )}
+        </Field>
+        <Field label="Note">
+          {id => (
+            <input id={id} className="glass-input" placeholder="Optional" value={note}
               onChange={e => setNote(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
-          </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
-            <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} />
-            Active
-          </label>
-          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-            <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-              disabled={!name.trim() || !amount || !catId || !(Number(interval) > 0)}>
-              {isEditing ? 'Save Changes' : 'Add Subscription'}
-            </button>
-          </div>
+          )}
+        </Field>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+          <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} />
+          Active
+        </label>
+        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
+            disabled={!name.trim() || !amount || !catId || !(Number(interval) > 0)}>
+            {isEditing ? 'Save Changes' : 'Add Subscription'}
+          </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -1400,37 +1354,33 @@ export function AddIncomeModal({ onAdd, onClose, income = null, onSave }) {
   };
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-          <div className="font-display" style={{ fontSize: 22 }}>{isEditing ? 'Edit Income' : 'Add Income'}</div>
-          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Name</label>
-            <input className="glass-input" placeholder="e.g. Salary" value={name}
+    <Modal title={isEditing ? 'Edit Income' : 'Add Income'} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Field label="Name">
+          {id => (
+            <input id={id} className="glass-input" placeholder="e.g. Salary" value={name}
               onChange={e => setName(e.target.value)} autoFocus />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Amount (£)</label>
-            <input className="glass-input" type="number" step="0.01" placeholder="0.00" value={amount}
+          )}
+        </Field>
+        <Field label="Amount (£)">
+          {id => (
+            <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
               onChange={e => setAmount(e.target.value)} />
-          </div>
-          <FrequencyFields
-            resetFrequency={resetFrequency} setResetFrequency={setResetFrequency}
-            payDayOfMonth={payDayOfMonth} setPayDayOfMonth={setPayDayOfMonth}
-          />
-          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-            <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-              disabled={!name.trim() || !amount}>
-              {isEditing ? 'Save Changes' : 'Add Income'}
-            </button>
-          </div>
+          )}
+        </Field>
+        <FrequencyFields
+          resetFrequency={resetFrequency} setResetFrequency={setResetFrequency}
+          payDayOfMonth={payDayOfMonth} setPayDayOfMonth={setPayDayOfMonth}
+        />
+        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
+            disabled={!name.trim() || !amount}>
+            {isEditing ? 'Save Changes' : 'Add Income'}
+          </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -1447,50 +1397,47 @@ export function AddOneOffIncomeModal({ onAdd, onClose }) {
     onAdd({
       name: name.trim(),
       amount: parsedAmount,
-      date: new Date(date).toISOString(),
+      date: dateOnlyToISO(date),
       note: note.trim(),
     });
     onClose();
   };
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-          <div className="font-display" style={{ fontSize: 22 }}>One-Off Income</div>
-          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Source</label>
-            <input className="glass-input" placeholder="e.g. Gift or refund" value={name}
+    <Modal title="One-Off Income" onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Field label="Source">
+          {id => (
+            <input id={id} className="glass-input" placeholder="e.g. Gift or refund" value={name}
               onChange={e => setName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()}
               autoFocus />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Amount (£)</label>
-            <input className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
+          )}
+        </Field>
+        <Field label="Amount (£)">
+          {id => (
+            <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
               onChange={e => setAmount(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
-          </div>
-          <DateInput value={date} onChange={setDate} label="Date received" />
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Note</label>
-            <input className="glass-input" placeholder="Optional" value={note}
+          )}
+        </Field>
+        <DateInput value={date} onChange={setDate} label="Date received" />
+        <Field label="Note">
+          {id => (
+            <input id={id} className="glass-input" placeholder="Optional" value={note}
               onChange={e => setNote(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
-          </div>
-          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-            <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-              disabled={!name.trim() || parsedAmount <= 0 || !date}>
-              Add to Account
-            </button>
-          </div>
+          )}
+        </Field>
+        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
+            disabled={!name.trim() || parsedAmount <= 0 || !date}>
+            Add to Account
+          </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -1499,50 +1446,38 @@ export function FastForwardModal({ onConfirm, onClose }) {
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <div className="font-display" style={{ fontSize: 22 }}>Early Pay</div>
-          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
-        </div>
-        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 18, lineHeight: 1.6 }}>
-          Got paid early? Set the actual date you received this income. This credits the active account and updates the next expected pay date.
-        </div>
-        <div style={{ marginBottom: 18 }}>
-          <DateInput value={date} onChange={setDate} label="Pay received date" />
-        </div>
-        <div className="modal-actions" style={{ display: 'flex', gap: 10 }}>
-          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" onClick={() => { onConfirm(new Date(date).toISOString()); onClose(); }} style={{ flex: 2 }}>
-            Mark as Received
-          </button>
-        </div>
+    <Modal title="Early Pay" onClose={onClose}>
+      <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 18, lineHeight: 1.6 }}>
+        Got paid early? Set the actual date you received this income. This credits the active account and updates the next expected pay date.
       </div>
-    </div>
+      <div style={{ marginBottom: 18 }}>
+        <DateInput value={date} onChange={setDate} label="Pay received date" />
+      </div>
+      <div className="modal-actions" style={{ display: 'flex', gap: 10 }}>
+        <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+        <button className="btn-primary" onClick={() => { onConfirm(dateOnlyToISO(date)); onClose(); }} style={{ flex: 2 }}>
+          Mark as Received
+        </button>
+      </div>
+    </Modal>
   );
 }
 
 // ── Import Mode Modal ────────────────────────────────────────────────────────
 export function ImportModeModal({ onConfirm, onClose }) {
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box">
-        <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 12 }}>Import Data</div>
-        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 20, lineHeight: 1.6 }}>
-          How should the imported data be handled?
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <button className="btn-primary" onClick={() => onConfirm('replace')} style={{ textAlign: 'left', padding: '14px 16px' }}>
-            <div style={{ fontWeight: 600, marginBottom: 3 }}>Replace everything</div>
-            <div style={{ fontSize: 12, opacity: 0.7, fontWeight: 400 }}>Clears all current data and replaces with the backup. Best for syncing from another device.</div>
-          </button>
-          <button className="btn-secondary" onClick={() => onConfirm('merge')} style={{ textAlign: 'left', padding: '14px 16px' }}>
-            <div style={{ fontWeight: 600, marginBottom: 3 }}>Merge</div>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>Adds imported items alongside existing data. May create duplicates.</div>
-          </button>
-          <button className="btn-secondary" onClick={onClose}>Cancel</button>
-        </div>
+    <Modal title="Import Data" subtitle="How should the imported data be handled?" onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <button className="btn-primary" onClick={() => onConfirm('replace')} style={{ textAlign: 'left', padding: '14px 16px' }}>
+          <div style={{ fontWeight: 600, marginBottom: 3 }}>Replace everything</div>
+          <div style={{ fontSize: 12, opacity: 0.7, fontWeight: 400 }}>Clears all current data and replaces with the backup. Best for syncing from another device.</div>
+        </button>
+        <button className="btn-secondary" onClick={() => onConfirm('merge')} style={{ textAlign: 'left', padding: '14px 16px' }}>
+          <div style={{ fontWeight: 600, marginBottom: 3 }}>Merge</div>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>Adds imported items alongside existing data. May create duplicates.</div>
+        </button>
+        <button className="btn-secondary" onClick={onClose}>Cancel</button>
       </div>
-    </div>
+    </Modal>
   );
 }

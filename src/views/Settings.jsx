@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Download, Upload, FileText, RefreshCcw, Trash2 } from 'lucide-react';
 import CategorySelect from '../components/CategorySelect';
+import { CardTitle } from '../components/ui';
 
 export default function Settings({
   onExport,
@@ -13,6 +14,9 @@ export default function Settings({
   onResetIncome,
   onSaveSettings,
   onFullReset,
+  showConfirm,
+  showAlert,
+  showPrompt,
 }) {
   const [resetIncomeId, setResetIncomeId] = useState('');
   const [resetStatus, setResetStatus] = useState('');
@@ -32,12 +36,12 @@ export default function Settings({
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       try {
         const data = JSON.parse(ev.target.result);
         onImport(data);
       } catch {
-        alert('Invalid backup file.');
+        await showAlert('The selected file is not a valid Finesse backup.', { title: 'Invalid file' });
       }
     };
     reader.readAsText(file);
@@ -47,7 +51,10 @@ export default function Settings({
   const handleIncomeReset = async () => {
     if (!selectedIncome || !onResetIncome) return;
 
-    if (!window.confirm(`Reset spending counters for categories funded by "${selectedIncome.name}"?`)) return;
+    const ok = await showConfirm(`Reset spending counters for categories funded by "${selectedIncome.name}"?`, {
+      title: 'Reset by Income', confirmText: 'Reset',
+    });
+    if (!ok) return;
 
     const count = await onResetIncome(selectedIncome.id);
     setResetStatus(`${count} categor${count === 1 ? 'y' : 'ies'} reset for ${selectedIncome.name}.`);
@@ -63,8 +70,17 @@ export default function Settings({
   const handleFullReset = async () => {
     if (!onFullReset) return;
 
-    const typed = window.prompt('This permanently deletes all accounts, budgets, transactions, wishlist items, incomes, variables, transfers, and settings. Type DELETE to confirm.');
-    if (typed !== 'DELETE') return;
+    const typed = await showPrompt(
+      'This permanently deletes all accounts, budgets, transactions, wishlist items, incomes, variables, transfers, and settings from this browser.\n\nType DELETE to confirm.',
+      {
+        title: 'Delete all data',
+        placeholder: 'Type DELETE',
+        confirmText: 'Delete Everything',
+        danger: true,
+        validate: v => v === 'DELETE',
+      },
+    );
+    if (!typed) return;
 
     setIsFullResetting(true);
     setFullResetStatus('');
@@ -82,18 +98,23 @@ export default function Settings({
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Budget reset */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Manual Budget Reset</div>
+        <CardTitle as="h2" style={{ marginBottom: 8 }}>Manual Budget Reset</CardTitle>
         <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14 }}>
           Resets every category spend counter to zero. Transactions are kept for history.
         </div>
-        <button className="btn-danger" onClick={() => { if (window.confirm('Reset all category spending counters to zero?')) onResetBudget(); }}>
+        <button className="btn-danger" onClick={async () => {
+          const ok = await showConfirm('Reset all category spending counters to zero? Transactions are kept for history.', {
+            title: 'Reset budget', confirmText: 'Reset',
+          });
+          if (ok) onResetBudget();
+        }}>
           Reset Budget Now
         </button>
       </div>
 
       {/* Preferences */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Expense Defaults</div>
+        <CardTitle as="h2" style={{ marginBottom: 8 }}>Expense Defaults</CardTitle>
         <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14 }}>
           Choose which category is selected first when logging a new expense.
         </div>
@@ -116,7 +137,7 @@ export default function Settings({
 
       {/* Income reset */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Reset by Income</div>
+        <CardTitle as="h2" style={{ marginBottom: 8 }}>Reset by Income</CardTitle>
         <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14 }}>
           Reset only the categories covered by a specific income source.
         </div>
@@ -128,7 +149,7 @@ export default function Settings({
         ) : (
           <>
             <div className="mobile-row-stack" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-              <select className="glass-input" value={selectedIncomeId} onChange={e => { setResetIncomeId(e.target.value); setResetStatus(''); }}
+              <select className="glass-input" aria-label="Income to reset" value={selectedIncomeId} onChange={e => { setResetIncomeId(e.target.value); setResetStatus(''); }}
                 style={{ flex: '1 1 220px', maxWidth: 320 }}>
                 {incomes.map(income => (
                   <option key={income.id} value={income.id}>{income.name}</option>
@@ -150,7 +171,7 @@ export default function Settings({
 
       {/* Data management */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Data & Sync</div>
+        <CardTitle as="h2" style={{ marginBottom: 8 }}>Data &amp; Sync</CardTitle>
         <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>
           Export your data to transfer between devices or keep a backup. Import to restore.
         </div>

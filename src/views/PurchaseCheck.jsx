@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { AlertCircle, Check, Plus, ShoppingCart } from 'lucide-react';
 import { fmt } from '../utils';
 import CategorySelect from '../components/CategorySelect';
+import { CardTitle } from '../components/ui';
 
 const SOURCE_AUTO = 'auto';
 const SOURCE_MULTI = 'multi';
@@ -179,9 +180,9 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
-          <ShoppingCart size={18} color="var(--accent-mint)" />
+          <ShoppingCart size={18} color="var(--accent-mint)" aria-hidden="true" />
           <div>
-            <div style={{ fontSize: 16, fontWeight: 600 }}>Can I Purchase It?</div>
+            <CardTitle as="h2" style={{ fontSize: 16 }}>Can I Purchase It?</CardTitle>
             <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
               Live budget check
             </div>
@@ -190,30 +191,30 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
 
         <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Item</label>
-            <input className="glass-input" placeholder="Optional name" value={name} onChange={e => setName(e.target.value)} />
+            <label htmlFor="purchase-item" className="field-label">Item</label>
+            <input id="purchase-item" className="glass-input" placeholder="Optional name" value={name} onChange={e => setName(e.target.value)} />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Price (£)</label>
-            <input className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={price}
+            <label htmlFor="purchase-price" className="field-label">Price (£)</label>
+            <input id="purchase-price" className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={price}
               onChange={e => setPrice(e.target.value)} autoFocus />
           </div>
         </div>
 
         <div style={{ marginTop: 14 }}>
-          <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Budget Source</label>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: sourceMode !== SOURCE_AUTO && sourceMode !== SOURCE_MULTI ? 10 : 0 }}>
-            <button className={sourceMode === SOURCE_AUTO ? 'btn-primary' : 'btn-secondary'} onClick={() => setSourceMode(SOURCE_AUTO)}
+          <div className="field-label" id="budget-source-label">Budget Source</div>
+          <div role="group" aria-labelledby="budget-source-label" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: sourceMode !== SOURCE_AUTO && sourceMode !== SOURCE_MULTI ? 10 : 0 }}>
+            <button type="button" aria-pressed={sourceMode === SOURCE_AUTO} className={sourceMode === SOURCE_AUTO ? 'btn-primary' : 'btn-secondary'} onClick={() => setSourceMode(SOURCE_AUTO)}
               style={{ padding: '7px 11px', fontSize: 12 }}>
               Best Fit
             </button>
-            <button className={sourceMode !== SOURCE_AUTO && sourceMode !== SOURCE_MULTI ? 'btn-primary' : 'btn-secondary'}
+            <button type="button" aria-pressed={sourceMode !== SOURCE_AUTO && sourceMode !== SOURCE_MULTI} className={sourceMode !== SOURCE_AUTO && sourceMode !== SOURCE_MULTI ? 'btn-primary' : 'btn-secondary'}
               onClick={() => setSourceMode(selectedCategoryMode)}
               disabled={categories.length === 0}
               style={{ padding: '7px 11px', fontSize: 12 }}>
               Category
             </button>
-            <button className={sourceMode === SOURCE_MULTI ? 'btn-primary' : 'btn-secondary'} onClick={() => setSourceMode(SOURCE_MULTI)}
+            <button type="button" aria-pressed={sourceMode === SOURCE_MULTI} className={sourceMode === SOURCE_MULTI ? 'btn-primary' : 'btn-secondary'} onClick={() => setSourceMode(SOURCE_MULTI)}
               disabled={categories.length === 0}
               style={{ padding: '7px 11px', fontSize: 12 }}>
               Split
@@ -229,7 +230,7 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
             {plan.categories.map(({ category, remaining }) => {
               const selected = selectedIds.includes(category.id);
               return (
-                <button key={category.id} className={selected ? 'btn-primary' : 'btn-secondary'}
+                <button key={category.id} type="button" aria-pressed={selected} className={selected ? 'btn-primary' : 'btn-secondary'}
                   onClick={() => toggleCategory(category.id)}
                   style={{ padding: '7px 11px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ width: 7, height: 7, borderRadius: '50%', background: category.color || 'var(--accent-blue)' }} />
@@ -309,7 +310,7 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
 
       {plan.categories.length > 0 && (
         <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
-          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Category Fit</div>
+          <CardTitle as="h2" style={{ marginBottom: 4 }}>Category Fit</CardTitle>
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 14 }}>
             Remaining budget
           </div>
@@ -318,7 +319,9 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
               const canCover = amount > 0 && remaining >= amount;
               const pct = category.allowance > 0 ? Math.min(100, ((category.spent || 0) / category.allowance) * 100) : 0;
               return (
-                <button key={category.id} className="glass mobile-stack" onClick={() => setSourceMode(String(category.id))}
+                <button key={category.id} type="button" aria-pressed={sourceMode === String(category.id)}
+                  aria-label={`Use ${category.name}, ${fmt(remaining)} remaining`}
+                  className="glass mobile-stack" onClick={() => setSourceMode(String(category.id))}
                   style={{
                     borderRadius: 12,
                     padding: '11px 13px',

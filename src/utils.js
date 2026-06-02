@@ -140,11 +140,6 @@ export function getIncomeAllocationUsage(incomes = [], categories = [], excludeC
   return usage;
 }
 
-export function categoryUsesIncome(category, incomeId) {
-  return normalizeIncomeAllocations(category?.incomeAllocations)
-    .some(allocation => allocation.incomeId === Number(incomeId));
-}
-
 export function getPacedAllowanceConfig(category) {
   const enabled = Boolean(category?.pacedAllowanceEnabled || category?.dailyAllowanceEnabled);
   if (!enabled) return null;
@@ -214,10 +209,6 @@ export function getPacedAllowanceStatus(category, date = new Date()) {
   };
 }
 
-export function getDailyAllowanceStatus(category, date = new Date()) {
-  return getPacedAllowanceStatus(category, date);
-}
-
 /**
  * Evaluate a formula string with variable and category substitutions.
  * - $varName  → replaced with variable.value
@@ -253,8 +244,7 @@ export function evaluateFormula(formula, variables = [], categories = [], income
     // Safety: only digits, operators, parens, dots, whitespace allowed after substitution
     if (!/^[\d\s+\-*/().]+$/.test(expr)) return null;
 
-    // eslint-disable-next-line no-new-func
-    const result = Function('"use strict"; return (' + expr + ')')();
+    const result = Function('"use strict"; return (' + expr + ')')(); // safe: only [0-9 +\-*/.() ] reach here
     if (typeof result !== 'number' || !isFinite(result)) return null;
     return Math.round(result * 100) / 100;
   } catch {
@@ -371,7 +361,14 @@ export function fmt(amount) {
   return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(amount);
 }
 
-export function fmtShort(amount) {
-  if (Math.abs(amount) >= 1000) return `£${(amount/1000).toFixed(1)}k`;
-  return `£${amount.toFixed(0)}`;
+/**
+ * Convert a `yyyy-MM-dd` date-only string to an ISO timestamp anchored at
+ * local midnight. Using `new Date('yyyy-MM-dd')` parses as UTC, which can shift
+ * the stored day backwards in negative-offset timezones; this keeps the saved
+ * day identical to the day the user picked.
+ */
+export function dateOnlyToISO(value) {
+  if (!value) return new Date().toISOString();
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
 }
