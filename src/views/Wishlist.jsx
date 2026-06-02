@@ -37,13 +37,13 @@ function ItemRow({ item, expenseCategories, settings, onEdit, onDelete }) {
   const assignedCats = (item.categoryIds || []).map(id => expenseCategories.find(c => c.id === id)).filter(Boolean);
 
   return (
-    <div style={{
+    <div className="mobile-list-row" style={{
       display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
       background: aff?.canAffordNow ? 'rgba(79,255,176,0.05)' : 'rgba(255,255,255,0.03)',
       border: aff?.canAffordNow ? '1px solid rgba(79,255,176,0.18)' : '1px solid transparent',
       borderRadius: 10, flexWrap: 'wrap',
     }}>
-      <div style={{ flex: 1, minWidth: 140 }}>
+      <div className="mobile-list-main" style={{ flex: 1, minWidth: 140 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>{item.name}</span>
           {item.link && (
@@ -99,6 +99,7 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onEdi
 
   const header = (
     <div
+      className="mobile-list-row"
       onClick={() => onToggle(node.id)}
       style={{
         display: 'flex', alignItems: 'center', gap: depth === 0 ? 10 : 8,
@@ -114,7 +115,7 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onEdi
         {isOpen ? <ChevronDown size={depth === 0 ? 14 : 12} /> : <ChevronRight size={depth === 0 ? 14 : 12} />}
       </span>
       <span style={{ width: depth === 0 ? 9 : 7, height: depth === 0 ? 9 : 7, borderRadius: '50%', background: node.color || 'var(--accent-blue)', flexShrink: 0 }} />
-      <span style={{ fontWeight: 600, fontSize: depth === 0 ? 14 : 13, flex: 1 }}>{node.name}</span>
+      <span className="mobile-list-main" style={{ fontWeight: 600, fontSize: depth === 0 ? 14 : 13, flex: 1, minWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
 
       <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>
         {totalItems} {totalItems === 1 ? 'item' : 'items'}
@@ -162,13 +163,13 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onEdi
 
       {/* Inline sub-list creation */}
       {showSubInput && (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '6px 0', paddingLeft: depth > 0 ? 0 : 2 }}>
+        <div className="mobile-row-stack" style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '6px 0', paddingLeft: depth > 0 ? 0 : 2 }}>
           <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--text-muted)', flexShrink: 0 }} />
           <input className="glass-input" placeholder="New sub-list name…" value={subName} autoFocus
             onChange={e => setSubName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleCreateSub(); if (e.key === 'Escape') { setShowSubInput(false); setSubName(''); } }}
             style={{ flex: 1 }} />
-          <button className="btn-primary" onClick={handleCreateSub} disabled={!subName.trim()}
+          <button className="btn-primary mobile-full" onClick={handleCreateSub} disabled={!subName.trim()}
             style={{ flexShrink: 0, padding: '6px 12px', fontSize: 11 }}>Create</button>
           <button className="btn-icon" onClick={() => { setShowSubInput(false); setSubName(''); }} title="Cancel list creation" style={{ width: 28, height: 28 }}>
             <X size={12} />
@@ -255,7 +256,7 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
       {/* ── Header ── */}
-      <div className="glass" style={{ borderRadius: 18, padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+      <div className="glass mobile-card-pad mobile-row-stack" style={{ borderRadius: 18, padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 600 }}>Wishlist</div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
@@ -264,7 +265,7 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
               : `${items.length} item${items.length !== 1 ? 's' : ''} · ${wishlistCategories.length} list${wishlistCategories.length !== 1 ? 's' : ''}`}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="mobile-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button className="btn-secondary"
             onClick={() => { setShowNewList(v => !v); setNewListName(''); }}
             style={{ padding: '7px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -278,15 +279,15 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
 
       {/* ── New top-level list input ── */}
       {showNewList && (
-        <div className="glass" style={{ borderRadius: 14, padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div className="glass mobile-card-pad mobile-row-stack" style={{ borderRadius: 14, padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
           <span style={{ width: 9, height: 9, borderRadius: '50%', background: LIST_COLORS[wishlistCategories.length % LIST_COLORS.length], flexShrink: 0 }} />
           <input className="glass-input" placeholder="List name…" value={newListName} autoFocus
             onChange={e => setNewListName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleCreateList(); if (e.key === 'Escape') setShowNewList(false); }}
             style={{ flex: 1 }} />
-          <button className="btn-primary" onClick={handleCreateList} disabled={!newListName.trim()}
+          <button className="btn-primary mobile-full" onClick={handleCreateList} disabled={!newListName.trim()}
             style={{ flexShrink: 0, padding: '8px 14px', fontSize: 12 }}>Create</button>
-          <button className="btn-secondary" onClick={() => setShowNewList(false)}
+          <button className="btn-secondary mobile-full" onClick={() => setShowNewList(false)}
             style={{ flexShrink: 0, padding: '8px 12px', fontSize: 12 }}>Cancel</button>
         </div>
       )}
@@ -313,7 +314,7 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
       {/* ── Uncategorised ── */}
       {uncategorizedItems.length > 0 && (
         <div className="glass" style={{ borderRadius: 16, overflow: 'hidden' }}>
-          <div onClick={() => toggleList('uncategorized')}
+          <div className="mobile-list-row" onClick={() => toggleList('uncategorized')}
             style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px', cursor: 'pointer', userSelect: 'none',
               borderBottom: expanded.has('uncategorized') ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
             <span style={{ color: 'var(--text-muted)' }}>

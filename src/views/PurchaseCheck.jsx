@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { AlertCircle, Check, Plus, ShoppingCart } from 'lucide-react';
 import { fmt } from '../utils';
+import CategorySelect from '../components/CategorySelect';
 
 const SOURCE_AUTO = 'auto';
 const SOURCE_MULTI = 'multi';
@@ -143,6 +144,9 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
   const [price, setPrice] = useState('');
   const [sourceMode, setSourceMode] = useState(SOURCE_AUTO);
   const [selectedIds, setSelectedIds] = useState([]);
+  const selectedCategoryMode = sourceMode !== SOURCE_AUTO && sourceMode !== SOURCE_MULTI
+    ? String(sourceMode)
+    : categories[0]?.id ? String(categories[0].id) : '';
 
   const amount = Number(price) || 0;
   const plan = useMemo(
@@ -173,7 +177,7 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
           <ShoppingCart size={18} color="var(--accent-mint)" />
           <div>
@@ -184,7 +188,7 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+        <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
           <div>
             <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Item</label>
             <input className="glass-input" placeholder="Optional name" value={name} onChange={e => setName(e.target.value)} />
@@ -198,13 +202,26 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
 
         <div style={{ marginTop: 14 }}>
           <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Budget Source</label>
-          <select className="glass-input" value={sourceMode} onChange={e => setSourceMode(e.target.value)}>
-            <option value={SOURCE_AUTO}>Best fit automatically</option>
-            {categories.map(category => (
-              <option key={category.id} value={category.id}>{category.name}</option>
-            ))}
-            <option value={SOURCE_MULTI}>Use multiple categories</option>
-          </select>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: sourceMode !== SOURCE_AUTO && sourceMode !== SOURCE_MULTI ? 10 : 0 }}>
+            <button className={sourceMode === SOURCE_AUTO ? 'btn-primary' : 'btn-secondary'} onClick={() => setSourceMode(SOURCE_AUTO)}
+              style={{ padding: '7px 11px', fontSize: 12 }}>
+              Best Fit
+            </button>
+            <button className={sourceMode !== SOURCE_AUTO && sourceMode !== SOURCE_MULTI ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => setSourceMode(selectedCategoryMode)}
+              disabled={categories.length === 0}
+              style={{ padding: '7px 11px', fontSize: 12 }}>
+              Category
+            </button>
+            <button className={sourceMode === SOURCE_MULTI ? 'btn-primary' : 'btn-secondary'} onClick={() => setSourceMode(SOURCE_MULTI)}
+              disabled={categories.length === 0}
+              style={{ padding: '7px 11px', fontSize: 12 }}>
+              Split
+            </button>
+          </div>
+          {sourceMode !== SOURCE_AUTO && sourceMode !== SOURCE_MULTI && (
+            <CategorySelect categories={categories} value={selectedCategoryMode} onChange={setSourceMode} showAmounts />
+          )}
         </div>
 
         {sourceMode === SOURCE_MULTI && (
@@ -225,13 +242,13 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
         )}
       </div>
 
-      <div className="glass" style={{
+      <div className="glass mobile-card-pad" style={{
         borderRadius: 18,
         padding: '24px',
         borderColor: plan.status === 'yes' ? 'rgba(79,255,176,0.28)' : plan.status === 'no' ? 'rgba(255,107,138,0.28)' : 'rgba(251,191,112,0.24)',
         background: plan.status === 'yes' ? 'rgba(79,255,176,0.06)' : plan.status === 'no' ? 'rgba(255,107,138,0.06)' : 'rgba(251,191,112,0.05)',
       }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+        <div className="mobile-row-stack" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flex: '1 1 260px' }}>
             <div style={{
               width: 34,
@@ -257,13 +274,13 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
           </div>
 
           {plan.logCategory && (
-            <button className="btn-primary" onClick={handleLogPurchase}
+            <button className="btn-primary mobile-full" onClick={handleLogPurchase}
               style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
               <Plus size={14} /> Log Purchase
             </button>
           )}
           {plan.status === 'maybe' && sourceMode === SOURCE_AUTO && (
-            <button className="btn-secondary" onClick={() => setSourceMode(SOURCE_MULTI)}
+            <button className="btn-secondary mobile-full" onClick={() => setSourceMode(SOURCE_MULTI)}
               style={{ flexShrink: 0 }}>
               Choose Categories
             </button>
@@ -271,7 +288,7 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
         </div>
 
         {amount > 0 && plan.selectedCategories.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginTop: 20 }}>
+          <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginTop: 20 }}>
             <div style={{ padding: '12px 14px', borderRadius: 12, background: 'rgba(255,255,255,0.05)' }}>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Purchase</div>
               <div className="font-display" style={{ fontSize: 22 }}>{fmt(amount)}</div>
@@ -291,7 +308,7 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
       </div>
 
       {plan.categories.length > 0 && (
-        <div className="glass" style={{ borderRadius: 18, padding: '20px 22px' }}>
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Category Fit</div>
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 14 }}>
             Remaining budget
@@ -301,7 +318,7 @@ export default function PurchaseCheck({ categories = [], onLogPurchase }) {
               const canCover = amount > 0 && remaining >= amount;
               const pct = category.allowance > 0 ? Math.min(100, ((category.spent || 0) / category.allowance) * 100) : 0;
               return (
-                <button key={category.id} className="glass" onClick={() => setSourceMode(String(category.id))}
+                <button key={category.id} className="glass mobile-stack" onClick={() => setSourceMode(String(category.id))}
                   style={{
                     borderRadius: 12,
                     padding: '11px 13px',

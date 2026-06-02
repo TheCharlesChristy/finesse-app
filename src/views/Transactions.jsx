@@ -1,9 +1,10 @@
 import { useState, useMemo } from 'react';
-import { Pencil, Trash2, Search } from 'lucide-react';
+import { CreditCard, Layers3, Pencil, Trash2, Search } from 'lucide-react';
 import { fmt } from '../utils';
 import { format } from 'date-fns';
+import CategorySelect from '../components/CategorySelect';
 
-export default function Transactions({ transactions, categories, onDelete, onEdit, onAdd }) {
+export default function Transactions({ transactions, categories, onDelete, onEdit, onAdd, onBulkAdd, onAddSubscription }) {
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState('all');
 
@@ -41,18 +42,29 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Toolbar */}
-      <div className="glass" style={{ borderRadius: 16, padding: '16px 20px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div className="glass mobile-card-pad" style={{ borderRadius: 16, padding: '16px 20px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ position: 'relative', flex: '1 1 200px' }}>
           <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', pointerEvents: 'none' }} />
           <input className="glass-input" placeholder="Search transactions…" value={search}
             onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 34 }} />
         </div>
-        <select className="glass-input" value={filterCat} onChange={e => setFilterCat(e.target.value)}
-          style={{ flex: '1 1 160px', maxWidth: 200 }}>
-          <option value="all">All Categories</option>
-          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-        <button className="btn-primary" onClick={onAdd} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
+        <CategorySelect
+          categories={categories}
+          value={filterCat}
+          onChange={setFilterCat}
+          includeAll
+          allLabel="All Categories"
+          style={{ flex: '1 1 180px' }}
+        />
+        <button className="btn-secondary mobile-full" onClick={onBulkAdd} disabled={categories.length === 0}
+          style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 7 }}>
+          <Layers3 size={14} /> Bulk Add
+        </button>
+        <button className="btn-secondary mobile-full" onClick={onAddSubscription} disabled={categories.length === 0}
+          style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 7 }}>
+          <CreditCard size={14} /> Subscription
+        </button>
+        <button className="btn-primary mobile-full" onClick={onAdd} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
           + Add Expense
         </button>
         <div style={{
@@ -76,9 +88,19 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
             {transactions.length === 0 ? 'No expenses logged yet. Add your first one!' : 'No transactions match your filter.'}
           </div>
           {transactions.length === 0 && (
-            <button className="btn-primary" onClick={onAdd}>
-              Add Expense
-            </button>
+            <div className="mobile-actions mobile-actions-full" style={{ display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <button className="btn-secondary" onClick={onBulkAdd} disabled={categories.length === 0}
+                style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <Layers3 size={14} /> Bulk Add Expenses
+              </button>
+              <button className="btn-secondary" onClick={onAddSubscription} disabled={categories.length === 0}
+                style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <CreditCard size={14} /> Add Subscription
+              </button>
+              <button className="btn-primary" onClick={onAdd}>
+                Add Expense
+              </button>
+            </div>
           )}
         </div>
       ) : (
@@ -91,13 +113,13 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
               {txs.map((tx, i) => {
                 const cat = catMap[tx.categoryId];
                 return (
-                  <div key={tx.id} style={{
+                  <div key={tx.id} className="mobile-list-row" style={{
                     display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px',
                     borderBottom: i < txs.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none',
                     transition: 'background 0.15s'
                   }}>
                     <div style={{ width: 10, height: 10, borderRadius: '50%', background: cat?.color || 'var(--accent-blue)', flexShrink: 0 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="mobile-list-main" style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {tx.note || cat?.name || 'Expense'}
                       </div>

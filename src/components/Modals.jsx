@@ -1,11 +1,15 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { Plus, Wand2, X } from 'lucide-react';
 import { format } from 'date-fns';
+import CategorySelect from './CategorySelect';
+import DateInput from './DateInput';
 import {
   evaluateFormula,
+  formatPacedAllowancePeriod,
   fmt,
   getAllocationPercentTotal,
   getIncomeAllocationUsage,
+  getPacedAllowanceMonthlyTotal,
   normalizeIncomeAllocations,
   roundMoney,
 } from '../utils';
@@ -249,7 +253,7 @@ function IncomeAllocationEditor({
                     borderRadius: 10,
                     padding: '10px 12px',
                   }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 82px 76px 30px', alignItems: 'center', gap: 10 }}>
+                    <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 82px 76px 30px', alignItems: 'center', gap: 10 }}>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {incomeName}
@@ -271,7 +275,7 @@ function IncomeAllocationEditor({
                         />
                         <span style={{ position: 'absolute', right: 9, top: '50%', transform: 'translateY(-50%)', fontSize: 11, color: 'var(--text-muted)' }}>%</span>
                       </div>
-                      <div style={{ fontSize: 12, textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                      <div className="mobile-center-left" style={{ fontSize: 12, textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600 }}>
                         {fmt(thisAmount)}
                       </div>
                       <button className="btn-icon" onClick={() => removeSource(allocation.incomeId)}
@@ -290,7 +294,7 @@ function IncomeAllocationEditor({
           )}
 
           {availableIncomeOptions.length > 0 && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center' }}>
+            <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center' }}>
               <select className="glass-input" value={sourceToAdd} onChange={e => setSourceToAdd(e.target.value)}
                 style={{ padding: '8px 10px', fontSize: 13 }}>
                 {availableIncomeOptions.map(income => {
@@ -443,8 +447,11 @@ function FormulaInput({ value, onChange, onKeyDown: externalKeyDown, placeholder
 }
 
 // ── Add Transaction Modal ────────────────────────────────────────────────────
-export function AddTransactionModal({ categories, onAdd, onClose, transaction = null, onSave, initial = null }) {
-  const [catId, setCatId] = useState(transaction?.categoryId || initial?.categoryId || categories[0]?.id || '');
+export function AddTransactionModal({ categories, onAdd, onClose, transaction = null, onSave, initial = null, defaultCategoryId = null }) {
+  const fallbackCategoryId = categories.some(category => Number(category.id) === Number(defaultCategoryId))
+    ? defaultCategoryId
+    : categories[0]?.id;
+  const [catId, setCatId] = useState(transaction?.categoryId || initial?.categoryId || fallbackCategoryId || '');
   const [amount, setAmount] = useState(transaction?.amount != null ? String(transaction.amount) : initial?.amount != null ? String(initial.amount) : '');
   const [note, setNote] = useState(transaction?.note || initial?.note || '');
   const [date, setDate] = useState(format(transaction?.date ? new Date(transaction.date) : new Date(), 'yyyy-MM-dd'));
@@ -476,9 +483,7 @@ export function AddTransactionModal({ categories, onAdd, onClose, transaction = 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
             <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Category</label>
-            <select className="glass-input" value={catId} onChange={e => setCatId(e.target.value)}>
-              {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <CategorySelect categories={categories} value={String(catId)} onChange={setCatId} showAmounts />
           </div>
           <div>
             <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Amount (£)</label>
@@ -491,17 +496,222 @@ export function AddTransactionModal({ categories, onAdd, onClose, transaction = 
               onChange={e => setNote(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
           </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Date</label>
-            <input className="glass-input" type="date" value={date} onChange={e => setDate(e.target.value)} />
-          </div>
-          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <DateInput value={date} onChange={setDate} />
+          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
               disabled={!catId || !amount}>
               {isEditing ? 'Save Changes' : 'Add Expense'}
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function blankBulkRow(date) {
+  return { amount: '', note: '', date };
+}
+
+function parseLooseDate(value, fallbackDate) {
+  if (!value) return fallbackDate;
+  const clean = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
+
+  const match = clean.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (!match) return fallbackDate;
+
+  const day = match[1].padStart(2, '0');
+  const month = match[2].padStart(2, '0');
+  const year = match[3].length === 2 ? `20${match[3]}` : match[3];
+  return `${year}-${month}-${day}`;
+}
+
+function parseBulkExpenseLine(line, fallbackDate) {
+  let text = line.trim();
+  if (!text) return null;
+
+  let date = fallbackDate;
+  const dateMatch = text.match(/^(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})[\s,;\t]+/);
+  if (dateMatch) {
+    date = parseLooseDate(dateMatch[1], fallbackDate);
+    text = text.slice(dateMatch[0].length).trim();
+  }
+
+  const amountMatches = [...text.matchAll(/£?\s*-?\d+(?:\.\d{1,2})?/g)];
+  if (!amountMatches.length) return null;
+
+  const amountMatch = amountMatches[amountMatches.length - 1];
+  const amount = Math.abs(parseFloat(amountMatch[0].replace(/[£\s]/g, '')));
+  if (!(amount > 0)) return null;
+
+  const note = `${text.slice(0, amountMatch.index)} ${text.slice(amountMatch.index + amountMatch[0].length)}`
+    .replace(/^[\s,;:-]+|[\s,;:-]+$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  return {
+    amount: String(amount),
+    note,
+    date,
+  };
+}
+
+// ── Bulk Add Expenses Modal ──────────────────────────────────────────────────
+export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCategoryId = null }) {
+  const fallbackCategoryId = categories.some(category => Number(category.id) === Number(defaultCategoryId))
+    ? defaultCategoryId
+    : categories[0]?.id;
+  const today = format(new Date(), 'yyyy-MM-dd');
+  const [catId, setCatId] = useState(fallbackCategoryId || '');
+  const [defaultDate, setDefaultDate] = useState(today);
+  const [rows, setRows] = useState(() => Array.from({ length: 5 }, () => blankBulkRow(today)));
+  const [pasteText, setPasteText] = useState('');
+
+  const validRows = useMemo(() => (
+    rows
+      .map(row => ({
+        amount: parseFloat(row.amount),
+        note: row.note.trim(),
+        date: row.date,
+      }))
+      .filter(row => row.amount > 0)
+  ), [rows]);
+  const totalAmount = validRows.reduce((sum, row) => sum + row.amount, 0);
+
+  const updateRow = (index, patch) => {
+    setRows(current => current.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
+  };
+
+  const addRows = (count = 3) => {
+    setRows(current => [...current, ...Array.from({ length: count }, () => blankBulkRow(defaultDate))]);
+  };
+
+  const removeRow = (index) => {
+    setRows(current => current.length <= 1 ? current : current.filter((_, rowIndex) => rowIndex !== index));
+  };
+
+  const applyDefaultDate = (date) => {
+    setDefaultDate(date);
+    setRows(current => current.map(row => ({ ...row, date })));
+  };
+
+  const fillFromPaste = () => {
+    const parsed = pasteText
+      .split('\n')
+      .map(line => parseBulkExpenseLine(line, defaultDate))
+      .filter(Boolean);
+    if (!parsed.length) return;
+    setRows([...parsed, blankBulkRow(defaultDate), blankBulkRow(defaultDate)]);
+    setPasteText('');
+  };
+
+  const handleSubmit = () => {
+    if (!catId || validRows.length === 0) return;
+    onAdd({
+      categoryId: Number(catId),
+      transactions: validRows.map(row => ({
+        amount: row.amount,
+        note: row.note,
+        date: new Date(row.date).toISOString(),
+      })),
+    });
+    onClose();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal-box" style={{ maxWidth: 760 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
+          <div>
+            <div className="font-display" style={{ fontSize: 22 }}>Bulk Add Expenses</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 3 }}>
+              Add several expenses to one category in one pass.
+            </div>
+          </div>
+          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
+        </div>
+
+        <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) minmax(170px, 220px)', gap: 12, marginBottom: 16 }}>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Category</label>
+            <CategorySelect categories={categories} value={String(catId)} onChange={setCatId} showAmounts />
+          </div>
+          <DateInput value={defaultDate} onChange={applyDefaultDate} label="Default date" />
+        </div>
+
+        <div style={{
+          border: '1px solid rgba(255,255,255,0.08)',
+          background: 'rgba(255,255,255,0.035)',
+          borderRadius: 14,
+          padding: 12,
+          marginBottom: 14,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>Paste lines</div>
+            <button className="btn-secondary" onClick={fillFromPaste} disabled={!pasteText.trim()}
+              style={{ padding: '6px 10px', fontSize: 12 }}>
+              Fill Rows
+            </button>
+          </div>
+          <textarea
+            className="glass-input"
+            value={pasteText}
+            onChange={e => setPasteText(e.target.value)}
+            rows={3}
+            placeholder={'Optional. Examples:\n12.50 Lunch\n2026-06-01 8.99 Coffee\nGroceries, 34.20'}
+            style={{ resize: 'vertical', minHeight: 86 }}
+          />
+        </div>
+
+        <div className="bulk-expense-header" style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 6, padding: '0 2px' }}>
+          <div>Amount</div>
+          <div>Note</div>
+          <div>Date</div>
+          <div />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
+          {rows.map((row, index) => (
+            <div key={index} className="bulk-expense-row">
+              <input className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={row.amount}
+                onChange={e => updateRow(index, { amount: e.target.value })}
+                onKeyDown={e => e.key === 'Enter' && addRows(1)}
+                style={{ padding: '8px 10px' }}
+                autoFocus={index === 0} />
+              <input className="glass-input bulk-expense-note" placeholder="Optional note" value={row.note}
+                onChange={e => updateRow(index, { note: e.target.value })}
+                onKeyDown={e => e.key === 'Enter' && addRows(1)}
+                style={{ padding: '8px 10px' }} />
+              <div className="bulk-expense-date">
+                <DateInput value={row.date} onChange={date => updateRow(index, { date })} label={null} />
+              </div>
+              <button className="btn-icon" onClick={() => removeRow(index)} disabled={rows.length <= 1}
+                title="Remove row" style={{ width: 34, height: 34 }}>
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 16 }}>
+          <button className="btn-secondary" onClick={() => addRows(3)}
+            style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <Plus size={14} /> Add Rows
+          </button>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+            <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{validRows.length}</span> expense{validRows.length === 1 ? '' : 's'}
+            {' · '}
+            <span style={{ color: 'var(--accent-warm)', fontWeight: 800 }}>{fmt(totalAmount)}</span>
+          </div>
+        </div>
+
+        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} disabled={!catId || validRows.length === 0}
+            style={{ flex: 2 }}>
+            Add {validRows.length || ''} Expense{validRows.length === 1 ? '' : 's'}
+          </button>
         </div>
       </div>
     </div>
@@ -621,7 +831,7 @@ export function AddWishlistItemModal({ expenseCategories, wishlistCategories, on
               onChange={e => setNote(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
           </div>
-          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
               disabled={!name.trim() || !price}>
@@ -697,7 +907,7 @@ export function EditWishlistListModal({ list, wishlistCategories, onSave, onClos
               ))}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!name.trim()}>
               Save Changes
@@ -713,16 +923,26 @@ export function EditWishlistListModal({ list, wishlistCategories, onSave, onClos
 export function AddCategoryModal({ onAdd, onClose, variables = [], categories = [], incomes = [] }) {
   const [name, setName] = useState('');
   const [allowanceInput, setAllowanceInput] = useState('');
+  const [pacedAllowanceEnabled, setPacedAllowanceEnabled] = useState(false);
+  const [pacedAllowanceAmount, setPacedAllowanceAmount] = useState('');
+  const [pacedAllowanceInterval, setPacedAllowanceInterval] = useState('1');
+  const [pacedAllowanceUnit, setPacedAllowanceUnit] = useState('day');
   const [color, setColor] = useState(PALETTE[0]);
   const [incomeAllocations, setIncomeAllocations] = useState(() => makeAutoIncomeAllocations(0, incomes, categories));
   const [allocTouched, setAllocTouched] = useState(false);
 
-  const isFormula = isFormulaInput(allowanceInput);
+  const isFormula = !pacedAllowanceEnabled && isFormulaInput(allowanceInput);
+  const pacedMonthlyAllowance = getPacedAllowanceMonthlyTotal(
+    parseFloat(pacedAllowanceAmount) || 0,
+    pacedAllowanceInterval,
+    pacedAllowanceUnit
+  );
+  const pacedPeriodLabel = formatPacedAllowancePeriod(pacedAllowanceInterval, pacedAllowanceUnit);
   const formulaResult = useMemo(
     () => isFormula ? evaluateFormula(allowanceInput, variables, categories, incomes) : null,
     [allowanceInput, isFormula, variables, categories, incomes]
   );
-  const allowanceValue = isFormula ? (formulaResult ?? 0) : (parseFloat(allowanceInput) || 0);
+  const allowanceValue = pacedAllowanceEnabled ? pacedMonthlyAllowance : isFormula ? (formulaResult ?? 0) : (parseFloat(allowanceInput) || 0);
   const allocationValidation = useMemo(
     () => getAllocationValidation(allowanceValue, incomeAllocations, incomes, categories),
     [allowanceValue, incomeAllocations, incomes, categories]
@@ -744,15 +964,23 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
   };
 
   const handleSubmit = () => {
-    if (!name.trim() || !allowanceInput) return;
+    if (!name.trim()) return;
+    if (pacedAllowanceEnabled && !(parseFloat(pacedAllowanceAmount) > 0)) return;
+    if (!pacedAllowanceEnabled && !allowanceInput) return;
     if (isFormula && formulaResult === null) return;
     if (!allocationValidation.isValid) return;
-    const numericValue = isFormula ? formulaResult : (parseFloat(allowanceInput) || 0);
+    const numericValue = pacedAllowanceEnabled ? pacedMonthlyAllowance : isFormula ? formulaResult : (parseFloat(allowanceInput) || 0);
     onAdd({
       name: name.trim(),
       allowance: numericValue,
-      allowanceFormula: isFormula ? allowanceInput : null,
+      allowanceFormula: pacedAllowanceEnabled ? null : isFormula ? allowanceInput : null,
       incomeAllocations: normalizeIncomeAllocations(incomeAllocations),
+      pacedAllowanceEnabled,
+      pacedAllowanceAmount: pacedAllowanceEnabled ? roundMoney(pacedAllowanceAmount) : null,
+      pacedAllowanceInterval: pacedAllowanceEnabled ? Math.max(1, parseInt(pacedAllowanceInterval) || 1) : null,
+      pacedAllowanceUnit: pacedAllowanceEnabled ? pacedAllowanceUnit : null,
+      dailyAllowanceEnabled: false,
+      dailyAllowanceAmount: null,
       resetFrequency: null,
       payDayOfMonth: null,
       lastReset: new Date().toISOString(),
@@ -775,26 +1003,61 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
               onChange={e => setName(e.target.value)} autoFocus />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Allowance (£) or Formula</label>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, lineHeight: 1.5 }}>
-              Plain number, or type{' '}
-              <span style={{ color: 'var(--accent-mint)', fontFamily: 'monospace' }}>$</span> for variables,{' '}
-              <span style={{ color: 'var(--accent-blue)', fontFamily: 'monospace' }}>[</span> for categories,{' '}
-              <span style={{ color: 'var(--accent-purple)', fontFamily: 'monospace' }}>{'{' }</span> for incomes — autocomplete will appear.
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Allowance Type</label>
+            <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+              <button type="button" className={!pacedAllowanceEnabled ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setPacedAllowanceEnabled(false)} style={{ padding: '8px 10px', fontSize: 12 }}>
+                Monthly Total
+              </button>
+              <button type="button" className={pacedAllowanceEnabled ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setPacedAllowanceEnabled(true)} style={{ padding: '8px 10px', fontSize: 12 }}>
+                Repeating Amount
+              </button>
             </div>
-            <FormulaInput
-              value={allowanceInput}
-              onChange={setAllowanceInput}
-              onKeyDown={e => { if (e.key === 'Enter' && !getActiveToken(allowanceInput)) handleSubmit(); }}
-              placeholder="e.g. 300  or  $salary * 0.2  or  {Salary} * 0.3  or  [Groceries] * 0.1"
-              variables={variables}
-              categories={categories}
-              incomes={incomes}
-            />
-            {allowanceInput && isFormula && (
-              <div style={{ fontSize: 12, marginTop: 5, color: formulaResult !== null ? 'var(--good)' : 'var(--danger)' }}>
-                {formulaResult !== null ? `= ${fmt(formulaResult)}` : 'Invalid formula'}
+            {pacedAllowanceEnabled ? (
+              <div>
+                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>I can spend</label>
+                <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 86px 1fr', gap: 8 }}>
+                  <input className="glass-input" type="number" min="0" step="0.01" placeholder="15.00" value={pacedAllowanceAmount}
+                    onChange={e => setPacedAllowanceAmount(e.target.value)} />
+                  <input className="glass-input" type="number" min="1" step="1" value={pacedAllowanceInterval}
+                    onChange={e => setPacedAllowanceInterval(e.target.value)} />
+                  <select className="glass-input" value={pacedAllowanceUnit} onChange={e => setPacedAllowanceUnit(e.target.value)}>
+                    <option value="day">Day(s)</option>
+                    <option value="week">Week(s)</option>
+                    <option value="month">Month(s)</option>
+                  </select>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+                  {fmt(parseFloat(pacedAllowanceAmount) || 0)} every {pacedPeriodLabel}
+                  {' · '}
+                  this month: <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(pacedMonthlyAllowance)}</span>
+                </div>
               </div>
+            ) : (
+              <>
+                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Allowance (£) or Formula</label>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, lineHeight: 1.5 }}>
+                  Plain number, or type{' '}
+                  <span style={{ color: 'var(--accent-mint)', fontFamily: 'monospace' }}>$</span> for variables,{' '}
+                  <span style={{ color: 'var(--accent-blue)', fontFamily: 'monospace' }}>[</span> for categories,{' '}
+                  <span style={{ color: 'var(--accent-purple)', fontFamily: 'monospace' }}>{'{' }</span> for incomes — autocomplete will appear.
+                </div>
+                <FormulaInput
+                  value={allowanceInput}
+                  onChange={setAllowanceInput}
+                  onKeyDown={e => { if (e.key === 'Enter' && !getActiveToken(allowanceInput)) handleSubmit(); }}
+                  placeholder="e.g. 300  or  $salary * 0.2  or  {Salary} * 0.3  or  [Groceries] * 0.1"
+                  variables={variables}
+                  categories={categories}
+                  incomes={incomes}
+                />
+                {allowanceInput && isFormula && (
+                  <div style={{ fontSize: 12, marginTop: 5, color: formulaResult !== null ? 'var(--good)' : 'var(--danger)' }}>
+                    {formulaResult !== null ? `= ${fmt(formulaResult)}` : 'Invalid formula'}
+                  </div>
+                )}
+              </>
             )}
           </div>
           <IncomeAllocationEditor
@@ -816,10 +1079,10 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
               ))}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-              disabled={!name.trim() || !allowanceInput || (isFormula && formulaResult === null) || !allocationValidation.isValid}>
+              disabled={!name.trim() || (pacedAllowanceEnabled ? !(parseFloat(pacedAllowanceAmount) > 0) : !allowanceInput) || (isFormula && formulaResult === null) || !allocationValidation.isValid}>
               Add Category
             </button>
           </div>
@@ -833,6 +1096,14 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
 export function EditCategoryModal({ category, onSave, onClose, variables = [], categories = [], incomes = [] }) {
   const [name, setName] = useState(category.name || '');
   const [allowanceInput, setAllowanceInput] = useState(category.allowanceFormula || String(category.allowance ?? ''));
+  const [pacedAllowanceEnabled, setPacedAllowanceEnabled] = useState(Boolean(category.pacedAllowanceEnabled || category.dailyAllowanceEnabled));
+  const [pacedAllowanceAmount, setPacedAllowanceAmount] = useState(
+    category.pacedAllowanceAmount != null ? String(category.pacedAllowanceAmount)
+      : category.dailyAllowanceAmount != null ? String(category.dailyAllowanceAmount)
+      : ''
+  );
+  const [pacedAllowanceInterval, setPacedAllowanceInterval] = useState(String(category.pacedAllowanceInterval || 1));
+  const [pacedAllowanceUnit, setPacedAllowanceUnit] = useState(category.pacedAllowanceUnit || 'day');
   const [color, setColor] = useState(category.color || PALETTE[0]);
   const [incomeAllocations, setIncomeAllocations] = useState(() => (
     category.incomeAllocations?.length
@@ -841,12 +1112,18 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
   ));
   const [allocTouched, setAllocTouched] = useState(() => Boolean(category.incomeAllocations?.length));
 
-  const isFormula = isFormulaInput(allowanceInput);
+  const isFormula = !pacedAllowanceEnabled && isFormulaInput(allowanceInput);
+  const pacedMonthlyAllowance = getPacedAllowanceMonthlyTotal(
+    parseFloat(pacedAllowanceAmount) || 0,
+    pacedAllowanceInterval,
+    pacedAllowanceUnit
+  );
+  const pacedPeriodLabel = formatPacedAllowancePeriod(pacedAllowanceInterval, pacedAllowanceUnit);
   const formulaResult = useMemo(
     () => isFormula ? evaluateFormula(allowanceInput, variables, categories, incomes) : null,
     [allowanceInput, isFormula, variables, categories, incomes]
   );
-  const allowanceValue = isFormula ? (formulaResult ?? 0) : (parseFloat(allowanceInput) || 0);
+  const allowanceValue = pacedAllowanceEnabled ? pacedMonthlyAllowance : isFormula ? (formulaResult ?? 0) : (parseFloat(allowanceInput) || 0);
   const allocationValidation = useMemo(
     () => getAllocationValidation(allowanceValue, incomeAllocations, incomes, categories, category.id),
     [allowanceValue, incomeAllocations, incomes, categories, category.id]
@@ -868,15 +1145,23 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
   };
 
   const handleSubmit = () => {
-    if (!name.trim() || !allowanceInput) return;
+    if (!name.trim()) return;
+    if (pacedAllowanceEnabled && !(parseFloat(pacedAllowanceAmount) > 0)) return;
+    if (!pacedAllowanceEnabled && !allowanceInput) return;
     if (isFormula && formulaResult === null) return;
     if (!allocationValidation.isValid) return;
-    const numericValue = isFormula ? formulaResult : (parseFloat(allowanceInput) || 0);
+    const numericValue = pacedAllowanceEnabled ? pacedMonthlyAllowance : isFormula ? formulaResult : (parseFloat(allowanceInput) || 0);
     onSave(category.id, {
       name: name.trim(),
       allowance: numericValue,
-      allowanceFormula: isFormula ? allowanceInput : null,
+      allowanceFormula: pacedAllowanceEnabled ? null : isFormula ? allowanceInput : null,
       incomeAllocations: normalizeIncomeAllocations(incomeAllocations),
+      pacedAllowanceEnabled,
+      pacedAllowanceAmount: pacedAllowanceEnabled ? roundMoney(pacedAllowanceAmount) : null,
+      pacedAllowanceInterval: pacedAllowanceEnabled ? Math.max(1, parseInt(pacedAllowanceInterval) || 1) : null,
+      pacedAllowanceUnit: pacedAllowanceEnabled ? pacedAllowanceUnit : null,
+      dailyAllowanceEnabled: false,
+      dailyAllowanceAmount: null,
       resetFrequency: null,
       payDayOfMonth: null,
       color,
@@ -897,26 +1182,61 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
             <input className="glass-input" value={name} onChange={e => setName(e.target.value)} autoFocus />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Allowance (£) or Formula</label>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, lineHeight: 1.5 }}>
-              Plain number, or type{' '}
-              <span style={{ color: 'var(--accent-mint)', fontFamily: 'monospace' }}>$</span> for variables,{' '}
-              <span style={{ color: 'var(--accent-blue)', fontFamily: 'monospace' }}>[</span> for categories,{' '}
-              <span style={{ color: 'var(--accent-purple)', fontFamily: 'monospace' }}>{'{' }</span> for incomes — autocomplete will appear.
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Allowance Type</label>
+            <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+              <button type="button" className={!pacedAllowanceEnabled ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setPacedAllowanceEnabled(false)} style={{ padding: '8px 10px', fontSize: 12 }}>
+                Monthly Total
+              </button>
+              <button type="button" className={pacedAllowanceEnabled ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setPacedAllowanceEnabled(true)} style={{ padding: '8px 10px', fontSize: 12 }}>
+                Repeating Amount
+              </button>
             </div>
-            <FormulaInput
-              value={allowanceInput}
-              onChange={setAllowanceInput}
-              onKeyDown={e => { if (e.key === 'Enter' && !getActiveToken(allowanceInput)) handleSubmit(); }}
-              placeholder="e.g. 300  or  $salary * 0.2  or  {Salary} * 0.3  or  [Groceries] * 0.1"
-              variables={variables}
-              categories={categories}
-              incomes={incomes}
-            />
-            {allowanceInput && isFormula && (
-              <div style={{ fontSize: 12, marginTop: 5, color: formulaResult !== null ? 'var(--good)' : 'var(--danger)' }}>
-                {formulaResult !== null ? `= ${fmt(formulaResult)}` : 'Invalid formula'}
+            {pacedAllowanceEnabled ? (
+              <div>
+                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>I can spend</label>
+                <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 86px 1fr', gap: 8 }}>
+                  <input className="glass-input" type="number" min="0" step="0.01" placeholder="15.00" value={pacedAllowanceAmount}
+                    onChange={e => setPacedAllowanceAmount(e.target.value)} />
+                  <input className="glass-input" type="number" min="1" step="1" value={pacedAllowanceInterval}
+                    onChange={e => setPacedAllowanceInterval(e.target.value)} />
+                  <select className="glass-input" value={pacedAllowanceUnit} onChange={e => setPacedAllowanceUnit(e.target.value)}>
+                    <option value="day">Day(s)</option>
+                    <option value="week">Week(s)</option>
+                    <option value="month">Month(s)</option>
+                  </select>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+                  {fmt(parseFloat(pacedAllowanceAmount) || 0)} every {pacedPeriodLabel}
+                  {' · '}
+                  this month: <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{fmt(pacedMonthlyAllowance)}</span>
+                </div>
               </div>
+            ) : (
+              <>
+                <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Allowance (£) or Formula</label>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, lineHeight: 1.5 }}>
+                  Plain number, or type{' '}
+                  <span style={{ color: 'var(--accent-mint)', fontFamily: 'monospace' }}>$</span> for variables,{' '}
+                  <span style={{ color: 'var(--accent-blue)', fontFamily: 'monospace' }}>[</span> for categories,{' '}
+                  <span style={{ color: 'var(--accent-purple)', fontFamily: 'monospace' }}>{'{' }</span> for incomes — autocomplete will appear.
+                </div>
+                <FormulaInput
+                  value={allowanceInput}
+                  onChange={setAllowanceInput}
+                  onKeyDown={e => { if (e.key === 'Enter' && !getActiveToken(allowanceInput)) handleSubmit(); }}
+                  placeholder="e.g. 300  or  $salary * 0.2  or  {Salary} * 0.3  or  [Groceries] * 0.1"
+                  variables={variables}
+                  categories={categories}
+                  incomes={incomes}
+                />
+                {allowanceInput && isFormula && (
+                  <div style={{ fontSize: 12, marginTop: 5, color: formulaResult !== null ? 'var(--good)' : 'var(--danger)' }}>
+                    {formulaResult !== null ? `= ${fmt(formulaResult)}` : 'Invalid formula'}
+                  </div>
+                )}
+              </>
             )}
           </div>
           <IncomeAllocationEditor
@@ -939,11 +1259,112 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
               ))}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-              disabled={!name.trim() || !allowanceInput || (isFormula && formulaResult === null) || !allocationValidation.isValid}>
+              disabled={!name.trim() || (pacedAllowanceEnabled ? !(parseFloat(pacedAllowanceAmount) > 0) : !allowanceInput) || (isFormula && formulaResult === null) || !allocationValidation.isValid}>
               Save Changes
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Add Subscription Modal ───────────────────────────────────────────────────
+export function AddSubscriptionModal({ categories = [], onAdd, onClose, subscription = null, onSave, defaultCategoryId = null }) {
+  const fallbackCategoryId = categories.some(category => Number(category.id) === Number(defaultCategoryId))
+    ? defaultCategoryId
+    : categories[0]?.id;
+  const [name, setName] = useState(subscription?.name || '');
+  const [amount, setAmount] = useState(subscription?.amount != null ? String(subscription.amount) : '');
+  const [catId, setCatId] = useState(subscription?.categoryId || fallbackCategoryId || '');
+  const [nextDueAt, setNextDueAt] = useState(format(subscription?.nextDueAt ? new Date(subscription.nextDueAt) : new Date(), 'yyyy-MM-dd'));
+  const [interval, setInterval] = useState(String(subscription?.interval || 1));
+  const [intervalUnit, setIntervalUnit] = useState(subscription?.intervalUnit || 'month');
+  const [manageUrl, setManageUrl] = useState(subscription?.manageUrl || '');
+  const [note, setNote] = useState(subscription?.note || '');
+  const [active, setActive] = useState(subscription?.active !== false);
+  const isEditing = Boolean(subscription);
+
+  const handleSubmit = () => {
+    if (!name.trim() || !amount || !catId || !(Number(interval) > 0)) return;
+    const data = {
+      name: name.trim(),
+      amount: parseFloat(amount),
+      categoryId: Number(catId),
+      nextDueAt: new Date(nextDueAt).toISOString(),
+      interval: Math.max(1, parseInt(interval) || 1),
+      intervalUnit,
+      manageUrl: manageUrl.trim(),
+      note: note.trim(),
+      active,
+    };
+    if (isEditing && onSave) {
+      onSave(subscription.id, data);
+    } else {
+      onAdd(data);
+    }
+    onClose();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal-box">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
+          <div className="font-display" style={{ fontSize: 22 }}>{isEditing ? 'Edit Subscription' : 'Add Subscription'}</div>
+          <button className="btn-icon" onClick={onClose} title="Close"><X size={15} /></button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Name</label>
+            <input className="glass-input" placeholder="e.g. Netflix" value={name}
+              onChange={e => setName(e.target.value)} autoFocus />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Category</label>
+            <CategorySelect categories={categories} value={String(catId)} onChange={setCatId} showAmounts />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Amount (£)</label>
+            <input className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
+              onChange={e => setAmount(e.target.value)} />
+          </div>
+          <DateInput value={nextDueAt} onChange={setNextDueAt} label="Next due date" />
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Repeats</label>
+            <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '96px 1fr', gap: 8 }}>
+              <input className="glass-input" type="number" min="1" step="1" value={interval}
+                onChange={e => setInterval(e.target.value)} />
+              <select className="glass-input" value={intervalUnit} onChange={e => setIntervalUnit(e.target.value)}>
+                <option value="day">Day(s)</option>
+                <option value="week">Week(s)</option>
+                <option value="month">Month(s)</option>
+                <option value="year">Year(s)</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Management link</label>
+            <input className="glass-input" type="url" placeholder="Optional, e.g. netflix.com/account" value={manageUrl}
+              onChange={e => setManageUrl(e.target.value)} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Note</label>
+            <input className="glass-input" placeholder="Optional" value={note}
+              onChange={e => setNote(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+            <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} />
+            Active
+          </label>
+          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+            <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
+              disabled={!name.trim() || !amount || !catId || !(Number(interval) > 0)}>
+              {isEditing ? 'Save Changes' : 'Add Subscription'}
             </button>
           </div>
         </div>
@@ -1000,7 +1421,7 @@ export function AddIncomeModal({ onAdd, onClose, income = null, onSave }) {
             resetFrequency={resetFrequency} setResetFrequency={setResetFrequency}
             payDayOfMonth={payDayOfMonth} setPayDayOfMonth={setPayDayOfMonth}
           />
-          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
               disabled={!name.trim() || !amount}>
@@ -1053,17 +1474,14 @@ export function AddOneOffIncomeModal({ onAdd, onClose }) {
               onChange={e => setAmount(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
           </div>
-          <div>
-            <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Date received</label>
-            <input className="glass-input" type="date" value={date} onChange={e => setDate(e.target.value)} />
-          </div>
+          <DateInput value={date} onChange={setDate} label="Date received" />
           <div>
             <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Note</label>
             <input className="glass-input" placeholder="Optional" value={note}
               onChange={e => setNote(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
           </div>
-          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
               disabled={!name.trim() || parsedAmount <= 0 || !date}>
@@ -1091,10 +1509,9 @@ export function FastForwardModal({ onConfirm, onClose }) {
           Got paid early? Set the actual date you received this income. This credits the active account and updates the next expected pay date.
         </div>
         <div style={{ marginBottom: 18 }}>
-          <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>Pay received date</label>
-          <input className="glass-input" type="date" value={date} onChange={e => setDate(e.target.value)} />
+          <DateInput value={date} onChange={setDate} label="Pay received date" />
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div className="modal-actions" style={{ display: 'flex', gap: 10 }}>
           <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
           <button className="btn-primary" onClick={() => { onConfirm(new Date(date).toISOString()); onClose(); }} style={{ flex: 2 }}>
             Mark as Received

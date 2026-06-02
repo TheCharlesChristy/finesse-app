@@ -1,17 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
-import { LayoutDashboard, ListOrdered, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
+import { CalendarDays, CreditCard, LayoutDashboard, ListOrdered, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
   getSettings, saveSettings, getCategories, addCategory, updateCategory, deleteCategory,
-  getTransactions, addTransaction, updateTransaction, deleteTransaction,
+  getTransactions, addTransaction, addTransactionsBulk, updateTransaction, deleteTransaction,
   getWishlistItems, addWishlistItem, updateWishlistItem, deleteWishlistItem,
   getWishlistCategories,
   addWishlistCategory, updateWishlistCategory, deleteWishlistCategory, exportData, importData,
   exportTransactionsCSV, clearAllData, resetBudget, resetCategory, resetCategoriesForIncome,
   addIncome, updateIncome, deleteIncome, getIncomeEvents, recordIncomeReceived, deleteIncomeEvent,
+  getSubscriptions, addSubscription, updateSubscription, deleteSubscription, processDueSubscriptions,
   addVariable, updateVariable, deleteVariable } from './db';
-import { calcNextReset, evaluateFormula, fmt } from './utils';
+import { calcNextReset, evaluateFormula, fmt, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal } from './utils';
 
 import Dashboard from './views/Dashboard';
 import Transactions from './views/Transactions';
@@ -19,10 +20,12 @@ import Forecasting from './views/Forecasting';
 import Wishlist from './views/Wishlist';
 import PurchaseCheck from './views/PurchaseCheck';
 import Accounts from './views/Accounts';
+import Calendar from './views/Calendar';
+import Subscriptions from './views/Subscriptions';
 import SettingsView from './views/Settings';
 import Variables from './views/Variables';
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
-  AddOneOffIncomeModal,
+  AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal } from './components/Modals';
 
 const NAV = [
@@ -30,6 +33,8 @@ const NAV = [
   { id: 'accounts',    label: 'Accounts',    Icon: Wallet },
   { id: 'transactions',label: 'Transactions', Icon: ListOrdered },
   { id: 'purchase',    label: 'Can I Purchase It', Icon: ShoppingCart },
+  { id: 'calendar',    label: 'Calendar',     Icon: CalendarDays },
+  { id: 'subscriptions', label: 'Subscriptions', Icon: CreditCard },
   { id: 'forecasting', label: 'Forecasting',  Icon: TrendingUp },
   { id: 'wishlist',    label: 'Wishlist',      Icon: ShoppingBag },
   { id: 'variables',   label: 'Variables',     Icon: SlidersHorizontal },
@@ -62,6 +67,7 @@ export default function App() {
   const [fastForwardIncomeId, setFastForwardIncomeId] = useState(null);
   const [editingCategory, setEditingCategory] = useState(null);
   const [editingIncome, setEditingIncome] = useState(null);
+  const [editingSubscription, setEditingSubscription] = useState(null);
   const [editingTransaction, setEditingTransaction] = useState(null);
   const [editingWishlistItem, setEditingWishlistItem] = useState(null);
   const [editingWishlistList, setEditingWishlistList] = useState(null);
@@ -101,6 +107,7 @@ export default function App() {
   const accountTransfers = useLiveQuery(() => db.accountTransfers.toArray(), []) || [];
   const incomeEvents = useLiveQuery(() => activeAccountId ? getIncomeEvents(activeAccountId) : [], [activeAccountId]) || [];
   const incomes   = useLiveQuery(() => activeAccountId ? db.incomes.where('accountId').equals(Number(activeAccountId)).toArray() : [], [activeAccountId]) || [];
+  const subscriptions = useLiveQuery(() => activeAccountId ? getSubscriptions(activeAccountId) : [], [activeAccountId]) || [];
   const variables = useLiveQuery(() => activeAccountId ? db.variables.where('accountId').equals(Number(activeAccountId)).toArray() : [], [activeAccountId]) || [];
 
   // Per-category auto-reset for legacy categories without income funding.
@@ -116,6 +123,29 @@ export default function App() {
       }
     })();
   }, [categories]);
+
+  // Paced allowance categories derive their period allowance from a repeating amount.
+  useEffect(() => {
+    if (!categories.length) return;
+    (async () => {
+      for (const cat of categories) {
+        const pace = getPacedAllowanceConfig(cat);
+        if (!pace) continue;
+        const expectedAllowance = getPacedAllowanceMonthlyTotal(pace.amount, pace.interval, pace.unit);
+        if (Math.abs((Number(cat.allowance) || 0) - expectedAllowance) > 0.005) {
+          await updateCategory(cat.id, { allowance: expectedAllowance });
+        }
+      }
+    })();
+  }, [categories]);
+
+  // Subscriptions are logged automatically when their due date arrives.
+  useEffect(() => {
+    if (!activeAccountId || !subscriptions.length) return;
+    processDueSubscriptions(activeAccountId).catch(error => {
+      console.error('Failed to process due subscriptions', error);
+    });
+  }, [activeAccountId, subscriptions]);
 
   // Income auto-reset: funded categories reset when their associated income resets.
   useEffect(() => {
@@ -199,6 +229,8 @@ export default function App() {
     setModal(null);
   }, [pendingImport]);
 
+  const handleSaveSettings = useCallback((data) => saveSettings(data, activeAccountId), [activeAccountId]);
+
   const handleFullReset = useCallback(async () => {
     await clearAllData();
     localStorage.removeItem('finesse.activeAccountId');
@@ -259,6 +291,20 @@ export default function App() {
     }
   }, [categories]);
 
+  const handleAddSubscription = useCallback((subscription) => addSubscription(subscription, activeAccountId), [activeAccountId]);
+  const handleEditSubscription = useCallback((subscription) => {
+    setEditingSubscription(subscription);
+    setModal('editSubscription');
+  }, []);
+  const handleUpdateSubscription = useCallback((id, data) => updateSubscription(id, data), []);
+  const handleDeleteSubscription = useCallback(async (subscription) => {
+    if (!window.confirm(`Delete subscription "${subscription.name}"? Past logged expenses will stay.`)) return;
+    await deleteSubscription(subscription.id);
+  }, []);
+  const handleToggleSubscription = useCallback((subscription) => {
+    updateSubscription(subscription.id, { active: subscription.active === false });
+  }, []);
+
   // ── Category handlers ────────────────────────────────────────────────────
   const handleEditCategory = useCallback((cat) => {
     setEditingCategory(cat);
@@ -269,6 +315,10 @@ export default function App() {
     setEditingTransaction(transaction);
     setModal('editTx');
   }, []);
+
+  const handleBulkAddExpenses = useCallback((data) => (
+    addTransactionsBulk({ ...data, accountId: activeAccountId })
+  ), [activeAccountId]);
 
   const handleEditWishlistItem = useCallback((item) => {
     setEditingWishlistItem(item);
@@ -385,6 +435,7 @@ export default function App() {
               onAddCategory={() => setModal('addCategory')}
               onAddIncome={() => setModal('addIncome')}
               onAddOneOffIncome={() => setModal('addOneOffIncome')}
+              onAddSubscription={() => setModal('addSubscription')}
               onIncomeHoldToggle={handleIncomeHoldToggle}
               onIncomeFastForward={(id) => { setFastForwardIncomeId(id); setModal('fastForwardIncome'); }}
               onEditIncome={handleEditIncome}
@@ -409,13 +460,36 @@ export default function App() {
           )}
           {view === 'transactions' && (
             <Transactions transactions={transactions} categories={categories}
-              onDelete={deleteTransaction} onEdit={handleEditTransaction} onAdd={() => setModal('addTx')} />
+              onDelete={deleteTransaction} onEdit={handleEditTransaction} onAdd={() => setModal('addTx')}
+              onBulkAdd={() => setModal('bulkAddTx')}
+              onAddSubscription={() => setModal('addSubscription')} />
           )}
           {view === 'forecasting' && (
             <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes} />
           )}
           {view === 'purchase' && (
             <PurchaseCheck categories={categories} onLogPurchase={handleLogPurchase} />
+          )}
+          {view === 'calendar' && (
+            <Calendar
+              categories={categories}
+              incomes={incomes}
+              subscriptions={subscriptions}
+              onAddSubscription={() => setModal('addSubscription')}
+              onEditSubscription={handleEditSubscription}
+              onDeleteSubscription={handleDeleteSubscription}
+              onToggleSubscription={handleToggleSubscription}
+            />
+          )}
+          {view === 'subscriptions' && (
+            <Subscriptions
+              categories={categories}
+              subscriptions={subscriptions}
+              onAddSubscription={() => setModal('addSubscription')}
+              onEditSubscription={handleEditSubscription}
+              onDeleteSubscription={handleDeleteSubscription}
+              onToggleSubscription={handleToggleSubscription}
+            />
           )}
           {view === 'wishlist' && (
             <Wishlist items={wishlistItems} wishlistCategories={wishlistCategories}
@@ -439,6 +513,7 @@ export default function App() {
           {view === 'settings' && (
             <SettingsView onExport={handleExport} onExportCSV={handleExportCSV}
               onImport={handleImport} onResetBudget={() => resetBudget(activeAccountId)}
+              categories={categories} settings={settings} onSaveSettings={handleSaveSettings}
               incomes={incomes} onResetIncome={(incomeId) => resetCategoriesForIncome(incomeId, undefined, activeAccountId)}
               onFullReset={handleFullReset} />
           )}
@@ -463,6 +538,23 @@ export default function App() {
       {modal === 'addIncome' && (
         <AddIncomeModal onAdd={(data) => addIncome(data, activeAccountId)} onClose={() => setModal(null)} />
       )}
+      {modal === 'addSubscription' && (
+        <AddSubscriptionModal
+          categories={categories}
+          defaultCategoryId={settings?.defaultCategoryId}
+          onAdd={handleAddSubscription}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal === 'editSubscription' && editingSubscription && (
+        <AddSubscriptionModal
+          categories={categories}
+          subscription={editingSubscription}
+          defaultCategoryId={settings?.defaultCategoryId}
+          onSave={(id, data) => { handleUpdateSubscription(id, data); setModal(null); setEditingSubscription(null); }}
+          onClose={() => { setModal(null); setEditingSubscription(null); }}
+        />
+      )}
       {modal === 'addOneOffIncome' && (
         <AddOneOffIncomeModal onAdd={handleAddOneOffIncome} onClose={() => setModal(null)} />
       )}
@@ -484,7 +576,16 @@ export default function App() {
           categories={categories}
           onAdd={(data) => addTransaction({ ...data, accountId: activeAccountId })}
           initial={transactionDefaults}
+          defaultCategoryId={settings?.defaultCategoryId}
           onClose={() => { setModal(null); setTransactionDefaults(null); }}
+        />
+      )}
+      {modal === 'bulkAddTx' && categories.length > 0 && (
+        <BulkAddExpensesModal
+          categories={categories}
+          defaultCategoryId={settings?.defaultCategoryId}
+          onAdd={handleBulkAddExpenses}
+          onClose={() => setModal(null)}
         />
       )}
       {modal === 'editTx' && editingTransaction && categories.length > 0 && (
@@ -492,10 +593,11 @@ export default function App() {
           categories={categories}
           transaction={editingTransaction}
           onSave={(id, data) => { updateTransaction(id, data); setModal(null); setEditingTransaction(null); }}
+          defaultCategoryId={settings?.defaultCategoryId}
           onClose={() => { setModal(null); setEditingTransaction(null); }}
         />
       )}
-      {modal === 'addTx' && categories.length === 0 && (
+      {(modal === 'addTx' || modal === 'bulkAddTx') && categories.length === 0 && (
         <div className="modal-overlay" onClick={() => setModal(null)}>
           <div className="modal-box" style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 10 }}>No categories yet</div>

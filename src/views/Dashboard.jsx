@@ -1,12 +1,11 @@
 import { useMemo, useState } from 'react';
-import { TrendingUp, TrendingDown, AlertCircle, Zap, Clock, Pencil, Trash2, Gift } from 'lucide-react';
+import { AlertCircle, Zap, Clock, Pencil, Trash2, Gift, CreditCard } from 'lucide-react';
 import {
   fmt,
-  projectedEndBalance,
-  fmtShort,
   calcNextReset,
   getAllocationPercentTotal,
   getIncomeAllocationUsage,
+  getPacedAllowanceStatus,
   normalizeIncomeAllocations,
 } from '../utils';
 import { format } from 'date-fns';
@@ -26,7 +25,7 @@ function ordinal(n) {
 
 export default function Dashboard({
   categories, settings, transactions, incomes = [],
-  onAddTx, onAddCategory, onAddIncome, onAddOneOffIncome,
+  onAddTx, onAddCategory, onAddIncome, onAddOneOffIncome, onAddSubscription,
   onIncomeHoldToggle, onIncomeFastForward,
   onEditIncome, onDeleteIncome,
   onEditCategory, onDeleteCategory,
@@ -42,7 +41,6 @@ export default function Dashboard({
   const totalAllowances = categories.reduce((s, c) => s + (c.allowance || 0), 0);
   const totalSpent      = categories.reduce((s, c) => s + (c.spent || 0), 0);
   const totalLeft       = totalAllowances - totalSpent;
-  const projBalance     = projectedEndBalance(categories, settings, incomes);
   const overBudgetCats  = categories.filter(c => (c.spent || 0) > (c.allowance || 0));
   const incomeUsage     = useMemo(() => getIncomeAllocationUsage(incomes, categories), [incomes, categories]);
   const incomeMap       = useMemo(() => new Map(incomes.map(income => [Number(income.id), income])), [incomes]);
@@ -69,52 +67,47 @@ export default function Dashboard({
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
-      {/* ── Header cards ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
-        <div className="glass" style={{ borderRadius: 18, padding: '20px 22px' }}>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 500, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Monthly Income</div>
-          <div className="font-display" style={{ fontSize: 32, letterSpacing: '-0.02em', color: 'var(--accent-mint)' }}>{fmt(totalIncome)}</div>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>
-            {fmt(totalAllowances)} allocated · {fmt(totalIncome - totalAllowances)} unallocated
+      {/* ── Budget Summary ── */}
+      <div className="glass dashboard-summary-card">
+        <div className="dashboard-summary-grid">
+          <div>
+            <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 700, marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Monthly Income</div>
+            <div className="font-display dashboard-summary-value" style={{ color: 'var(--accent-mint)' }}>{fmt(totalIncome)}</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
+              {fmt(totalAllowances)} allocated · {fmt(totalIncome - totalAllowances)} unallocated
+            </div>
           </div>
+
+          <div>
+            <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 700, marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Budget Remaining</div>
+            <div className="font-display dashboard-summary-value" style={{ color: totalLeft < 0 ? 'var(--danger)' : 'var(--text-primary)' }}>{fmt(totalLeft)}</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
+              {fmt(totalSpent)} spent · {spendPct.toFixed(0)}%
+            </div>
+          </div>
+        </div>
+
+        <div className="dashboard-summary-bars">
           {totalIncome > 0 && (
-            <div style={{ marginTop: 12 }}>
-              <div style={{ display: 'flex', height: 7, borderRadius: 99, overflow: 'hidden', background: 'rgba(255,255,255,0.06)', gap: 1 }}>
+            <div>
+              <div style={{ display: 'flex', height: 6, borderRadius: 99, overflow: 'hidden', background: 'rgba(255,255,255,0.06)', gap: 1 }}>
                 {categories.filter(c => (c.allowance || 0) > 0).map(cat => (
                   <div key={cat.id} title={`${cat.name}: ${fmt(cat.allowance)}`}
                     style={{ width: `${Math.min(100, (cat.allowance / totalIncome) * 100)}%`, background: cat.color || 'var(--accent-blue)', height: '100%', minWidth: 2 }} />
                 ))}
               </div>
-              <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 5 }}>
+              <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 4 }}>
                 {totalAllowances > totalIncome
-                  ? <span style={{ color: 'var(--danger)' }}>⚠ {((totalAllowances / totalIncome) * 100).toFixed(0)}% — over-allocated</span>
+                  ? <span style={{ color: 'var(--danger)' }}>⚠ {((totalAllowances / totalIncome) * 100).toFixed(0)}% over-allocated</span>
                   : `${((totalAllowances / totalIncome) * 100).toFixed(0)}% of income allocated`}
               </div>
             </div>
           )}
-        </div>
-
-        <div className="glass" style={{ borderRadius: 18, padding: '20px 22px' }}>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 500, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Budget Remaining</div>
-          <div className="font-display" style={{ fontSize: 32, letterSpacing: '-0.02em', color: totalLeft < 0 ? 'var(--danger)' : 'var(--text-primary)' }}>
-            {fmt(totalLeft)}
-          </div>
-          <div style={{ marginTop: 10 }}>
-            <div className="progress-track">
+          <div>
+            <div className="progress-track" style={{ height: 6 }}>
               <div className="progress-fill" style={{ width: `${spendPct}%`, background: spendColor }} />
             </div>
-            <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 5 }}>{spendPct.toFixed(0)}% spent</div>
-          </div>
-        </div>
-
-        <div className="glass" style={{ borderRadius: 18, padding: '20px 22px' }}>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 500, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Projected End Balance</div>
-          <div className="font-display" style={{ fontSize: 32, letterSpacing: '-0.02em', color: projBalance < 0 ? 'var(--danger)' : 'var(--accent-blue)' }}>
-            {fmtShort(projBalance)}
-          </div>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
-            {projBalance >= 0 ? <TrendingUp size={12} color="var(--good)" /> : <TrendingDown size={12} color="var(--danger)" />}
-            Based on current burn rate
+            <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 4 }}>Allowance spent</div>
           </div>
         </div>
       </div>
@@ -139,10 +132,10 @@ export default function Dashboard({
       )}
 
       {/* ── Income Sources ── */}
-      <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+        <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12 }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>Income Sources</div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <div className="mobile-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             <button className="btn-secondary" onClick={onAddOneOffIncome}
               style={{ padding: '7px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
               <Gift size={12} /> One-Off
@@ -168,12 +161,8 @@ export default function Dashboard({
               const free = (income.amount || 0) - used;
               const usedPct = income.amount > 0 ? Math.min(100, (used / income.amount) * 100) : 0;
               return (
-                <div key={income.id} style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  padding: '12px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: 12,
-                  flexWrap: 'wrap', gap: 10,
-                }}>
-                  <div>
+                <div key={income.id} className="dashboard-income-row">
+                  <div className="dashboard-income-main">
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
                       <span style={{ fontSize: 13, fontWeight: 600 }}>{income.name}</span>
                       {income.holdActive && (
@@ -188,30 +177,32 @@ export default function Dashboard({
                     <div style={{ fontSize: 11, color: free < 0 ? 'var(--danger)' : 'var(--text-muted)', marginTop: 3 }}>
                       {fmt(used)} allocated · {fmt(free)} free
                     </div>
-                    <div className="progress-track" style={{ height: 4, marginTop: 7, maxWidth: 230 }}>
+                    <div className="progress-track dashboard-income-progress" style={{ height: 4, marginTop: 7 }}>
                       <div className="progress-fill" style={{ width: `${usedPct}%`, background: free < 0 ? 'var(--danger)' : 'var(--accent-mint)' }} />
                     </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div className="dashboard-income-side">
                     <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--accent-mint)' }}>
                       {fmt(income.amount || 0)}
                     </span>
-                    <button className="btn-secondary" onClick={() => onIncomeFastForward(income.id)}
-                      style={{ padding: '5px 10px', fontSize: 11, borderRadius: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Zap size={11} /> Early
-                    </button>
-                    <button className="btn-secondary" onClick={() => onIncomeHoldToggle(income.id)}
-                      style={{ padding: '5px 10px', fontSize: 11, borderRadius: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Clock size={11} /> {income.holdActive ? 'Unhold' : 'Hold'}
-                    </button>
-                    <button className="btn-icon" onClick={() => onEditIncome(income)} title="Edit income"
-                      style={{ width: 28, height: 28, opacity: 0.65 }}>
-                      <Pencil size={12} />
-                    </button>
-                    <button className="btn-icon" onClick={() => onDeleteIncome(income)} title="Delete income"
-                      style={{ width: 28, height: 28, opacity: 0.5 }}>
-                      <Trash2 size={12} />
-                    </button>
+                    <div className="dashboard-income-actions">
+                      <button className="btn-secondary dashboard-income-quick" onClick={() => onIncomeFastForward(income.id)}>
+                        <Zap size={11} /> Early
+                      </button>
+                      <button className="btn-secondary dashboard-income-quick" onClick={() => onIncomeHoldToggle(income.id)}>
+                        <Clock size={11} /> {income.holdActive ? 'Unhold' : 'Hold'}
+                      </button>
+                    </div>
+                    <div className="dashboard-income-icon-actions">
+                      <button className="btn-icon" onClick={() => onEditIncome(income)} title="Edit income"
+                        style={{ width: 28, height: 28, opacity: 0.65 }}>
+                        <Pencil size={12} />
+                      </button>
+                      <button className="btn-icon" onClick={() => onDeleteIncome(income)} title="Delete income"
+                        style={{ width: 28, height: 28, opacity: 0.5 }}>
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -228,14 +219,19 @@ export default function Dashboard({
       </div>
 
       {/* ── Category Breakdown ── */}
-      <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+        <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12 }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>Category Breakdown</div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div className="mobile-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button className="btn-secondary" onClick={onAddCategory} disabled={incomes.length === 0}
               title={incomes.length === 0 ? 'Add an income before creating categories' : 'Add category'}
               style={{ padding: '7px 14px', fontSize: 12 }}>
               + Category
+            </button>
+            <button className="btn-secondary" onClick={onAddSubscription} disabled={categories.length === 0}
+              title={categories.length === 0 ? 'Add a category before creating subscriptions' : 'Add subscription'}
+              style={{ padding: '7px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <CreditCard size={12} /> Subscription
             </button>
             <button className="btn-primary" onClick={onAddTx} style={{ padding: '7px 14px', fontSize: 12 }}>
               + Log Expense
@@ -265,15 +261,16 @@ export default function Dashboard({
               const fundingOk = allocations.length > 0
                 && Math.abs(allocationTotal - 100) <= 0.01
                 && allocations.every(allocation => incomeMap.has(allocation.incomeId));
+              const pacedStatus = getPacedAllowanceStatus(cat);
               return (
                 <div key={cat.id}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                       <div style={{ width: 8, height: 8, borderRadius: '50%', background: cat.color || 'var(--accent-blue)', flexShrink: 0 }} />
                       <div style={{ minWidth: 0 }}>
                         <span style={{ fontSize: 13, fontWeight: 500 }}>{cat.name}</span>
-                        {(allocations.length > 0 || cat.resetFrequency || cat.allowanceFormula || !fundingOk) && (
-                          <div style={{ display: 'flex', gap: 5, marginTop: 2 }}>
+                        {(allocations.length > 0 || cat.resetFrequency || cat.allowanceFormula || pacedStatus || !fundingOk) && (
+                          <div style={{ display: 'flex', gap: 5, marginTop: 2, flexWrap: 'wrap' }}>
                             {allocations.length > 0 ? (
                               <span title={fundingLabel} style={{
                                 fontSize: 10,
@@ -302,12 +299,23 @@ export default function Dashboard({
                                 ƒ formula
                               </span>
                             )}
+                            {pacedStatus && (
+                              <span title={`${fmt(pacedStatus.paceBalance)} ${pacedStatus.paceBalance >= 0 ? 'ahead' : 'behind'} pace`} style={{
+                                fontSize: 10,
+                                color: pacedStatus.availablePerPeriod >= pacedStatus.amount ? 'var(--good)' : pacedStatus.availablePerPeriod > 0 ? 'var(--warn)' : 'var(--danger)',
+                                background: 'rgba(255,255,255,0.06)',
+                                padding: '1px 6px',
+                                borderRadius: 10,
+                              }}>
+                                {fmt(Math.max(0, pacedStatus.availablePerPeriod))}/{pacedStatus.periodLabel}
+                              </span>
+                            )}
                           </div>
                         )}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                      <div style={{ display: 'flex', gap: 10, fontSize: 12 }}>
+                    <div className="mobile-actions" style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: 10, fontSize: 12, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                         <span style={{ color: 'var(--text-muted)' }}>{fmt(cat.spent || 0)} / {fmt(cat.allowance || 0)}</span>
                         <span style={{ color: left < 0 ? 'var(--danger)' : 'var(--text-secondary)', fontWeight: 500, minWidth: 56, textAlign: 'right' }}>
                           {left < 0 ? '-' : ''}{fmt(Math.abs(left))} left
@@ -342,15 +350,15 @@ export default function Dashboard({
 
       {/* ── Recent Transactions ── */}
       {recentTxs.length > 0 && (
-        <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 14 }}>Recent Transactions</div>
           <div style={{ maxHeight: 400, overflowY: 'auto', paddingRight: 4, display: 'flex', flexDirection: 'column', gap: 10 }}>
             {recentTxs.map(tx => (
-              <div key={tx.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div key={tx.id} className="mobile-list-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: 10 }}>
+                <div className="mobile-list-main" style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
                   <div style={{ width: 8, height: 8, borderRadius: '50%', background: tx.cat?.color || 'var(--accent-blue)', flexShrink: 0 }} />
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 500 }}>{tx.note || tx.cat?.name || 'Expense'}</div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.note || tx.cat?.name || 'Expense'}</div>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{tx.cat?.name} · {format(new Date(tx.date), 'd MMM')}</div>
                   </div>
                 </div>

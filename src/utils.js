@@ -1,4 +1,4 @@
-import { addMonths, addWeeks, setDate, isAfter, isBefore, differenceInDays, format, startOfDay } from 'date-fns';
+import { addDays, addMonths, addWeeks, addYears, getDate, getDaysInMonth, setDate, isAfter, isBefore, differenceInDays, format, startOfDay } from 'date-fns';
 
 // ── Schedule helpers ─────────────────────────────────────────────────────────
 
@@ -62,6 +62,33 @@ export function calcNextReset(resetFrequency, payDayOfMonth, fromDate = new Date
   }
 }
 
+export function addRecurringInterval(fromDate = new Date(), intervalUnit = 'month', interval = 1) {
+  const base = startOfDay(fromDate);
+  const amount = Math.max(1, Number(interval) || 1);
+
+  switch (intervalUnit) {
+    case 'day':
+      return addDays(base, amount);
+    case 'week':
+      return addWeeks(base, amount);
+    case 'year':
+      return addYears(base, amount);
+    case 'month':
+    default:
+      return addMonths(base, amount);
+  }
+}
+
+export function getNextRecurringDate(fromDate = new Date(), intervalUnit = 'month', interval = 1, now = new Date()) {
+  let next = addRecurringInterval(fromDate, intervalUnit, interval);
+  let guard = 0;
+  while (next <= now && guard < 240) {
+    next = addRecurringInterval(next, intervalUnit, interval);
+    guard += 1;
+  }
+  return next;
+}
+
 // ── Income allocation helpers ────────────────────────────────────────────────
 
 export function roundMoney(value) {
@@ -116,6 +143,79 @@ export function getIncomeAllocationUsage(incomes = [], categories = [], excludeC
 export function categoryUsesIncome(category, incomeId) {
   return normalizeIncomeAllocations(category?.incomeAllocations)
     .some(allocation => allocation.incomeId === Number(incomeId));
+}
+
+export function getPacedAllowanceConfig(category) {
+  const enabled = Boolean(category?.pacedAllowanceEnabled || category?.dailyAllowanceEnabled);
+  if (!enabled) return null;
+
+  const amount = roundMoney(category.pacedAllowanceAmount ?? category.dailyAllowanceAmount);
+  if (!(amount > 0)) return null;
+
+  return {
+    amount,
+    interval: Math.max(1, Number(category.pacedAllowanceInterval) || 1),
+    unit: category.pacedAllowanceUnit || 'day',
+  };
+}
+
+export function getPacedAllowanceIntervalDays(interval = 1, unit = 'day', date = new Date()) {
+  const amount = Math.max(1, Number(interval) || 1);
+  if (unit === 'week') return amount * 7;
+  if (unit === 'month') return amount * getDaysInMonth(date);
+  return amount;
+}
+
+export function getPacedAllowanceMonthlyTotal(amount, interval = 1, unit = 'day', date = new Date()) {
+  const intervalDays = getPacedAllowanceIntervalDays(interval, unit, date);
+  const daysInMonth = getDaysInMonth(date);
+  return roundMoney((Number(amount) || 0) * (daysInMonth / intervalDays));
+}
+
+export function formatPacedAllowancePeriod(interval = 1, unit = 'day') {
+  const amount = Math.max(1, Number(interval) || 1);
+  if (amount === 1) {
+    if (unit === 'week') return 'week';
+    if (unit === 'month') return 'month';
+    return 'day';
+  }
+  if (unit === 'week') return `${amount} weeks`;
+  if (unit === 'month') return `${amount} months`;
+  return `${amount} days`;
+}
+
+export function getPacedAllowanceStatus(category, date = new Date()) {
+  const config = getPacedAllowanceConfig(category);
+  if (!config) return null;
+
+  const day = getDate(date);
+  const daysInMonth = getDaysInMonth(date);
+  const intervalDays = getPacedAllowanceIntervalDays(config.interval, config.unit, date);
+  const allowance = roundMoney(category.allowance || getPacedAllowanceMonthlyTotal(config.amount, config.interval, config.unit, date));
+  const spent = roundMoney(category.spent || 0);
+  const allowedToDate = roundMoney(allowance * (day / daysInMonth));
+  const paceBalance = roundMoney(allowedToDate - spent);
+  const remaining = roundMoney(allowance - spent);
+  const daysRemaining = Math.max(1, daysInMonth - day + 1);
+  const periodsRemaining = Math.max(1, daysRemaining / intervalDays);
+
+  return {
+    amount: config.amount,
+    interval: config.interval,
+    unit: config.unit,
+    intervalDays,
+    periodLabel: formatPacedAllowancePeriod(config.interval, config.unit),
+    allowedToDate,
+    paceBalance,
+    remaining,
+    daysRemaining,
+    availablePerDay: roundMoney(remaining / daysRemaining),
+    availablePerPeriod: roundMoney(remaining / periodsRemaining),
+  };
+}
+
+export function getDailyAllowanceStatus(category, date = new Date()) {
+  return getPacedAllowanceStatus(category, date);
 }
 
 /**

@@ -137,7 +137,7 @@ export default function Forecasting({ categories, settings, transactions, income
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
       {/* ── Key projections ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
+      <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
         <div className="glass" style={{ borderRadius: 16, padding: '18px 20px' }}>
           <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Daily Burn Rate</div>
           <div className="font-display" style={{ fontSize: 28, color: 'var(--accent-warm)' }}>{fmt(totalDailyBurn)}</div>
@@ -165,14 +165,14 @@ export default function Forecasting({ categories, settings, transactions, income
 
       {/* ── Income reset schedule ── */}
       {incomeResetSchedule.length > 0 && (
-        <div className="glass" style={{ borderRadius: 18, padding: '20px 22px' }}>
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Income Reset Schedule</div>
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 14 }}>
             Category spend resets follow the income source that funds each category.
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {incomeResetSchedule.map((entry, i) => (
-              <div key={entry.income.id} style={{
+              <div key={entry.income.id} className="mobile-stack" style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
                 gap: 12,
@@ -199,7 +199,7 @@ export default function Forecasting({ categories, settings, transactions, income
                     ? `${format(entry.next, 'd MMM yyyy')} · ${entry.days}d`
                     : entry.held ? 'Reset held' : 'Not scheduled'}
                 </div>
-                <div style={{ fontSize: 12, textAlign: 'right', color: 'var(--text-muted)' }}>
+                <div className="mobile-center-left" style={{ fontSize: 12, textAlign: 'right', color: 'var(--text-muted)' }}>
                   <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{fmt(entry.allocated)}</span>
                   {' '}across {entry.linkedCategories.length} categor{entry.linkedCategories.length === 1 ? 'y' : 'ies'}
                 </div>
@@ -211,11 +211,11 @@ export default function Forecasting({ categories, settings, transactions, income
 
       {/* ── Pie charts ── */}
       {(totalAllowances > 0 || allocationData.length > 0) && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
+        <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
 
           {/* Donut: budget used vs remaining */}
           {totalAllowances > 0 && (
-            <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
+            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Budget Usage</div>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>Spent vs remaining allowance</div>
               <div style={{ position: 'relative' }}>
@@ -248,7 +248,7 @@ export default function Forecasting({ categories, settings, transactions, income
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>used</div>
                 </div>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'center', gap: 20, marginTop: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'center', gap: 20, marginTop: 8, flexWrap: 'wrap' }}>
                 {budgetDonutData.map(d => (
                   <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
                     <div style={{ width: 8, height: 8, borderRadius: '50%', background: d.color, flexShrink: 0 }} />
@@ -262,10 +262,10 @@ export default function Forecasting({ categories, settings, transactions, income
 
           {/* Pie: category allocation */}
           {allocationData.length > 0 && (
-            <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
+            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Category Allocation</div>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>How allowance is split across categories</div>
-              <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+              <div className="mobile-row-stack" style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
                 <div style={{ flexShrink: 0 }}>
                   <ResponsiveContainer width={150} height={150}>
                     <PieChart>
@@ -325,62 +325,66 @@ export default function Forecasting({ categories, settings, transactions, income
 
       {/* ── Projected vs Allowance ── */}
       {projVsAllowance.length > 0 && (
-        <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Projected Spend vs Allowance</div>
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>Where you'll end up this period if spending continues at current rate</div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={projVsAllowance} barGap={4} barCategoryGap="30%">
-              <CartesianGrid vertical={false} />
-              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-              <YAxis tickFormatter={v => `£${v}`} />
-              <Tooltip content={<GlassTooltip />} />
-              <Legend wrapperStyle={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }} />
-              <Bar dataKey="Allowance" fill="rgba(255,255,255,0.1)" radius={[6,6,0,0]} />
-              <Bar dataKey="Spent"     fill="#5db8ff"              radius={[6,6,0,0]} />
-              <Bar dataKey="Projected" fill="#fbbf70" opacity={0.7} radius={[6,6,0,0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <div className="mobile-chart-scroll">
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={projVsAllowance} barGap={4} barCategoryGap="30%">
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <YAxis tickFormatter={v => `£${v}`} />
+                <Tooltip content={<GlassTooltip />} />
+                <Legend wrapperStyle={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }} />
+                <Bar dataKey="Allowance" fill="rgba(255,255,255,0.1)" radius={[6,6,0,0]} />
+                <Bar dataKey="Spent"     fill="#5db8ff"              radius={[6,6,0,0]} />
+                <Bar dataKey="Projected" fill="#fbbf70" opacity={0.7} radius={[6,6,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       )}
 
       {/* ── Monthly history ── */}
       {monthlyHistory.length > 1 && (
-        <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Spend History by Category</div>
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>Last 6 months</div>
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={monthlyHistory}>
-              <defs>
+          <div className="mobile-chart-scroll">
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={monthlyHistory}>
+                <defs>
+                  {categories.map((cat, i) => (
+                    <linearGradient key={cat.id} id={`grad-${cat.id}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor={COLORS[i % COLORS.length]} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={COLORS[i % COLORS.length]} stopOpacity={0.02} />
+                    </linearGradient>
+                  ))}
+                </defs>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="month" />
+                <YAxis tickFormatter={v => `£${v}`} />
+                <Tooltip content={<GlassTooltip />} />
+                <Legend wrapperStyle={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }} />
                 {categories.map((cat, i) => (
-                  <linearGradient key={cat.id} id={`grad-${cat.id}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor={COLORS[i % COLORS.length]} stopOpacity={0.3} />
-                    <stop offset="95%" stopColor={COLORS[i % COLORS.length]} stopOpacity={0.02} />
-                  </linearGradient>
+                  <Area key={cat.id} type="monotone" dataKey={cat.name}
+                    stroke={COLORS[i % COLORS.length]} strokeWidth={2}
+                    fill={`url(#grad-${cat.id})`} />
                 ))}
-              </defs>
-              <CartesianGrid vertical={false} />
-              <XAxis dataKey="month" />
-              <YAxis tickFormatter={v => `£${v}`} />
-              <Tooltip content={<GlassTooltip />} />
-              <Legend wrapperStyle={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }} />
-              {categories.map((cat, i) => (
-                <Area key={cat.id} type="monotone" dataKey={cat.name}
-                  stroke={COLORS[i % COLORS.length]} strokeWidth={2}
-                  fill={`url(#grad-${cat.id})`} />
-              ))}
-            </AreaChart>
-          </ResponsiveContainer>
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       )}
 
       {/* ── Daily burn rate ── */}
       {burnData.length > 0 && (
-        <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Daily Burn Rate by Category</div>
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>Average spend per day this period</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {burnData.map(d => (
-              <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div key={d.name} className="mobile-row-stack" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <div style={{ width: 120, fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0 }}>{d.name}</div>
                 <div style={{ flex: 1 }}>
                   <div className="progress-track">

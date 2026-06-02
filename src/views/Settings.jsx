@@ -1,7 +1,19 @@
 import { useMemo, useState } from 'react';
 import { Download, Upload, FileText, RefreshCcw, Trash2 } from 'lucide-react';
+import CategorySelect from '../components/CategorySelect';
 
-export default function Settings({ onExport, onImport, onExportCSV, onResetBudget, incomes = [], onResetIncome, onFullReset }) {
+export default function Settings({
+  onExport,
+  onImport,
+  onExportCSV,
+  onResetBudget,
+  incomes = [],
+  categories = [],
+  settings,
+  onResetIncome,
+  onSaveSettings,
+  onFullReset,
+}) {
   const [resetIncomeId, setResetIncomeId] = useState('');
   const [resetStatus, setResetStatus] = useState('');
   const [fullResetStatus, setFullResetStatus] = useState('');
@@ -41,6 +53,13 @@ export default function Settings({ onExport, onImport, onExportCSV, onResetBudge
     setResetStatus(`${count} categor${count === 1 ? 'y' : 'ies'} reset for ${selectedIncome.name}.`);
   };
 
+  const handleDefaultCategoryChange = (categoryId) => {
+    onSaveSettings?.({
+      ...(settings || {}),
+      defaultCategoryId: categoryId ? Number(categoryId) : null,
+    });
+  };
+
   const handleFullReset = async () => {
     if (!onFullReset) return;
 
@@ -62,7 +81,7 @@ export default function Settings({ onExport, onImport, onExportCSV, onResetBudge
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Budget reset */}
-      <div className="glass" style={{ borderRadius: 18, padding: '24px' }}>
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
         <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Manual Budget Reset</div>
         <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14 }}>
           Resets every category spend counter to zero. Transactions are kept for history.
@@ -72,8 +91,31 @@ export default function Settings({ onExport, onImport, onExportCSV, onResetBudge
         </button>
       </div>
 
+      {/* Preferences */}
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Expense Defaults</div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14 }}>
+          Choose which category is selected first when logging a new expense.
+        </div>
+        {categories.length > 0 ? (
+          <div style={{ maxWidth: 360 }}>
+            <CategorySelect
+              categories={categories}
+              value={settings?.defaultCategoryId ? String(settings.defaultCategoryId) : ''}
+              onChange={handleDefaultCategoryChange}
+              placeholder="No default selected"
+              showAmounts
+            />
+          </div>
+        ) : (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            Add categories on the Dashboard to choose a default expense category.
+          </div>
+        )}
+      </div>
+
       {/* Income reset */}
-      <div className="glass" style={{ borderRadius: 18, padding: '24px' }}>
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
         <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Reset by Income</div>
         <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14 }}>
           Reset only the categories covered by a specific income source.
@@ -85,14 +127,14 @@ export default function Settings({ onExport, onImport, onExportCSV, onResetBudge
           </div>
         ) : (
           <>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div className="mobile-row-stack" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
               <select className="glass-input" value={selectedIncomeId} onChange={e => { setResetIncomeId(e.target.value); setResetStatus(''); }}
                 style={{ flex: '1 1 220px', maxWidth: 320 }}>
                 {incomes.map(income => (
                   <option key={income.id} value={income.id}>{income.name}</option>
                 ))}
               </select>
-              <button className="btn-secondary" onClick={handleIncomeReset}
+              <button className="btn-secondary mobile-full" onClick={handleIncomeReset}
                 style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
                 <RefreshCcw size={14} /> Reset Funded Categories
               </button>
@@ -107,12 +149,12 @@ export default function Settings({ onExport, onImport, onExportCSV, onResetBudge
       </div>
 
       {/* Data management */}
-      <div className="glass" style={{ borderRadius: 18, padding: '24px' }}>
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
         <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Data & Sync</div>
         <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>
           Export your data to transfer between devices or keep a backup. Import to restore.
         </div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <div className="mobile-actions mobile-actions-full" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <button className="btn-primary" onClick={onExport} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             <Download size={14} /> Export Backup (.json)
           </button>
@@ -133,7 +175,7 @@ export default function Settings({ onExport, onImport, onExportCSV, onResetBudge
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
             Permanently deletes every account and all saved finance data from this browser.
           </div>
-          <button className="btn-danger" onClick={handleFullReset} disabled={isFullResetting}
+          <button className="btn-danger mobile-full" onClick={handleFullReset} disabled={isFullResetting}
             style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             <Trash2 size={14} /> {isFullResetting ? 'Deleting...' : 'Delete All Data'}
           </button>

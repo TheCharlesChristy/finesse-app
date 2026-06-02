@@ -1,5 +1,5 @@
 import Dexie from 'dexie';
-import { normalizeIncomeAllocations, roundMoney } from './utils';
+import { getNextRecurringDate, normalizeIncomeAllocations, roundMoney } from './utils';
 
 export const db = new Dexie('FinanceApp');
 
@@ -89,6 +89,20 @@ db.version(6).stores({
   wishlist: '++id, accountId, name',
   wishlistCategories: '++id, accountId, name',
   incomes: '++id, accountId, name',
+  variables: '++id, accountId, name',
+});
+
+db.version(7).stores({
+  accounts: '++id, name',
+  accountTransfers: '++id, fromAccountId, toAccountId, date',
+  incomeEvents: '++id, accountId, incomeId, date, &receiptKey',
+  settings: '++id, accountId',
+  categories: '++id, accountId, name',
+  transactions: '++id, accountId, categoryId, date, &subscriptionRunKey',
+  wishlist: '++id, accountId, name',
+  wishlistCategories: '++id, accountId, name',
+  incomes: '++id, accountId, name',
+  subscriptions: '++id, accountId, categoryId, nextDueAt, active',
   variables: '++id, accountId, name',
 });
 
@@ -202,6 +216,13 @@ function withAccountId(data, accountId) {
   return { ...data, accountId: Number(accountId) };
 }
 
+function normalizeUrl(value = '') {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
 async function getDefaultAccountId() {
   const account = await ensureDefaultAccount();
   return account?.id ?? null;
@@ -253,6 +274,7 @@ export async function deleteAccount(id) {
     db.wishlist,
     db.wishlistCategories,
     db.incomes,
+    db.subscriptions,
     db.variables,
     async () => {
       await db.accountTransfers
@@ -266,6 +288,7 @@ export async function deleteAccount(id) {
       await db.wishlist.where('accountId').equals(id).delete();
       await db.wishlistCategories.where('accountId').equals(id).delete();
       await db.incomes.where('accountId').equals(id).delete();
+      await db.subscriptions.where('accountId').equals(id).delete();
       await db.variables.where('accountId').equals(id).delete();
       await db.accounts.delete(id);
     }
@@ -354,7 +377,7 @@ export async function updateCategory(id, data) {
 }
 
 export async function deleteCategory(id) {
-  await db.transaction('rw', db.categories, db.transactions, db.accounts, async () => {
+  await db.transaction('rw', db.categories, db.transactions, db.accounts, db.subscriptions, async () => {
     const transactions = await db.transactions.where('categoryId').equals(id).toArray();
     const refundByAccount = transactions.reduce((acc, tx) => {
       if (tx.accountId == null) return acc;
@@ -373,6 +396,7 @@ export async function deleteCategory(id) {
     }
 
     await db.transactions.where('categoryId').equals(id).delete();
+    await db.subscriptions.where('categoryId').equals(id).delete();
     await db.categories.delete(id);
   });
 }
@@ -401,6 +425,45 @@ export async function addTransaction(tx) {
     }
   });
   return id;
+}
+
+export async function addTransactionsBulk({ categoryId, transactions = [], accountId = null } = {}) {
+  const targetAccountId = accountId != null ? Number(accountId) : await getDefaultAccountId();
+  const targetCategoryId = Number(categoryId);
+  if (!targetAccountId || !targetCategoryId) return [];
+
+  const rows = transactions
+    .map(tx => ({
+      accountId: targetAccountId,
+      categoryId: targetCategoryId,
+      amount: roundMoney(tx.amount),
+      note: String(tx.note || '').trim(),
+      date: tx.date || new Date().toISOString(),
+    }))
+    .filter(tx => tx.amount > 0);
+
+  if (!rows.length) return [];
+
+  const totalAmount = roundMoney(rows.reduce((sum, tx) => sum + tx.amount, 0));
+  let ids = [];
+
+  await db.transaction('rw', db.transactions, db.categories, db.accounts, async () => {
+    ids = await db.transactions.bulkAdd(rows, { allKeys: true });
+
+    const cat = await db.categories.get(targetCategoryId);
+    if (cat) {
+      await db.categories.update(targetCategoryId, applyCategorySpendDelta(cat, totalAmount));
+    }
+
+    const account = await db.accounts.get(targetAccountId);
+    if (account) {
+      await db.accounts.update(targetAccountId, {
+        balance: roundMoney((account.balance || 0) - totalAmount),
+      });
+    }
+  });
+
+  return ids;
 }
 
 export async function updateTransaction(id, data) {
@@ -616,6 +679,104 @@ export async function deleteIncomeEvent(id) {
   });
 }
 
+// ── Subscription helpers ─────────────────────────────────────────────────────
+function normalizeSubscription(subscription, accountId = null) {
+  const interval = Math.max(1, Number(subscription.interval) || 1);
+  const intervalUnit = subscription.intervalUnit || 'month';
+  const nextDueAt = subscription.nextDueAt || subscription.startDate || new Date().toISOString();
+
+  return {
+    ...withAccountId(subscription, accountId ?? subscription.accountId),
+    categoryId: Number(subscription.categoryId),
+    amount: roundMoney(subscription.amount),
+    name: String(subscription.name || '').trim(),
+    note: String(subscription.note || '').trim(),
+    manageUrl: normalizeUrl(subscription.manageUrl),
+    interval,
+    intervalUnit,
+    nextDueAt,
+    active: subscription.active !== false,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export async function getSubscriptions(accountId = null) {
+  const rows = accountId == null
+    ? await db.subscriptions.toArray()
+    : await db.subscriptions.where('accountId').equals(Number(accountId)).toArray();
+  return rows.sort((a, b) => new Date(a.nextDueAt) - new Date(b.nextDueAt));
+}
+
+export async function addSubscription(subscription, accountId = null) {
+  const data = normalizeSubscription(subscription, accountId);
+  return db.subscriptions.add({
+    ...data,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export async function updateSubscription(id, data) {
+  const existing = await db.subscriptions.get(id);
+  if (!existing) return 0;
+  return db.subscriptions.update(id, normalizeSubscription({ ...existing, ...data }, existing.accountId));
+}
+
+export async function deleteSubscription(id) {
+  return db.subscriptions.delete(id);
+}
+
+export async function processDueSubscriptions(accountId = null, now = new Date()) {
+  const targetAccountId = accountId != null ? Number(accountId) : await getDefaultAccountId();
+  if (!targetAccountId) return 0;
+
+  const dueSubscriptions = (await db.subscriptions.where('accountId').equals(targetAccountId).toArray())
+    .filter(subscription => subscription.active !== false && subscription.nextDueAt && new Date(subscription.nextDueAt) <= now);
+  let created = 0;
+
+  for (const subscription of dueSubscriptions) {
+    let dueDate = new Date(subscription.nextDueAt);
+    let lastProcessed = null;
+    let guard = 0;
+
+    while (dueDate <= now && guard < 48) {
+      const dueIso = dueDate.toISOString();
+      const runKey = `${targetAccountId}:subscription:${subscription.id}:${dueIso}`;
+
+      try {
+        await addTransaction({
+          accountId: targetAccountId,
+          categoryId: subscription.categoryId,
+          amount: subscription.amount,
+          note: subscription.note || subscription.name,
+          date: dueIso,
+          subscriptionId: subscription.id,
+          subscriptionRunKey: runKey,
+        });
+        created += 1;
+      } catch (error) {
+        if (error?.name !== 'ConstraintError') throw error;
+      }
+
+      lastProcessed = dueIso;
+      dueDate = getNextRecurringDate(
+        dueDate,
+        subscription.intervalUnit || 'month',
+        subscription.interval || 1,
+        dueDate
+      );
+      guard += 1;
+    }
+
+    await db.subscriptions.update(subscription.id, {
+      lastChargedAt: lastProcessed || subscription.lastChargedAt || null,
+      nextDueAt: dueDate.toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  return created;
+}
+
 // ── Variable helpers ──────────────────────────────────────────────────────────
 export async function addVariable(variable, accountId = null) {
   return db.variables.add(withAccountId(variable, accountId ?? variable.accountId));
@@ -689,6 +850,7 @@ export async function clearAllData() {
     db.wishlist,
     db.wishlistCategories,
     db.incomes,
+    db.subscriptions,
     db.variables,
     async () => {
       await db.accountTransfers.clear();
@@ -700,13 +862,14 @@ export async function clearAllData() {
       await db.wishlist.clear();
       await db.wishlistCategories.clear();
       await db.incomes.clear();
+      await db.subscriptions.clear();
       await db.variables.clear();
     }
   );
 }
 
 export async function exportData() {
-  const [accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, variables] = await Promise.all([
+  const [accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, subscriptions, variables] = await Promise.all([
     db.accounts.toArray(),
     db.accountTransfers.toArray(),
     db.incomeEvents.toArray(),
@@ -716,9 +879,10 @@ export async function exportData() {
     db.wishlist.toArray(),
     db.wishlistCategories.toArray(),
     db.incomes.toArray(),
+    db.subscriptions.toArray(),
     db.variables.toArray(),
   ]);
-  return { accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, variables, exportedAt: new Date().toISOString(), version: 6 };
+  return { accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, subscriptions, variables, exportedAt: new Date().toISOString(), version: 7 };
 }
 
 export async function importData(data, mode = 'replace') {
@@ -732,6 +896,7 @@ export async function importData(data, mode = 'replace') {
     await db.wishlist.clear();
     await db.wishlistCategories.clear();
     await db.incomes.clear();
+    await db.subscriptions.clear();
     await db.variables.clear();
   }
 
@@ -757,6 +922,7 @@ export async function importData(data, mode = 'replace') {
   if (data.wishlist?.length) await db.wishlist.bulkAdd(accountRows(data.wishlist));
   if (data.wishlistCategories?.length) await db.wishlistCategories.bulkAdd(accountRows(data.wishlistCategories));
   if (data.incomes?.length) await db.incomes.bulkAdd(accountRows(data.incomes));
+  if (data.subscriptions?.length) await db.subscriptions.bulkAdd(accountRows(data.subscriptions));
   if (data.variables?.length) await db.variables.bulkAdd(accountRows(data.variables));
   if (data.incomeEvents?.length) {
     for (const event of incomeEventRows(data.incomeEvents)) {

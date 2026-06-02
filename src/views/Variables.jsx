@@ -36,7 +36,7 @@ export default function Variables({ variables, onAddVariable, onUpdateVariable, 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Intro */}
-      <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
         <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>Variables</div>
         <div style={{ color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.7 }}>
           Define named values you can reference in category allowance formulas using{' '}
@@ -50,7 +50,7 @@ export default function Variables({ variables, onAddVariable, onUpdateVariable, 
       </div>
 
       {/* Variable list + add form */}
-      <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
         {variables.length === 0 ? (
           <div style={{ color: 'var(--text-muted)', fontSize: 14, textAlign: 'center', padding: '16px 0 20px' }}>
             No variables yet — add one below
@@ -59,7 +59,7 @@ export default function Variables({ variables, onAddVariable, onUpdateVariable, 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
             {variables.map(v => (
               editingId === v.id ? (
-                <div key={v.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 0' }}>
+                <div key={v.id} className="mobile-row-stack" style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 0' }}>
                   <input className="glass-input" value={editName}
                     onChange={e => setEditName(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
                     style={{ flex: 2 }}
@@ -72,11 +72,11 @@ export default function Variables({ variables, onAddVariable, onUpdateVariable, 
                   <button className="btn-icon" onClick={() => setEditingId(null)} title="Cancel"><X size={13} /></button>
                 </div>
               ) : (
-                <div key={v.id} style={{
+                <div key={v.id} className="mobile-list-row" style={{
                   display: 'flex', alignItems: 'center', gap: 12,
                   padding: '12px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: 12,
                 }}>
-                  <span style={{ ...codeStyle, fontSize: 13, flex: 1 }}>${v.name}</span>
+                  <span className="mobile-list-main" style={{ ...codeStyle, fontSize: 13, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>${v.name}</span>
                   <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-secondary)' }}>
                     {fmt(v.value)}
                   </span>
@@ -99,7 +99,7 @@ export default function Variables({ variables, onAddVariable, onUpdateVariable, 
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
             Add Variable
           </div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div className="mobile-row-stack" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <div style={{ flex: '2 1 160px' }}>
               <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Name</label>
               <input className="glass-input" placeholder="e.g. salary"
@@ -114,7 +114,7 @@ export default function Variables({ variables, onAddVariable, onUpdateVariable, 
                 onChange={e => setNewValue(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleAdd()} />
             </div>
-            <button className="btn-primary" onClick={handleAdd}
+            <button className="btn-primary mobile-full" onClick={handleAdd}
               style={{ flexShrink: 0 }}
               disabled={!newName.trim() || newValue === ''}>
               Add

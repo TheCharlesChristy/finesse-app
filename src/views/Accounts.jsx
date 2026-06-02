@@ -87,7 +87,7 @@ export default function Accounts({
 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14 }}>
+      <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14 }}>
         <div className="glass" style={{ borderRadius: 18, padding: '20px 22px' }}>
           <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
             Accounts
@@ -104,7 +104,7 @@ export default function Accounts({
         </div>
       </div>
 
-      <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
           <Wallet size={17} color="var(--accent-blue)" />
           <div style={{ fontSize: 15, fontWeight: 600 }}>Your Accounts</div>
@@ -115,7 +115,7 @@ export default function Accounts({
             const active = Number(account.id) === Number(activeAccountId);
             const editing = editingId === account.id;
             return (
-              <div key={account.id} style={{
+              <div key={account.id} className="mobile-stack" style={{
                 display: 'grid',
                 gridTemplateColumns: 'minmax(160px, 1fr) minmax(120px, auto)',
                 gap: 12,
@@ -127,14 +127,14 @@ export default function Accounts({
               }}>
                 {editing ? (
                   <>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) minmax(100px, 140px)', gap: 8 }}>
+                    <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) minmax(100px, 140px)', gap: 8 }}>
                       <input className="glass-input" value={editName} onChange={e => setEditName(e.target.value)}
                         onKeyDown={e => e.key === 'Enter' && commitEdit()} autoFocus />
                       <input className="glass-input" type="number" step="0.01" value={editBalance}
                         onChange={e => setEditBalance(e.target.value)}
                         onKeyDown={e => e.key === 'Enter' && commitEdit()} />
                     </div>
-                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                    <div className="mobile-actions" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                       <button className="btn-icon" onClick={commitEdit} title="Save account"><Check size={13} /></button>
                       <button className="btn-icon" onClick={() => setEditingId(null)} title="Cancel"><X size={13} /></button>
                     </div>
@@ -163,7 +163,7 @@ export default function Accounts({
                         </span>
                       </span>
                     </button>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+                    <div className="mobile-actions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
                       <span className="font-display" style={{ fontSize: 20, color: (account.balance || 0) < 0 ? 'var(--danger)' : 'var(--text-primary)' }}>
                         {fmt(account.balance || 0)}
                       </span>
@@ -182,7 +182,7 @@ export default function Accounts({
         </div>
 
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: 16, paddingTop: 16 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) minmax(100px, 140px) auto', gap: 10, alignItems: 'center' }}>
+          <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) minmax(100px, 140px) auto', gap: 10, alignItems: 'center' }}>
             <input className="glass-input" placeholder="New account name" value={newName}
               onChange={e => setNewName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleAddAccount()} />
@@ -197,13 +197,13 @@ export default function Accounts({
         </div>
       </div>
 
-      <div className="glass" style={{ borderRadius: 18, padding: '22px 24px' }}>
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
           <ArrowLeftRight size={17} color="var(--accent-mint)" />
           <div style={{ fontSize: 15, fontWeight: 600 }}>Transfer Money</div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
           <div>
             <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>From</label>
             <select className="glass-input" value={fromId || ''} onChange={e => setFromId(e.target.value)}>
@@ -224,12 +224,12 @@ export default function Accounts({
               onChange={e => setAmount(e.target.value)} />
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+        <div className="mobile-row-stack" style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
           <input className="glass-input" placeholder="Note" value={note}
             onChange={e => setNote(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleTransfer()}
             style={{ flex: '1 1 220px' }} />
-          <button className="btn-primary" onClick={handleTransfer}
+          <button className="btn-primary mobile-full" onClick={handleTransfer}
             disabled={!fromId || !toId || Number(fromId) === Number(toId) || (parseFloat(amount) || 0) <= 0}
             style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
             <ArrowLeftRight size={14} /> Transfer
@@ -238,13 +238,13 @@ export default function Accounts({
       </div>
 
       {recentIncomeEvents.length > 0 && (
-        <div className="glass" style={{ borderRadius: 18, padding: '20px 22px' }}>
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>
             Recent Income{activeAccount ? ` for ${activeAccount.name}` : ''}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {recentIncomeEvents.map(event => (
-              <div key={event.id} style={{
+              <div key={event.id} className="mobile-stack" style={{
                 display: 'grid',
                 gridTemplateColumns: 'minmax(160px, 1fr) minmax(90px, auto)',
                 gap: 12,
@@ -264,7 +264,7 @@ export default function Accounts({
                     {event.note ? ` · ${event.note}` : ''}
                   </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+                <div className="mobile-actions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent-mint)' }}>+{fmt(event.amount || 0)}</span>
                   {event.type === 'one-off' && (
                     <button className="btn-icon" onClick={() => onDeleteIncomeEvent?.(event)}
@@ -280,14 +280,14 @@ export default function Accounts({
       )}
 
       {recentTransfers.length > 0 && (
-        <div className="glass" style={{ borderRadius: 18, padding: '20px 22px' }}>
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Recent Transfers</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {recentTransfers.map(transfer => {
               const from = accountMap.get(Number(transfer.fromAccountId));
               const to = accountMap.get(Number(transfer.toAccountId));
               return (
-                <div key={transfer.id} style={{
+                <div key={transfer.id} className="mobile-stack" style={{
                   display: 'grid',
                   gridTemplateColumns: 'minmax(160px, 1fr) minmax(90px, auto)',
                   gap: 12,
