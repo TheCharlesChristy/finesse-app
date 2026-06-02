@@ -240,8 +240,16 @@ export default function App() {
 
     try {
       const summary = await importData(pendingImport, mode);
+      if (summary?.preferredAccountId) {
+        setActiveAccountId(Number(summary.preferredAccountId));
+      }
       setPendingImport(null);
       setModal(null);
+      console.info('Import completed in App', {
+        mode,
+        activeAccountId,
+        summary,
+      });
 
       const tableOrder = [
         'accounts',

@@ -892,6 +892,7 @@ export async function importData(data, mode = 'replace') {
       totals: { imported: 0, skipped: 0 },
       tables: {},
       createdDefaultAccount: false,
+      preferredAccountId: null,
     };
   }
 
@@ -944,6 +945,7 @@ export async function importData(data, mode = 'replace') {
     totals: { imported: 0, skipped: 0 },
     tables: {},
     createdDefaultAccount: false,
+    preferredAccountId: null,
   };
 
   const setSummary = (tableName, result = { imported: 0, skipped: 0 }) => {
@@ -976,13 +978,87 @@ export async function importData(data, mode = 'replace') {
     variables: toArray(payload.variables),
   };
 
-  setSummary('accounts', await addRowsSafely(db.accounts, rows(dataTables.accounts), { ignoreConstraint: true }));
+  const toKey = (value) => String(value);
+  const toPositiveNumber = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  };
+
+  const accountIdMap = new Map();
+  let firstMappedAccountId = null;
+  if (dataTables.accounts.length) {
+    let imported = 0;
+    let skipped = 0;
+
+    for (const account of dataTables.accounts) {
+      const sourceIdRaw = account?.id;
+      const sourceKey = sourceIdRaw == null ? null : toKey(sourceIdRaw);
+      const preferredId = preserveIds ? toPositiveNumber(sourceIdRaw) : null;
+      const payloadAccount = stripId(account);
+
+      let targetId = null;
+      try {
+        if (preferredId !== null) {
+          targetId = await db.accounts.add({ ...payloadAccount, id: preferredId });
+        } else {
+          targetId = await db.accounts.add(payloadAccount);
+        }
+        imported += 1;
+      } catch (error) {
+        if (!isConstraintError(error)) throw error;
+        skipped += 1;
+
+        if (preferredId !== null) {
+          const existing = await db.accounts.get(preferredId);
+          if (existing) targetId = preferredId;
+        }
+      }
+
+      if (sourceKey && targetId != null) {
+        accountIdMap.set(sourceKey, Number(targetId));
+        if (firstMappedAccountId == null) firstMappedAccountId = Number(targetId);
+      }
+      if (preferredId !== null && targetId != null) {
+        accountIdMap.set(toKey(preferredId), Number(targetId));
+        if (firstMappedAccountId == null) firstMappedAccountId = Number(targetId);
+      }
+    }
+
+    setSummary('accounts', { imported, skipped });
+  } else {
+    setSummary('accounts', { imported: 0, skipped: 0 });
+  }
+
   const fallbackAccountId = await getDefaultAccountId();
   summary.createdDefaultAccount = !dataTables.accounts.length;
+  summary.preferredAccountId = firstMappedAccountId ?? Number(fallbackAccountId);
+  const existingAccountIds = new Set(
+    (await db.accounts.toArray())
+      .map(account => toPositiveNumber(account?.id))
+      .filter(Boolean)
+  );
+  const unresolvedAccountRefs = new Set();
+
+  const resolveAccountId = (value) => {
+    if (value != null) {
+      const direct = accountIdMap.get(toKey(value));
+      if (direct != null) return Number(direct);
+    }
+
+    const parsed = toPositiveNumber(value);
+    if (parsed !== null) {
+      const mapped = accountIdMap.get(toKey(parsed));
+      if (mapped != null) return Number(mapped);
+      if (existingAccountIds.has(parsed)) return Number(parsed);
+    }
+
+    if (value != null) unresolvedAccountRefs.add(toKey(value));
+    return Number(fallbackAccountId);
+  };
 
   const accountRows = (items = []) => rows(items).map(item => ({
     ...item,
-    accountId: item.accountId ?? fallbackAccountId,
+    accountId: resolveAccountId(item.accountId),
   }));
   const incomeEventRows = (items = []) => accountRows(items).map(item => {
     const next = { ...item };
@@ -1018,7 +1094,21 @@ export async function importData(data, mode = 'replace') {
   }
   setSummary('incomeEvents', { imported: incomeEventsImported, skipped: incomeEventsSkipped });
 
-  setSummary('accountTransfers', await addRowsSafely(db.accountTransfers, rows(dataTables.accountTransfers)));
+  const transferRows = rows(dataTables.accountTransfers).map(transfer => ({
+    ...transfer,
+    fromAccountId: resolveAccountId(transfer.fromAccountId),
+    toAccountId: resolveAccountId(transfer.toAccountId),
+  }));
+  setSummary('accountTransfers', await addRowsSafely(db.accountTransfers, transferRows));
+
+  if (unresolvedAccountRefs.size > 0) {
+    console.warn('Import used fallback account for unresolved account references', {
+      unresolvedAccountIds: [...unresolvedAccountRefs],
+      fallbackAccountId,
+    });
+  }
+
+  console.info('Import summary', summary);
 
   return summary;
 }
