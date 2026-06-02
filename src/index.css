@@ -312,6 +312,20 @@ body {
   font-weight: 700;
 }
 
+.transaction-filter-grid {
+  flex: 1 1 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 10px;
+  align-items: center;
+}
+
+.transaction-filter-grid .btn-secondary {
+  min-height: 42px;
+  padding-inline: 14px;
+  white-space: nowrap;
+}
+
 .finance-calendar {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));

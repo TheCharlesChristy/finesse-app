@@ -87,6 +87,12 @@ export default function DateInput({ value, onChange, label = 'Date', disabled = 
     triggerRef.current?.focus();
   };
 
+  const moveMonth = (amount) => {
+    const shift = amount < 0 ? subMonths : addMonths;
+    setViewDate(date => shift(date, 1));
+    setFocusedDate(date => shift(date, 1));
+  };
+
   const handleGridKeyDown = (e) => {
     switch (e.key) {
       case 'ArrowLeft': e.preventDefault(); setFocusedDate(d => addDays(d, -1)); break;
@@ -133,12 +139,12 @@ export default function DateInput({ value, onChange, label = 'Date', disabled = 
           style={{ position: 'fixed', top: position.top, left: position.left, width: position.width, right: 'auto', zIndex: 500 }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
-            <button type="button" className="btn-icon" onClick={() => setViewDate(date => subMonths(date, 1))}
+            <button type="button" className="btn-icon" onClick={() => moveMonth(-1)}
               style={{ width: 30, height: 30 }} aria-label="Previous month" title="Previous month">
               <ChevronLeft size={14} />
             </button>
             <div aria-live="polite" style={{ fontSize: 13, fontWeight: 700 }}>{format(viewDate, 'MMMM yyyy')}</div>
-            <button type="button" className="btn-icon" onClick={() => setViewDate(date => addMonths(date, 1))}
+            <button type="button" className="btn-icon" onClick={() => moveMonth(1)}
               style={{ width: 30, height: 30 }} aria-label="Next month" title="Next month">
               <ChevronRight size={14} />
             </button>
