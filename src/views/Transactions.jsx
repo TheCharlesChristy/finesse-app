@@ -32,6 +32,10 @@ const sortOptions = [
   ['amount-desc', 'Amount high to low'],
   ['amount-asc', 'Amount low to high'],
   ['category-asc', 'Category A to Z'],
+  ['category-desc', 'Category Z to A'],
+  ['name-asc', 'Name A to Z'],
+  ['name-desc', 'Name Z to A'],
+  ['type-asc', 'Type'],
 ];
 
 function getTransactionDate(tx) {
@@ -86,6 +90,10 @@ function matchesTypeFilter(tx, filter) {
   return true;
 }
 
+function compareText(a, b) {
+  return String(a || '').localeCompare(String(b || ''), undefined, { sensitivity: 'base' });
+}
+
 export default function Transactions({ transactions, categories, onDelete, onEdit, onAdd, onBulkAdd, onAddSubscription }) {
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState('all');
@@ -118,6 +126,12 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
       const bDate = getTransactionDate(b)?.getTime() || 0;
       const aAmount = Number(a.amount) || 0;
       const bAmount = Number(b.amount) || 0;
+      const aCategory = catMap[a.categoryId]?.name || 'Unknown';
+      const bCategory = catMap[b.categoryId]?.name || 'Unknown';
+      const aName = a.note || aCategory || 'Expense';
+      const bName = b.note || bCategory || 'Expense';
+      const aType = isSubscriptionTransaction(a) ? 'Subscription' : 'Manual';
+      const bType = isSubscriptionTransaction(b) ? 'Subscription' : 'Manual';
       const fallback = bDate - aDate || (Number(b.id) || 0) - (Number(a.id) || 0);
 
       switch (sortBy) {
@@ -127,10 +141,16 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
           return bAmount - aAmount || fallback;
         case 'amount-asc':
           return aAmount - bAmount || fallback;
-        case 'category-asc': {
-          const categoryCompare = (catMap[a.categoryId]?.name || 'Unknown').localeCompare(catMap[b.categoryId]?.name || 'Unknown', undefined, { sensitivity: 'base' });
-          return categoryCompare || fallback;
-        }
+        case 'category-asc':
+          return compareText(aCategory, bCategory) || fallback;
+        case 'category-desc':
+          return compareText(bCategory, aCategory) || fallback;
+        case 'name-asc':
+          return compareText(aName, bName) || fallback;
+        case 'name-desc':
+          return compareText(bName, aName) || fallback;
+        case 'type-asc':
+          return compareText(aType, bType) || fallback;
         case 'date-desc':
         default:
           return fallback;
@@ -181,6 +201,17 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
           aria-label="Filter by category"
           style={{ flex: '1 1 180px' }}
         />
+        <button className="btn-secondary mobile-full" onClick={onBulkAdd} disabled={categories.length === 0}
+          style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 7 }}>
+          <Layers3 size={14} /> Bulk Add
+        </button>
+        <button className="btn-secondary mobile-full" onClick={onAddSubscription} disabled={categories.length === 0}
+          style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 7 }}>
+          <CreditCard size={14} /> Subscription
+        </button>
+        <button className="btn-primary mobile-full" onClick={onAdd} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
+          + Add Expense
+        </button>
         <div className="transaction-filter-grid">
           <select className="glass-input" value={dateFilter} onChange={e => setDateFilter(e.target.value)} aria-label="Filter by date">
             {dateFilterOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -198,17 +229,6 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
             <button className="btn-secondary" type="button" onClick={resetFilters}>Reset</button>
           )}
         </div>
-        <button className="btn-secondary mobile-full" onClick={onBulkAdd} disabled={categories.length === 0}
-          style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 7 }}>
-          <Layers3 size={14} /> Bulk Add
-        </button>
-        <button className="btn-secondary mobile-full" onClick={onAddSubscription} disabled={categories.length === 0}
-          style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 7 }}>
-          <CreditCard size={14} /> Subscription
-        </button>
-        <button className="btn-primary mobile-full" onClick={onAdd} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
-          + Add Expense
-        </button>
         <div style={{
           fontSize: 12,
           color: 'var(--text-muted)',
