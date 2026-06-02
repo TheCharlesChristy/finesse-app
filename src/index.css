@@ -22,6 +22,10 @@
   --good: #4fffb0;
   --warn: #fbbf70;
   --danger: #ff6b8a;
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -530,7 +534,7 @@ body {
   .main-content {
     width: 100% !important;
     max-width: none !important;
-    padding: 14px 12px 24px !important;
+    padding: calc(14px + var(--safe-area-top)) calc(12px + var(--safe-area-right)) calc(24px + var(--safe-area-bottom)) calc(12px + var(--safe-area-left)) !important;
   }
 }
 
@@ -669,7 +673,7 @@ body {
   .modal-overlay {
     align-items: flex-start;
     justify-content: center;
-    padding: 10px;
+    padding: calc(10px + var(--safe-area-top)) calc(10px + var(--safe-area-right)) calc(10px + var(--safe-area-bottom)) calc(10px + var(--safe-area-left));
     overflow-y: auto;
   }
 

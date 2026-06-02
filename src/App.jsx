@@ -412,7 +412,8 @@ export default function App() {
       <div className="bg-mesh" />
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', minHeight: '100vh' }}>
         <aside id="app-sidebar" className="sidebar" aria-label="Sidebar" style={{
-          width: 220, flexShrink: 0, padding: '24px 12px',
+          width: 220, flexShrink: 0,
+          padding: 'calc(24px + env(safe-area-inset-top, 0px)) 12px calc(24px + env(safe-area-inset-bottom, 0px))',
           display: 'flex', flexDirection: 'column', gap: 4,
           borderRight: '1px solid rgba(255,255,255,0.07)',
           background: 'rgba(10,15,30,0.6)',
@@ -459,7 +460,13 @@ export default function App() {
           }} />
         )}
 
-        <main style={{ flex: 1, padding: '24px 20px', maxWidth: 900, minWidth: 0, marginLeft: 220 }} className="main-content">
+        <main style={{
+          flex: 1,
+          padding: 'calc(24px + env(safe-area-inset-top, 0px)) calc(20px + env(safe-area-inset-right, 0px)) calc(24px + env(safe-area-inset-bottom, 0px)) calc(20px + env(safe-area-inset-left, 0px))',
+          maxWidth: 900,
+          minWidth: 0,
+          marginLeft: 220,
+        }} className="main-content">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }} className="page-header">
             <button type="button" className="mobile-menu-btn" onClick={() => setSidebarOpen(v => !v)}
               aria-label={sidebarOpen ? 'Close navigation' : 'Open navigation'}
