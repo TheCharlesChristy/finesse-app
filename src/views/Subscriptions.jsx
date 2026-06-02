@@ -4,6 +4,18 @@ import { CreditCard, ExternalLink, Pause, Pencil, Play, Plus, Search, Trash2 } f
 import { fmt } from '../utils';
 import { CardTitle, IconButton } from '../components/ui';
 
+const sortOptions = [
+  ['due-asc', 'Due soonest'],
+  ['due-desc', 'Due latest'],
+  ['amount-desc', 'Amount high to low'],
+  ['amount-asc', 'Amount low to high'],
+  ['name-asc', 'Name A to Z'],
+  ['name-desc', 'Name Z to A'],
+  ['category-asc', 'Category A to Z'],
+  ['category-desc', 'Category Z to A'],
+  ['status-asc', 'Status'],
+];
+
 function formatRecurrence(subscription) {
   const interval = Number(subscription.interval) || 1;
   const unit = subscription.intervalUnit || 'month';
@@ -48,6 +60,10 @@ function getDueLabel(subscription, today) {
   return `Due in ${days}d`;
 }
 
+function compareText(a, b) {
+  return String(a || '').localeCompare(String(b || ''), undefined, { sensitivity: 'base' });
+}
+
 export default function Subscriptions({
   subscriptions = [],
   categories = [],
@@ -58,6 +74,7 @@ export default function Subscriptions({
 }) {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('active');
+  const [sortBy, setSortBy] = useState('due-asc');
   const categoryMap = useMemo(() => new Map(categories.map(category => [Number(category.id), category])), [categories]);
   const today = startOfDay(new Date());
 
@@ -90,11 +107,49 @@ export default function Subscriptions({
         ].filter(Boolean).some(value => String(value).toLowerCase().includes(query));
       })
       .sort((a, b) => {
-        if (a.active === false && b.active !== false) return 1;
-        if (a.active !== false && b.active === false) return -1;
-        return (parseSubscriptionDate(a.nextDueAt)?.getTime() || 0) - (parseSubscriptionDate(b.nextDueAt)?.getTime() || 0);
+        const aDue = parseSubscriptionDate(a.nextDueAt)?.getTime() || 0;
+        const bDue = parseSubscriptionDate(b.nextDueAt)?.getTime() || 0;
+        const aAmount = Number(a.amount) || 0;
+        const bAmount = Number(b.amount) || 0;
+        const aCategory = categoryMap.get(Number(a.categoryId))?.name || 'Missing category';
+        const bCategory = categoryMap.get(Number(b.categoryId))?.name || 'Missing category';
+        const aName = a.name || '';
+        const bName = b.name || '';
+        const aStatus = a.active === false ? 'Paused' : 'Active';
+        const bStatus = b.active === false ? 'Paused' : 'Active';
+        const fallback = aDue - bDue || compareText(aName, bName) || (Number(a.id) || 0) - (Number(b.id) || 0);
+
+        switch (sortBy) {
+          case 'due-desc':
+            return bDue - aDue || compareText(aName, bName) || (Number(b.id) || 0) - (Number(a.id) || 0);
+          case 'amount-desc':
+            return bAmount - aAmount || fallback;
+          case 'amount-asc':
+            return aAmount - bAmount || fallback;
+          case 'name-asc':
+            return compareText(aName, bName) || fallback;
+          case 'name-desc':
+            return compareText(bName, aName) || fallback;
+          case 'category-asc':
+            return compareText(aCategory, bCategory) || fallback;
+          case 'category-desc':
+            return compareText(bCategory, aCategory) || fallback;
+          case 'status-asc':
+            return compareText(aStatus, bStatus) || fallback;
+          case 'due-asc':
+          default:
+            return fallback;
+        }
       });
-  }, [subscriptions, search, filter, categoryMap]);
+  }, [subscriptions, search, filter, categoryMap, sortBy]);
+
+  const filtersActive = search.trim() || filter !== 'active' || sortBy !== 'due-asc';
+
+  const resetFilters = () => {
+    setSearch('');
+    setFilter('active');
+    setSortBy('due-asc');
+  };
 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -150,6 +205,14 @@ export default function Subscriptions({
               </button>
             ))}
           </div>
+          <select className="glass-input" value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="Sort subscriptions" style={{ flex: '0 1 220px' }}>
+            {sortOptions.map(([value, label]) => <option key={value} value={value}>Sort: {label}</option>)}
+          </select>
+          {filtersActive && (
+            <button className="btn-secondary" type="button" onClick={resetFilters} style={{ padding: '9px 12px', fontSize: 12 }}>
+              Reset
+            </button>
+          )}
         </div>
 
         {subscriptions.length === 0 ? (
