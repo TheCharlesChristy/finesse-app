@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Download, Upload, FileText, RefreshCcw, Trash2 } from 'lucide-react';
+import { Download, Upload, FileText, RefreshCcw, Trash2, Sun, Moon, Monitor } from 'lucide-react';
 import CategorySelect from '../components/CategorySelect';
 import { CardTitle } from '../components/ui';
 
@@ -89,6 +89,10 @@ export default function Settings({
     });
   };
 
+  const handleThemeChange = (value) => {
+    onSaveSettings?.({ ...(settings || {}), themeMode: value });
+  };
+
   const handleFullReset = async () => {
     if (!onFullReset) return;
 
@@ -118,6 +122,26 @@ export default function Settings({
 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Appearance */}
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+        <CardTitle as="h2" style={{ marginBottom: 8 }}>Appearance</CardTitle>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14 }}>Colour scheme</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {[
+            { value: 'dark',   label: 'Dark',   Icon: Moon },
+            { value: 'system', label: 'System', Icon: Monitor },
+            { value: 'light',  label: 'Light',  Icon: Sun },
+          ].map(({ value, label, Icon }) => (
+            <button key={value} type="button"
+              className={(settings?.themeMode ?? 'dark') === value ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => handleThemeChange(value)}
+              style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 90 }}>
+              <Icon size={14} aria-hidden="true" />{label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Budget reset */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
         <CardTitle as="h2" style={{ marginBottom: 8 }}>Manual Budget Reset</CardTitle>
