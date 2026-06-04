@@ -15,16 +15,16 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   topUpCategoryFromIncome, borrowBudgetBetweenCategories, resetCategoryTopUps } from './db';
 import { calcNextReset, evaluateFormula, fmt, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations } from './utils';
 
-import Dashboard from './views/Dashboard';
-import Transactions from './views/Transactions';
-const Forecasting = lazy(() => import('./views/Forecasting'));
-import Wishlist from './views/Wishlist';
-import PurchaseCheck from './views/PurchaseCheck';
-import Accounts from './views/Accounts';
-import Calendar from './views/Calendar';
-import Subscriptions from './views/Subscriptions';
-import SettingsView from './views/Settings';
-import Variables from './views/Variables';
+const Dashboard     = lazy(() => import('./views/Dashboard'));
+const Transactions  = lazy(() => import('./views/Transactions'));
+const Forecasting   = lazy(() => import('./views/Forecasting'));
+const Wishlist      = lazy(() => import('./views/Wishlist'));
+const PurchaseCheck = lazy(() => import('./views/PurchaseCheck'));
+const Accounts      = lazy(() => import('./views/Accounts'));
+const Calendar      = lazy(() => import('./views/Calendar'));
+const Subscriptions = lazy(() => import('./views/Subscriptions'));
+const SettingsView  = lazy(() => import('./views/Settings'));
+const Variables     = lazy(() => import('./views/Variables'));
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
@@ -206,6 +206,18 @@ export default function App() {
       }
     })();
   }, [variables, categories, incomes]);
+
+  // ── Theme ────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const mode = settings?.themeMode ?? 'dark';
+    if (mode === 'dark') { document.documentElement.setAttribute('data-theme', 'dark'); return; }
+    if (mode === 'light') { document.documentElement.setAttribute('data-theme', 'light'); return; }
+    const mq = window.matchMedia('(prefers-color-scheme: light)');
+    const apply = (e) => document.documentElement.setAttribute('data-theme', e.matches ? 'light' : 'dark');
+    apply(mq);
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, [settings?.themeMode]);
 
   // ── Settings / data handlers ─────────────────────────────────────────────
   const handleExport = useCallback(async () => {
@@ -507,7 +519,7 @@ export default function App() {
           padding: 'calc(24px + env(safe-area-inset-top, 0px)) 12px calc(24px + env(safe-area-inset-bottom, 0px))',
           display: 'flex', flexDirection: 'column', gap: 4,
           borderRight: '1px solid rgba(255,255,255,0.07)',
-          background: 'rgba(10,15,30,0.6)',
+          background: 'var(--sidebar-bg)',
           backdropFilter: 'blur(20px)',
           position: 'fixed', top: 0, bottom: 0,
           zIndex: 20,
@@ -562,7 +574,7 @@ export default function App() {
             <button type="button" className="mobile-menu-btn" onClick={() => setSidebarOpen(v => !v)}
               aria-label={sidebarOpen ? 'Close navigation' : 'Open navigation'}
               aria-expanded={sidebarOpen} aria-controls="app-sidebar" style={{
-              background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
+              background: 'var(--mobile-btn-bg)', border: '1px solid var(--mobile-btn-border)',
               borderRadius: 10, width: 38, height: 38, cursor: 'pointer', color: 'white',
               display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
             }}><Menu size={18} aria-hidden="true" /></button>
@@ -575,7 +587,12 @@ export default function App() {
             <div className="glass" aria-busy="true" style={{ borderRadius: 16, padding: '64px 24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
               Loading your finances…
             </div>
-          ) : (<>
+          ) : (
+          <Suspense fallback={
+            <div className="glass" style={{ borderRadius: 16, padding: '48px 24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
+              Loading…
+            </div>
+          }>
           {view === 'dashboard' && (
             <Dashboard
               categories={categories}
@@ -618,13 +635,7 @@ export default function App() {
               onAddSubscription={() => setModal('addSubscription')} />
           )}
           {view === 'forecasting' && (
-            <Suspense fallback={
-              <div className="glass" style={{ borderRadius: 16, padding: '48px 24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
-                Loading charts…
-              </div>
-            }>
-              <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes} />
-            </Suspense>
+            <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes} />
           )}
           {view === 'purchase' && (
             <PurchaseCheck categories={categories} onLogPurchase={handleLogPurchase} />
@@ -678,7 +689,7 @@ export default function App() {
               onFullReset={handleFullReset}
               showConfirm={showConfirm} showAlert={showAlert} showPrompt={showPrompt} />
           )}
-          </>)}
+          </Suspense>)}
         </main>
       </div>
 
