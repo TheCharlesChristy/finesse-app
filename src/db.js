@@ -1,5 +1,5 @@
 import Dexie from 'dexie';
-import { getNextRecurringDate, normalizeIncomeAllocations, roundMoney } from './utils';
+import { getNextRecurringDate, normalizeIncomeAllocations, roundMoney, getEffectiveAllowance } from './utils';
 
 export const db = new Dexie('FinanceApp');
 
@@ -358,7 +358,7 @@ export async function getCategories(accountId = null) {
 }
 
 export async function addCategory(cat, accountId = null) {
-  return db.categories.add({ ...withAccountId(cat, accountId ?? cat.accountId), spent: 0, spentByIncome: {}, incomeResetAt: {}, temporaryBoost: 0 });
+  return db.categories.add({ ...withAccountId(cat, accountId ?? cat.accountId), spent: 0, spentByIncome: {}, incomeResetAt: {}, temporaryBoost: 0, boostSources: [] });
 }
 
 export async function updateCategory(id, data) {
@@ -790,48 +790,88 @@ export async function deleteVariable(id) {
   return db.variables.delete(id);
 }
 
-// ── Overspend remediation ────────────────────────────────────────────────────
-export async function moveSpendBetweenCategories(fromCategoryId, toCategoryId, amount) {
+// ── Budget top-ups (temporary, current-cycle only) ───────────────────────────
+// A top-up gives a category more to spend for the current cycle without touching
+// its recurring `allowance`. The extra lives in `temporaryBoost` (so it survives
+// formula/paced recomputation) and is cleared on the next reset. Each top-up a
+// category *receives* is recorded in `boostSources` so it can be undone exactly:
+//   { from: 'income', amount }      → funded from unallocated income
+//   { from: <categoryId>, amount }  → borrowed from another category's spare
+
+// Top up a category from unallocated income.
+export async function topUpCategoryFromIncome(categoryId, amount) {
+  const catId = Number(categoryId);
+  const addAmount = roundMoney(amount);
+  if (!catId || addAmount <= 0) return;
+
+  const cat = await db.categories.get(catId);
+  if (!cat) return;
+  const sources = Array.isArray(cat.boostSources) ? cat.boostSources : [];
+  await db.categories.update(catId, {
+    temporaryBoost: roundMoney((cat.temporaryBoost || 0) + addAmount),
+    boostSources: [...sources, { from: 'income', amount: addAmount }],
+  });
+}
+
+// Borrow spare budget from one category to top up another, for this cycle only.
+// The lending category's effective allowance drops and the receiver's rises; the
+// amount is clamped to the lender's spare so it can never be pushed over budget.
+export async function borrowBudgetBetweenCategories(fromCategoryId, toCategoryId, amount) {
   const fromId = Number(fromCategoryId);
   const toId = Number(toCategoryId);
-  const moveAmount = roundMoney(amount);
-  if (!fromId || !toId || fromId === toId || moveAmount <= 0) return;
+  if (!fromId || !toId || fromId === toId) return;
 
   await db.transaction('rw', db.categories, async () => {
     const [fromCat, toCat] = await Promise.all([
       db.categories.get(fromId),
       db.categories.get(toId),
     ]);
-    if (fromCat) await db.categories.update(fromId, applyCategorySpendDelta(fromCat, -moveAmount));
-    if (toCat) await db.categories.update(toId, applyCategorySpendDelta(toCat, moveAmount));
+    if (!fromCat || !toCat) return;
+
+    const fromSpare = Math.max(0, roundMoney(getEffectiveAllowance(fromCat) - (fromCat.spent || 0)));
+    const borrowAmount = Math.min(roundMoney(amount), fromSpare);
+    if (borrowAmount <= 0) return;
+
+    const toSources = Array.isArray(toCat.boostSources) ? toCat.boostSources : [];
+    await db.categories.update(fromId, {
+      temporaryBoost: roundMoney((fromCat.temporaryBoost || 0) - borrowAmount),
+    });
+    await db.categories.update(toId, {
+      temporaryBoost: roundMoney((toCat.temporaryBoost || 0) + borrowAmount),
+      boostSources: [...toSources, { from: fromId, amount: borrowAmount }],
+    });
   });
 }
 
-// Temporarily top up a category from unallocated income for the current cycle.
-// The boost lives in `temporaryBoost` (separate from the recurring `allowance`)
-// so it survives formula/paced recomputation and is cleared on the next reset.
-// `delta` is added to the existing boost (clamped at >= 0); pass a negative
-// delta to reduce it, or use `setCategoryTemporaryBoost` to set an absolute value.
-export async function adjustCategoryTemporaryBoost(categoryId, delta) {
+// Undo every top-up a category has received: remove the extra from this category
+// and return any borrowed amounts to their source categories.
+export async function resetCategoryTopUps(categoryId) {
   const catId = Number(categoryId);
-  const change = roundMoney(delta);
-  if (!catId || change === 0) return;
-
-  const cat = await db.categories.get(catId);
-  if (!cat) return;
-  const next = Math.max(0, roundMoney((cat.temporaryBoost || 0) + change));
-  await db.categories.update(catId, { temporaryBoost: next });
-}
-
-export async function setCategoryTemporaryBoost(categoryId, amount) {
-  const catId = Number(categoryId);
-  const next = Math.max(0, roundMoney(amount));
   if (!catId) return;
 
-  const cat = await db.categories.get(catId);
-  if (cat) {
-    await db.categories.update(catId, { temporaryBoost: next });
-  }
+  await db.transaction('rw', db.categories, async () => {
+    const cat = await db.categories.get(catId);
+    if (!cat) return;
+    const sources = Array.isArray(cat.boostSources) ? cat.boostSources : [];
+    if (sources.length === 0) return;
+
+    const received = roundMoney(sources.reduce((s, e) => s + (e.amount || 0), 0));
+    await db.categories.update(catId, {
+      temporaryBoost: roundMoney((cat.temporaryBoost || 0) - received),
+      boostSources: [],
+    });
+
+    for (const entry of sources) {
+      if (entry.from === 'income') continue;
+      const sourceId = Number(entry.from);
+      const sourceCat = await db.categories.get(sourceId);
+      if (sourceCat) {
+        await db.categories.update(sourceId, {
+          temporaryBoost: roundMoney((sourceCat.temporaryBoost || 0) + (entry.amount || 0)),
+        });
+      }
+    }
+  });
 }
 
 // ── Budget reset ─────────────────────────────────────────────────────────────
@@ -841,12 +881,12 @@ export async function resetBudget(accountId = null) {
     ? await db.categories.toArray()
     : await db.categories.where('accountId').equals(Number(accountId)).toArray();
   for (const cat of cats) {
-    await db.categories.update(cat.id, { spent: 0, spentByIncome: {}, temporaryBoost: 0, lastReset: now });
+    await db.categories.update(cat.id, { spent: 0, spentByIncome: {}, temporaryBoost: 0, boostSources: [], lastReset: now });
   }
 }
 
 export async function resetCategory(id) {
-  await db.categories.update(id, { spent: 0, spentByIncome: {}, temporaryBoost: 0, lastReset: new Date().toISOString() });
+  await db.categories.update(id, { spent: 0, spentByIncome: {}, temporaryBoost: 0, boostSources: [], lastReset: new Date().toISOString() });
 }
 
 export async function resetCategoriesForIncome(incomeId, resetAt = new Date().toISOString(), accountId = null) {
@@ -873,7 +913,7 @@ export async function resetCategoriesForIncome(incomeId, resetAt = new Date().to
         spent: nextSpent,
         spentByIncome: nextSpent === 0 ? {} : nextBuckets,
         incomeResetAt: nextIncomeResetAt,
-        ...(nextSpent === 0 ? { lastReset: resetAt, temporaryBoost: 0 } : {}),
+        ...(nextSpent === 0 ? { lastReset: resetAt, temporaryBoost: 0, boostSources: [] } : {}),
       });
       resetCount += 1;
     }

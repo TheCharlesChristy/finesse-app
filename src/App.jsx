@@ -12,7 +12,7 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   addIncome, updateIncome, deleteIncome, getIncomeEvents, recordIncomeReceived, deleteIncomeEvent,
   getSubscriptions, addSubscription, updateSubscription, deleteSubscription, processDueSubscriptions,
   addVariable, updateVariable, deleteVariable,
-  moveSpendBetweenCategories, adjustCategoryTemporaryBoost, setCategoryTemporaryBoost } from './db';
+  topUpCategoryFromIncome, borrowBudgetBetweenCategories, resetCategoryTopUps } from './db';
 import { calcNextReset, evaluateFormula, fmt, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations } from './utils';
 
 import Dashboard from './views/Dashboard';
@@ -28,7 +28,7 @@ import Variables from './views/Variables';
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
-  RemediateModal } from './components/Modals';
+  AdjustBudgetModal } from './components/Modals';
 import { Modal } from './components/ui';
 import { useDialog } from './components/useDialog';
 
@@ -79,7 +79,7 @@ export default function App() {
   const [editingWishlistList, setEditingWishlistList] = useState(null);
   const [wishlistDefaultCatId, setWishlistDefaultCatId] = useState(null);
   const [transactionDefaults, setTransactionDefaults] = useState(null);
-  const [remediateDefaultCategoryId, setRemediateDefaultCategoryId] = useState(null);
+  const [adjustCategoryId, setAdjustCategoryId] = useState(null);
   const [activeAccountId, setActiveAccountId] = useState(() => {
     const stored = Number(localStorage.getItem('finesse.activeAccountId'));
     return Number.isFinite(stored) && stored > 0 ? stored : null;
@@ -358,21 +358,21 @@ export default function App() {
     });
   }, [activeAccountId]);
 
-  const handleMoveSpend = useCallback((fromCategoryId, toCategoryId, amount) => (
-    moveSpendBetweenCategories(fromCategoryId, toCategoryId, amount)
+  const handleTopUpFromIncome = useCallback((categoryId, amount) => (
+    topUpCategoryFromIncome(categoryId, amount)
   ), []);
 
-  const handleAddTemporaryBoost = useCallback((categoryId, amount) => (
-    adjustCategoryTemporaryBoost(categoryId, amount)
+  const handleBorrowFromCategory = useCallback((fromCategoryId, toCategoryId, amount) => (
+    borrowBudgetBetweenCategories(fromCategoryId, toCategoryId, amount)
   ), []);
 
-  const handleRemoveTemporaryBoost = useCallback((categoryId) => (
-    setCategoryTemporaryBoost(categoryId, 0)
+  const handleResetTopUps = useCallback((categoryId) => (
+    resetCategoryTopUps(categoryId)
   ), []);
 
-  const handleOpenRemediate = useCallback((categoryId = null) => {
-    setRemediateDefaultCategoryId(categoryId);
-    setModal('remediate');
+  const handleOpenAdjust = useCallback((categoryId = null) => {
+    setAdjustCategoryId(categoryId);
+    setModal('adjust');
   }, []);
 
   const handleEditIncome = useCallback((income) => {
@@ -594,7 +594,7 @@ export default function App() {
               onDeleteIncome={handleDeleteIncome}
               onEditCategory={handleEditCategory}
               onDeleteCategory={handleDeleteCategory}
-              onRemediate={handleOpenRemediate}
+              onAdjust={handleOpenAdjust}
             />
           )}
           {view === 'accounts' && (
@@ -795,15 +795,15 @@ export default function App() {
         <ImportModeModal onConfirm={handleImportConfirm}
           onClose={() => { setPendingImport(null); setModal(null); }} />
       )}
-      {modal === 'remediate' && categories.length > 0 && (
-        <RemediateModal
+      {modal === 'adjust' && categories.length > 0 && (
+        <AdjustBudgetModal
           categories={categories}
           totalIncome={incomes.length > 0 ? incomes.reduce((s, i) => s + (i.amount || 0), 0) : (settings?.income || 0)}
-          defaultCategoryId={remediateDefaultCategoryId}
-          onMoveSpend={handleMoveSpend}
-          onAddTemporaryBoost={handleAddTemporaryBoost}
-          onRemoveTemporaryBoost={handleRemoveTemporaryBoost}
-          onClose={() => { setModal(null); setRemediateDefaultCategoryId(null); }}
+          defaultCategoryId={adjustCategoryId}
+          onTopUpFromIncome={handleTopUpFromIncome}
+          onBorrowFromCategory={handleBorrowFromCategory}
+          onResetTopUps={handleResetTopUps}
+          onClose={() => { setModal(null); setAdjustCategoryId(null); }}
         />
       )}
       {dialogEl}
