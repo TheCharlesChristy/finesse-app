@@ -31,6 +31,7 @@ export default function Dashboard({
   onIncomeHoldToggle, onIncomeFastForward,
   onEditIncome, onDeleteIncome,
   onEditCategory, onDeleteCategory,
+  onRemediate,
 }) {
   const [showAllIncomes, setShowAllIncomes] = useState(false);
   const [showAllCategories, setShowAllCategories] = useState(false);
@@ -150,9 +151,32 @@ export default function Dashboard({
       {/* ── Over-budget alerts ── */}
       {overBudgetCats.length > 0 && (
         <div className="glass" style={{ borderRadius: 14, padding: '14px 18px', borderColor: 'rgba(255,107,138,0.3)', background: 'rgba(255,107,138,0.06)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)', fontSize: 13, fontWeight: 500 }}>
-            <AlertCircle size={15} />
-            Over budget: {overBudgetCats.map(c => c.name).join(', ')}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)', fontSize: 13, fontWeight: 600, marginBottom: overBudgetCats.length > 0 ? 10 : 0 }}>
+            <AlertCircle size={15} aria-hidden="true" />
+            Over budget
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {overBudgetCats.map(c => {
+              const over = (c.spent || 0) - (c.allowance || 0);
+              return (
+                <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <span style={{ fontSize: 13, fontWeight: 500 }}>{c.name}</span>
+                    <span style={{ fontSize: 11, color: 'var(--danger)', marginLeft: 8 }}>
+                      +{fmt(over)} over allowance
+                    </span>
+                  </div>
+                  {onRemediate && (
+                    <button
+                      className="btn-secondary"
+                      onClick={() => onRemediate(c.id)}
+                      style={{ padding: '5px 12px', fontSize: 11, flexShrink: 0, borderColor: 'rgba(255,107,138,0.4)', color: 'var(--danger)' }}>
+                      Remediate
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -268,6 +292,12 @@ export default function Dashboard({
               style={{ padding: '7px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
               <CreditCard size={12} /> Subscription
             </button>
+            {onRemediate && categories.length > 0 && (
+              <button className="btn-secondary" onClick={() => onRemediate(null)}
+                style={{ padding: '7px 12px', fontSize: 12 }}>
+                Adjust Budget
+              </button>
+            )}
             <button className="btn-primary" onClick={onAddTx} style={{ padding: '7px 14px', fontSize: 12 }}>
               + Log Expense
             </button>
