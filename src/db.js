@@ -358,7 +358,7 @@ export async function getCategories(accountId = null) {
 }
 
 export async function addCategory(cat, accountId = null) {
-  return db.categories.add({ ...withAccountId(cat, accountId ?? cat.accountId), spent: 0, spentByIncome: {}, incomeResetAt: {} });
+  return db.categories.add({ ...withAccountId(cat, accountId ?? cat.accountId), spent: 0, spentByIncome: {}, incomeResetAt: {}, temporaryBoost: 0 });
 }
 
 export async function updateCategory(id, data) {
@@ -807,36 +807,30 @@ export async function moveSpendBetweenCategories(fromCategoryId, toCategoryId, a
   });
 }
 
-export async function addOneOffIncomeAndAllocateToCategory({ name, amount, note = '' }, categoryId, accountId = null) {
-  const targetAccountId = accountId != null ? Number(accountId) : await getDefaultAccountId();
-  const incomeAmount = roundMoney(amount);
+// Temporarily top up a category from unallocated income for the current cycle.
+// The boost lives in `temporaryBoost` (separate from the recurring `allowance`)
+// so it survives formula/paced recomputation and is cleared on the next reset.
+// `delta` is added to the existing boost (clamped at >= 0); pass a negative
+// delta to reduce it, or use `setCategoryTemporaryBoost` to set an absolute value.
+export async function adjustCategoryTemporaryBoost(categoryId, delta) {
   const catId = Number(categoryId);
-  if (!targetAccountId || incomeAmount <= 0 || !catId) return 0;
-
-  const eventId = await recordIncomeReceived({
-    accountId: targetAccountId,
-    name: name || 'One-off income',
-    amount: incomeAmount,
-    note,
-    type: 'one-off',
-  });
+  const change = roundMoney(delta);
+  if (!catId || change === 0) return;
 
   const cat = await db.categories.get(catId);
-  if (cat) {
-    await db.categories.update(catId, { allowance: roundMoney((cat.allowance || 0) + incomeAmount) });
-  }
-
-  return eventId;
+  if (!cat) return;
+  const next = Math.max(0, roundMoney((cat.temporaryBoost || 0) + change));
+  await db.categories.update(catId, { temporaryBoost: next });
 }
 
-export async function allocateUnassignedToCategory(categoryId, amount) {
+export async function setCategoryTemporaryBoost(categoryId, amount) {
   const catId = Number(categoryId);
-  const allocationAmount = roundMoney(amount);
-  if (!catId || allocationAmount <= 0) return;
+  const next = Math.max(0, roundMoney(amount));
+  if (!catId) return;
 
   const cat = await db.categories.get(catId);
   if (cat) {
-    await db.categories.update(catId, { allowance: roundMoney((cat.allowance || 0) + allocationAmount) });
+    await db.categories.update(catId, { temporaryBoost: next });
   }
 }
 
@@ -847,12 +841,12 @@ export async function resetBudget(accountId = null) {
     ? await db.categories.toArray()
     : await db.categories.where('accountId').equals(Number(accountId)).toArray();
   for (const cat of cats) {
-    await db.categories.update(cat.id, { spent: 0, spentByIncome: {}, lastReset: now });
+    await db.categories.update(cat.id, { spent: 0, spentByIncome: {}, temporaryBoost: 0, lastReset: now });
   }
 }
 
 export async function resetCategory(id) {
-  await db.categories.update(id, { spent: 0, spentByIncome: {}, lastReset: new Date().toISOString() });
+  await db.categories.update(id, { spent: 0, spentByIncome: {}, temporaryBoost: 0, lastReset: new Date().toISOString() });
 }
 
 export async function resetCategoriesForIncome(incomeId, resetAt = new Date().toISOString(), accountId = null) {
@@ -879,7 +873,7 @@ export async function resetCategoriesForIncome(incomeId, resetAt = new Date().to
         spent: nextSpent,
         spentByIncome: nextSpent === 0 ? {} : nextBuckets,
         incomeResetAt: nextIncomeResetAt,
-        ...(nextSpent === 0 ? { lastReset: resetAt } : {}),
+        ...(nextSpent === 0 ? { lastReset: resetAt, temporaryBoost: 0 } : {}),
       });
       resetCount += 1;
     }

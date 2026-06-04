@@ -1,13 +1,15 @@
 import { useMemo, useState } from 'react';
-import { AlertCircle, Zap, Clock, Pencil, Trash2, Gift, CreditCard, Sparkles } from 'lucide-react';
+import { AlertCircle, Zap, Clock, Pencil, Trash2, Gift, CreditCard, Sparkles, SlidersHorizontal } from 'lucide-react';
 import {
   fmt,
   calcNextReset,
   getAllocationPercentTotal,
+  getEffectiveAllowance,
   getIncomeCycleDays,
   getIncomeAllocationUsage,
   getPacedAllowanceStatus,
   normalizeIncomeAllocations,
+  roundMoney,
 } from '../utils';
 import { format } from 'date-fns';
 import { CardTitle, IconButton } from '../components/ui';
@@ -42,9 +44,11 @@ export default function Dashboard({
     : (settings?.income || 0);
 
   const totalAllowances = categories.reduce((s, c) => s + (c.allowance || 0), 0);
+  const totalBoost      = categories.reduce((s, c) => s + (c.temporaryBoost || 0), 0);
+  const totalEffective  = totalAllowances + totalBoost;
   const totalSpent      = categories.reduce((s, c) => s + (c.spent || 0), 0);
-  const totalLeft       = totalAllowances - totalSpent;
-  const overBudgetCats  = categories.filter(c => (c.spent || 0) > (c.allowance || 0));
+  const totalLeft       = totalEffective - totalSpent;
+  const overBudgetCats  = categories.filter(c => (c.spent || 0) > getEffectiveAllowance(c));
   const incomeUsage     = useMemo(() => getIncomeAllocationUsage(incomes, categories), [incomes, categories]);
   const incomeMap       = useMemo(() => new Map(incomes.map(income => [Number(income.id), income])), [incomes]);
   const fundingIssueCats = categories.filter(cat => {
@@ -64,7 +68,7 @@ export default function Dashboard({
   const hiddenIncomeCount = Math.max(0, incomes.length - visibleIncomes.length);
   const hiddenCategoryCount = Math.max(0, categories.length - visibleCategories.length);
 
-  const spendPct   = totalAllowances > 0 ? Math.min(100, (totalSpent / totalAllowances) * 100) : 0;
+  const spendPct   = totalEffective > 0 ? Math.min(100, (totalSpent / totalEffective) * 100) : 0;
   const spendColor = spendPct > 90 ? 'var(--danger)' : spendPct > 70 ? 'var(--warn)' : 'var(--good)';
 
   const isNewUser = incomes.length === 0 && categories.length === 0 && transactions.length === 0;
@@ -110,7 +114,8 @@ export default function Dashboard({
             <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 700, marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Monthly Income</div>
             <div className="font-display dashboard-summary-value" style={{ color: 'var(--accent-mint)' }}>{fmt(totalIncome)}</div>
             <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
-              {fmt(totalAllowances)} allocated · {fmt(totalIncome - totalAllowances)} unallocated
+              {fmt(totalEffective)} allocated · {fmt(totalIncome - totalEffective)} unallocated
+              {totalBoost > 0 ? ` · ${fmt(totalBoost)} temp` : ''}
             </div>
           </div>
 
@@ -157,7 +162,7 @@ export default function Dashboard({
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {overBudgetCats.map(c => {
-              const over = (c.spent || 0) - (c.allowance || 0);
+              const over = (c.spent || 0) - getEffectiveAllowance(c);
               return (
                 <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                   <div style={{ minWidth: 0 }}>
@@ -292,12 +297,6 @@ export default function Dashboard({
               style={{ padding: '7px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
               <CreditCard size={12} /> Subscription
             </button>
-            {onRemediate && categories.length > 0 && (
-              <button className="btn-secondary" onClick={() => onRemediate(null)}
-                style={{ padding: '7px 12px', fontSize: 12 }}>
-                Adjust Budget
-              </button>
-            )}
             <button className="btn-primary" onClick={onAddTx} style={{ padding: '7px 14px', fontSize: 12 }}>
               + Log Expense
             </button>
@@ -311,8 +310,10 @@ export default function Dashboard({
           <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {visibleCategories.map(cat => {
-              const pct      = cat.allowance > 0 ? Math.min(100, ((cat.spent || 0) / cat.allowance) * 100) : 0;
-              const left     = (cat.allowance || 0) - (cat.spent || 0);
+              const effAllowance = getEffectiveAllowance(cat);
+              const boost    = roundMoney(cat.temporaryBoost || 0);
+              const pct      = effAllowance > 0 ? Math.min(100, ((cat.spent || 0) / effAllowance) * 100) : 0;
+              const left     = effAllowance - (cat.spent || 0);
               const barColor = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warn)' : 'var(--accent-mint)';
               const allocations = normalizeIncomeAllocations(cat.incomeAllocations);
               const allocationTotal = getAllocationPercentTotal(allocations);
@@ -338,8 +339,16 @@ export default function Dashboard({
                       <div style={{ width: 8, height: 8, borderRadius: '50%', background: cat.color || 'var(--accent-blue)', flexShrink: 0 }} />
                       <div style={{ minWidth: 0 }}>
                         <span style={{ fontSize: 13, fontWeight: 500 }}>{cat.name}</span>
-                        {(allocations.length > 0 || cat.resetFrequency || cat.allowanceFormula || pacedStatus || !fundingOk) && (
+                        {(allocations.length > 0 || cat.resetFrequency || cat.allowanceFormula || pacedStatus || boost > 0 || !fundingOk) && (
                           <div style={{ display: 'flex', gap: 5, marginTop: 2, flexWrap: 'wrap' }}>
+                            {boost > 0 && (
+                              <span title={`${fmt(boost)} temporary top-up — clears at next reset`} style={{
+                                fontSize: 10, color: 'var(--accent-mint)', background: 'rgba(79,255,176,0.12)',
+                                padding: '1px 6px', borderRadius: 10,
+                              }}>
+                                +{fmt(boost)} temp
+                              </span>
+                            )}
                             {allocations.length > 0 ? (
                               <span title={fundingLabel} style={{
                                 fontSize: 10,
@@ -385,11 +394,16 @@ export default function Dashboard({
                     </div>
                     <div className="mobile-actions" style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                       <div style={{ display: 'flex', gap: 10, fontSize: 12, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>{fmt(cat.spent || 0)} / {fmt(cat.allowance || 0)}</span>
+                        <span style={{ color: 'var(--text-muted)' }}>{fmt(cat.spent || 0)} / {fmt(effAllowance)}</span>
                         <span style={{ color: left < 0 ? 'var(--danger)' : 'var(--text-secondary)', fontWeight: 500, minWidth: 56, textAlign: 'right' }}>
                           {left < 0 ? '-' : ''}{fmt(Math.abs(left))} left
                         </span>
                       </div>
+                      {onRemediate && (
+                        <IconButton onClick={() => onRemediate(cat.id)} label={`Adjust ${cat.name}`} size={28} style={{ opacity: 0.6 }}>
+                          <SlidersHorizontal size={12} />
+                        </IconButton>
+                      )}
                       <IconButton onClick={() => onEditCategory(cat)} label={`Edit ${cat.name}`} size={28} style={{ opacity: 0.6 }}>
                         <Pencil size={12} />
                       </IconButton>
