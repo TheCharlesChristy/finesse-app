@@ -95,6 +95,14 @@ export function roundMoney(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
 }
 
+// Effective allowance = base allowance + any temporary top-up funded from
+// unallocated income for the current cycle. The boost is cleared on reset, so
+// it only affects "how much can I still spend right now", not the recurring
+// base allowance used for income allocation, formulas, or pacing.
+export function getEffectiveAllowance(category) {
+  return roundMoney((Number(category?.allowance) || 0) + (Number(category?.temporaryBoost) || 0));
+}
+
 export function normalizeIncomeAllocations(allocations = []) {
   if (!Array.isArray(allocations)) return [];
   return allocations
@@ -331,7 +339,7 @@ export function wishlistAffordability(item, categories, settings) {
 
   const assigned = assignedIds.map(id => catMap[id]).filter(Boolean);
   const combinedLeftover = assigned.reduce((sum, cat) => {
-    return sum + Math.max(0, (cat.allowance || 0) - (cat.spent || 0));
+    return sum + Math.max(0, getEffectiveAllowance(cat) - (cat.spent || 0));
   }, 0);
 
   const canAffordNow = combinedLeftover >= item.price;

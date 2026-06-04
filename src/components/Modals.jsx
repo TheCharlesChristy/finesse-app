@@ -10,6 +10,7 @@ import {
   formatPacedAllowancePeriod,
   fmt,
   getAllocationPercentTotal,
+  getEffectiveAllowance,
   getIncomeCycleDays,
   getIncomeAllocationUsage,
   getPacedAllowanceMonthlyTotal,
@@ -1523,78 +1524,68 @@ export function ImportModeModal({ onConfirm, onClose }) {
   );
 }
 
-// ── Remediate Modal ──────────────────────────────────────────────────────────
+// ── Adjust Budget Modal ──────────────────────────────────────────────────────
 const REMEDIATE_TABS = [
   { id: 'move',       label: 'Move Spend' },
-  { id: 'oneoff',     label: 'One-Off Income' },
   { id: 'unassigned', label: 'Use Unallocated' },
 ];
 
 export function RemediateModal({
   categories,
   totalIncome,
-  totalAllowances,
   defaultCategoryId,
   onMoveSpend,
-  onAddOneOffIncome,
-  onAllocateUnassigned,
+  onAddTemporaryBoost,
+  onRemoveTemporaryBoost,
   onClose,
 }) {
   const [tab, setTab] = useState('move');
-  const unallocated = roundMoney(totalIncome - totalAllowances);
+
+  // Unallocated = income not assigned to any category, counting temporary
+  // top-ups as allocated so the pool can't be over-committed.
+  const totalAllocated = roundMoney(
+    categories.reduce((s, c) => s + (c.allowance || 0) + (c.temporaryBoost || 0), 0)
+  );
+  const unallocated = roundMoney(totalIncome - totalAllocated);
 
   const firstCatId = categories[0]?.id ? String(categories[0].id) : '';
   const defaultId = defaultCategoryId ? String(defaultCategoryId) : firstCatId;
 
+  const overspendOf = (cat) =>
+    cat ? Math.max(0, roundMoney((cat.spent || 0) - getEffectiveAllowance(cat))) : 0;
+
+  const defaultOverspend = () => {
+    if (!defaultCategoryId) return '';
+    const cat = categories.find(c => c.id === Number(defaultCategoryId));
+    const over = overspendOf(cat);
+    return over > 0 ? String(over) : '';
+  };
+
   // Move spend state
   const [fromCatId, setFromCatId] = useState(defaultId);
   const [toCatId, setToCatId] = useState('');
-  const [moveAmount, setMoveAmount] = useState(() => {
-    if (!defaultCategoryId) return '';
-    const cat = categories.find(c => c.id === Number(defaultCategoryId));
-    if (cat && (cat.spent || 0) > (cat.allowance || 0)) {
-      return String(roundMoney((cat.spent || 0) - (cat.allowance || 0)));
-    }
-    return '';
-  });
+  const [moveAmount, setMoveAmount] = useState(defaultOverspend);
 
-  // One-off income state
-  const [incomeName, setIncomeName] = useState('');
-  const [incomeAmount, setIncomeAmount] = useState(() => {
-    if (!defaultCategoryId) return '';
-    const cat = categories.find(c => c.id === Number(defaultCategoryId));
-    if (cat && (cat.spent || 0) > (cat.allowance || 0)) {
-      return String(roundMoney((cat.spent || 0) - (cat.allowance || 0)));
-    }
-    return '';
-  });
-  const [incomeNote, setIncomeNote] = useState('');
-  const [incomeCatId, setIncomeCatId] = useState(defaultId);
-
-  // Unassigned state
+  // Unallocated (temporary top-up) state
   const [unassignedCatId, setUnassignedCatId] = useState(defaultId);
-  const [unassignedAmount, setUnassignedAmount] = useState(() => {
-    if (!defaultCategoryId) return '';
-    const cat = categories.find(c => c.id === Number(defaultCategoryId));
-    if (cat && (cat.spent || 0) > (cat.allowance || 0)) {
-      return String(roundMoney((cat.spent || 0) - (cat.allowance || 0)));
-    }
-    return '';
-  });
+  const [unassignedAmount, setUnassignedAmount] = useState(defaultOverspend);
 
   // Derived values for move spend
   const fromCat = categories.find(c => String(c.id) === fromCatId);
   const toCat = categories.find(c => String(c.id) === toCatId);
   const parsedMoveAmount = parseFloat(moveAmount) || 0;
-  const toAvailable = toCat ? roundMoney((toCat.allowance || 0) - (toCat.spent || 0)) : 0;
-  const fromOverspend = fromCat ? Math.max(0, roundMoney((fromCat.spent || 0) - (fromCat.allowance || 0))) : 0;
+  const toAvailable = toCat ? roundMoney(getEffectiveAllowance(toCat) - (toCat.spent || 0)) : 0;
+  const fromOverspend = overspendOf(fromCat);
   const toCatOptions = categories.filter(c => String(c.id) !== fromCatId);
 
-  // Derived values for one-off income
-  const parsedIncomeAmount = parseFloat(incomeAmount) || 0;
-
-  // Derived values for unassigned
+  // Derived values for unallocated
   const parsedUnassignedAmount = parseFloat(unassignedAmount) || 0;
+  const unassignedCat = categories.find(c => String(c.id) === unassignedCatId);
+  const existingBoost = roundMoney(unassignedCat?.temporaryBoost || 0);
+
+  const titleCat = defaultCategoryId
+    ? categories.find(c => c.id === Number(defaultCategoryId))
+    : null;
 
   const handleMoveSpend = async () => {
     if (!fromCatId || !toCatId || parsedMoveAmount <= 0) return;
@@ -1602,15 +1593,15 @@ export function RemediateModal({
     onClose();
   };
 
-  const handleOneOffIncome = async () => {
-    if (!incomeName.trim() || parsedIncomeAmount <= 0 || !incomeCatId) return;
-    await onAddOneOffIncome({ name: incomeName.trim(), amount: parsedIncomeAmount, note: incomeNote.trim() }, Number(incomeCatId));
+  const handleAddBoost = async () => {
+    if (!unassignedCatId || parsedUnassignedAmount <= 0) return;
+    await onAddTemporaryBoost(Number(unassignedCatId), parsedUnassignedAmount);
     onClose();
   };
 
-  const handleAllocateUnassigned = async () => {
-    if (!unassignedCatId || parsedUnassignedAmount <= 0) return;
-    await onAllocateUnassigned(Number(unassignedCatId), parsedUnassignedAmount);
+  const handleRemoveBoost = async () => {
+    if (!unassignedCatId || existingBoost <= 0) return;
+    await onRemoveTemporaryBoost(Number(unassignedCatId));
     onClose();
   };
 
@@ -1620,8 +1611,17 @@ export function RemediateModal({
     if (toCatId === id) setToCatId('');
   };
 
+  const catOption = (c) => {
+    const over = overspendOf(c);
+    return (
+      <option key={c.id} value={c.id}>
+        {c.name}{over > 0 ? ` (overspent ${fmt(over)})` : ''}
+      </option>
+    );
+  };
+
   return (
-    <Modal title="Remediate Budget" onClose={onClose}>
+    <Modal title={titleCat ? `Adjust — ${titleCat.name}` : 'Adjust Budget'} onClose={onClose}>
       {/* Tab bar */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'rgba(255,255,255,0.04)', borderRadius: 10, padding: 4 }}>
         {REMEDIATE_TABS.map(t => (
@@ -1630,7 +1630,7 @@ export function RemediateModal({
             style={{
               flex: 1,
               padding: '7px 4px',
-              fontSize: 11,
+              fontSize: 12,
               fontWeight: 600,
               borderRadius: 7,
               border: 'none',
@@ -1653,20 +1653,13 @@ export function RemediateModal({
           <Field label="From category">
             {id => (
               <select id={id} className="glass-input" value={fromCatId} onChange={e => handleFromCatChange(e.target.value)}>
-                {categories.map(c => {
-                  const over = Math.max(0, roundMoney((c.spent || 0) - (c.allowance || 0)));
-                  return (
-                    <option key={c.id} value={c.id}>
-                      {c.name}{over > 0 ? ` (overspent ${fmt(over)})` : ''}
-                    </option>
-                  );
-                })}
+                {categories.map(catOption)}
               </select>
             )}
           </Field>
           {fromCat && fromOverspend > 0 && (
             <div style={{ fontSize: 12, color: 'var(--danger)', background: 'rgba(255,107,138,0.08)', borderRadius: 8, padding: '8px 12px' }}>
-              Overspent by {fmt(fromOverspend)} · current spend {fmt(fromCat.spent || 0)} / {fmt(fromCat.allowance || 0)} allowance
+              Overspent by {fmt(fromOverspend)} · current spend {fmt(fromCat.spent || 0)} / {fmt(getEffectiveAllowance(fromCat))} allowance
             </div>
           )}
           <Field label="Amount (£)">
@@ -1680,7 +1673,7 @@ export function RemediateModal({
               <select id={id} className="glass-input" value={toCatId} onChange={e => setToCatId(e.target.value)}>
                 <option value="">Select category…</option>
                 {toCatOptions.map(c => {
-                  const avail = roundMoney((c.allowance || 0) - (c.spent || 0));
+                  const avail = roundMoney(getEffectiveAllowance(c) - (c.spent || 0));
                   return (
                     <option key={c.id} value={c.id}>
                       {c.name} · {avail >= 0 ? fmt(avail) + ' left' : fmt(Math.abs(avail)) + ' over'}
@@ -1705,116 +1698,54 @@ export function RemediateModal({
         </div>
       )}
 
-      {/* ── One-Off Income ── */}
-      {tab === 'oneoff' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0, lineHeight: 1.6 }}>
-            Record a one-time income (e.g. a gift or refund) and assign it to extend a category's allowance.
-          </p>
-          <Field label="Source">
-            {id => (
-              <input id={id} className="glass-input" placeholder="e.g. Gift, refund, bonus…"
-                value={incomeName} onChange={e => setIncomeName(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleOneOffIncome()} autoFocus />
-            )}
-          </Field>
-          <Field label="Amount (£)">
-            {id => (
-              <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
-                value={incomeAmount} onChange={e => setIncomeAmount(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleOneOffIncome()} />
-            )}
-          </Field>
-          <Field label="Note (optional)">
-            {id => (
-              <input id={id} className="glass-input" placeholder="Optional" value={incomeNote}
-                onChange={e => setIncomeNote(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleOneOffIncome()} />
-            )}
-          </Field>
-          <Field label="Extend category">
-            {id => (
-              <select id={id} className="glass-input" value={incomeCatId} onChange={e => setIncomeCatId(e.target.value)}>
-                {categories.map(c => {
-                  const over = Math.max(0, roundMoney((c.spent || 0) - (c.allowance || 0)));
-                  return (
-                    <option key={c.id} value={c.id}>
-                      {c.name}{over > 0 ? ` (overspent ${fmt(over)})` : ''}
-                    </option>
-                  );
-                })}
-              </select>
-            )}
-          </Field>
-          {parsedIncomeAmount > 0 && incomeCatId && (() => {
-            const cat = categories.find(c => String(c.id) === incomeCatId);
-            if (!cat) return null;
-            const newAllowance = roundMoney((cat.allowance || 0) + parsedIncomeAmount);
-            const newLeft = roundMoney(newAllowance - (cat.spent || 0));
-            return (
-              <div style={{ fontSize: 12, color: newLeft >= 0 ? 'var(--text-muted)' : 'var(--warn)', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 12px' }}>
-                {cat.name} allowance: {fmt(cat.allowance || 0)} → {fmt(newAllowance)} · {newLeft >= 0 ? fmt(newLeft) + ' remaining' : fmt(Math.abs(newLeft)) + ' still over'}
-              </div>
-            );
-          })()}
-          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-            <button className="btn-primary" onClick={handleOneOffIncome} style={{ flex: 2 }}
-              disabled={!incomeName.trim() || parsedIncomeAmount <= 0 || !incomeCatId}>
-              Claim &amp; Assign
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ── Use Unallocated ── */}
+      {/* ── Use Unallocated (temporary top-up) ── */}
       {tab === 'unassigned' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0, lineHeight: 1.6 }}>
-            Move unallocated income into a category's allowance to cover overspend or increase its budget.
+            Temporarily top up a category from your unallocated income for this cycle. The boost is separate from the recurring allowance and clears automatically at the next reset.
           </p>
           <div style={{ fontSize: 13, color: unallocated > 0 ? 'var(--accent-mint)' : 'var(--danger)', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '10px 14px', fontWeight: 600 }}>
-            {fmt(Math.max(0, unallocated))} unallocated{unallocated < 0 ? ' (over-allocated)' : ' available'}
+            {fmt(Math.max(0, unallocated))} unallocated{unallocated <= 0 ? ' available (fully allocated)' : ' available'}
           </div>
-          <Field label="Extend category">
+          <Field label="Top up category">
             {id => (
               <select id={id} className="glass-input" value={unassignedCatId} onChange={e => setUnassignedCatId(e.target.value)}>
-                {categories.map(c => {
-                  const over = Math.max(0, roundMoney((c.spent || 0) - (c.allowance || 0)));
-                  return (
-                    <option key={c.id} value={c.id}>
-                      {c.name}{over > 0 ? ` (overspent ${fmt(over)})` : ''}
-                    </option>
-                  );
-                })}
+                {categories.map(catOption)}
               </select>
             )}
           </Field>
-          <Field label="Amount (£)">
+          {existingBoost > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 12, color: 'var(--accent-mint)', background: 'rgba(79,255,176,0.06)', borderRadius: 8, padding: '8px 12px' }}>
+              <span>Current temporary top-up: {fmt(existingBoost)}</span>
+              <button type="button" className="btn-secondary" onClick={handleRemoveBoost}
+                style={{ padding: '5px 10px', fontSize: 11, flexShrink: 0 }}>
+                Remove
+              </button>
+            </div>
+          )}
+          <Field label="Add amount (£)">
             {id => (
               <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
                 max={unallocated > 0 ? unallocated : undefined}
                 value={unassignedAmount} onChange={e => setUnassignedAmount(e.target.value)} />
             )}
           </Field>
-          {parsedUnassignedAmount > 0 && unassignedCatId && (() => {
-            const cat = categories.find(c => String(c.id) === unassignedCatId);
-            if (!cat) return null;
-            const newAllowance = roundMoney((cat.allowance || 0) + parsedUnassignedAmount);
-            const newLeft = roundMoney(newAllowance - (cat.spent || 0));
+          {parsedUnassignedAmount > 0 && unassignedCat && (() => {
+            const newEffective = roundMoney(getEffectiveAllowance(unassignedCat) + parsedUnassignedAmount);
+            const newLeft = roundMoney(newEffective - (unassignedCat.spent || 0));
             const newUnallocated = roundMoney(unallocated - parsedUnassignedAmount);
             return (
               <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 12px' }}>
-                {cat.name}: {fmt(cat.allowance || 0)} → {fmt(newAllowance)} allowance · {newLeft >= 0 ? fmt(newLeft) + ' remaining' : fmt(Math.abs(newLeft)) + ' still over'}
+                {unassignedCat.name}: {fmt(getEffectiveAllowance(unassignedCat))} → {fmt(newEffective)} available · {newLeft >= 0 ? fmt(newLeft) + ' remaining' : fmt(Math.abs(newLeft)) + ' still over'}
                 {newUnallocated < 0 && <span style={{ color: 'var(--danger)', display: 'block', marginTop: 2 }}>⚠ Exceeds available unallocated by {fmt(Math.abs(newUnallocated))}</span>}
               </div>
             );
           })()}
           <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 4 }}>
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-            <button className="btn-primary" onClick={handleAllocateUnassigned} style={{ flex: 2 }}
+            <button className="btn-primary" onClick={handleAddBoost} style={{ flex: 2 }}
               disabled={!unassignedCatId || parsedUnassignedAmount <= 0}>
-              Allocate Funds
+              Add Temporary Funds
             </button>
           </div>
         </div>

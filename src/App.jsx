@@ -12,7 +12,7 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   addIncome, updateIncome, deleteIncome, getIncomeEvents, recordIncomeReceived, deleteIncomeEvent,
   getSubscriptions, addSubscription, updateSubscription, deleteSubscription, processDueSubscriptions,
   addVariable, updateVariable, deleteVariable,
-  moveSpendBetweenCategories, addOneOffIncomeAndAllocateToCategory, allocateUnassignedToCategory } from './db';
+  moveSpendBetweenCategories, adjustCategoryTemporaryBoost, setCategoryTemporaryBoost } from './db';
 import { calcNextReset, evaluateFormula, fmt, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations } from './utils';
 
 import Dashboard from './views/Dashboard';
@@ -362,12 +362,12 @@ export default function App() {
     moveSpendBetweenCategories(fromCategoryId, toCategoryId, amount)
   ), []);
 
-  const handleAddOneOffIncomeAndAllocate = useCallback((data, categoryId) => (
-    addOneOffIncomeAndAllocateToCategory(data, categoryId, activeAccountId)
-  ), [activeAccountId]);
+  const handleAddTemporaryBoost = useCallback((categoryId, amount) => (
+    adjustCategoryTemporaryBoost(categoryId, amount)
+  ), []);
 
-  const handleAllocateUnassigned = useCallback((categoryId, amount) => (
-    allocateUnassignedToCategory(categoryId, amount)
+  const handleRemoveTemporaryBoost = useCallback((categoryId) => (
+    setCategoryTemporaryBoost(categoryId, 0)
   ), []);
 
   const handleOpenRemediate = useCallback((categoryId = null) => {
@@ -799,11 +799,10 @@ export default function App() {
         <RemediateModal
           categories={categories}
           totalIncome={incomes.length > 0 ? incomes.reduce((s, i) => s + (i.amount || 0), 0) : (settings?.income || 0)}
-          totalAllowances={categories.reduce((s, c) => s + (c.allowance || 0), 0)}
           defaultCategoryId={remediateDefaultCategoryId}
           onMoveSpend={handleMoveSpend}
-          onAddOneOffIncome={handleAddOneOffIncomeAndAllocate}
-          onAllocateUnassigned={handleAllocateUnassigned}
+          onAddTemporaryBoost={handleAddTemporaryBoost}
+          onRemoveTemporaryBoost={handleRemoveTemporaryBoost}
           onClose={() => { setModal(null); setRemediateDefaultCategoryId(null); }}
         />
       )}
