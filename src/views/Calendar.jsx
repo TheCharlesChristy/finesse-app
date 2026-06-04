@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { addMonths, differenceInDays, eachDayOfInterval, endOfMonth, endOfWeek, format, isSameDay, isSameMonth, startOfDay, startOfMonth, startOfWeek, subMonths } from 'date-fns';
+import { addDays, addMonths, differenceInDays, eachDayOfInterval, format, isSameDay, isSameMonth, startOfDay, startOfMonth, startOfWeek, subMonths } from 'date-fns';
 import { CalendarDays, ChevronLeft, ChevronRight, CreditCard, Pause, Pencil, Play, Plus, Trash2, Wallet } from 'lucide-react';
 import { addRecurringInterval, calcNextReset, fmt, normalizeIncomeAllocations } from '../utils';
 import { CardTitle, IconButton } from '../components/ui';
@@ -100,7 +100,7 @@ export default function Calendar({
 }) {
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const rangeStart = startOfWeek(startOfMonth(month), { weekStartsOn: 1 });
-  const rangeEnd = endOfWeek(endOfMonth(month), { weekStartsOn: 1 });
+  const rangeEnd = addDays(rangeStart, 34); // always 7×5 = 35 cells
   const days = useMemo(() => eachDayOfInterval({ start: rangeStart, end: rangeEnd }), [rangeStart, rangeEnd]);
   const categoryMap = useMemo(() => new Map(categories.map(category => [Number(category.id), category])), [categories]);
   const today = startOfDay(new Date());

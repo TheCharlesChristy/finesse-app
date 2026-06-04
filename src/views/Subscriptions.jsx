@@ -187,13 +187,13 @@ export default function Subscriptions({
       </div>
 
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '16px' }}>
-        <div className="mobile-row-stack" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
-          <div style={{ position: 'relative', flex: '1 1 240px' }}>
+        <div className="subs-filter-bar">
+          <div className="subs-filter-search">
             <Search size={15} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
             <input className="glass-input" placeholder="Search subscriptions, categories, or links" value={search}
               aria-label="Search subscriptions" onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 36 }} />
           </div>
-          <div className="mobile-actions" role="group" aria-label="Filter subscriptions" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <div role="group" aria-label="Filter subscriptions" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {[
               ['all', 'All'],
               ['active', 'Active'],
@@ -205,7 +205,7 @@ export default function Subscriptions({
               </button>
             ))}
           </div>
-          <select className="glass-input" value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="Sort subscriptions" style={{ flex: '0 1 220px' }}>
+          <select className="glass-input subs-filter-sort" value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="Sort subscriptions">
             {sortOptions.map(([value, label]) => <option key={value} value={value}>Sort: {label}</option>)}
           </select>
           {filtersActive && (
