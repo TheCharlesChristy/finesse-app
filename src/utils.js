@@ -103,6 +103,12 @@ export function getEffectiveAllowance(category) {
   return roundMoney((Number(category?.allowance) || 0) + (Number(category?.temporaryBoost) || 0));
 }
 
+// Spare budget a category can lend or that's still safe to spend: effective
+// allowance minus what's already been spent, never negative.
+export function getCategorySpare(category) {
+  return roundMoney(Math.max(0, getEffectiveAllowance(category) - (Number(category?.spent) || 0)));
+}
+
 export function normalizeIncomeAllocations(allocations = []) {
   if (!Array.isArray(allocations)) return [];
   return allocations

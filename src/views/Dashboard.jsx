@@ -33,7 +33,7 @@ export default function Dashboard({
   onIncomeHoldToggle, onIncomeFastForward,
   onEditIncome, onDeleteIncome,
   onEditCategory, onDeleteCategory,
-  onRemediate,
+  onAdjust,
 }) {
   const [showAllIncomes, setShowAllIncomes] = useState(false);
   const [showAllCategories, setShowAllCategories] = useState(false);
@@ -45,6 +45,7 @@ export default function Dashboard({
 
   const totalAllowances = categories.reduce((s, c) => s + (c.allowance || 0), 0);
   const totalBoost      = categories.reduce((s, c) => s + (c.temporaryBoost || 0), 0);
+  const totalAdded      = categories.reduce((s, c) => s + Math.max(0, c.temporaryBoost || 0), 0);
   const totalEffective  = totalAllowances + totalBoost;
   const totalSpent      = categories.reduce((s, c) => s + (c.spent || 0), 0);
   const totalLeft       = totalEffective - totalSpent;
@@ -115,7 +116,7 @@ export default function Dashboard({
             <div className="font-display dashboard-summary-value" style={{ color: 'var(--accent-mint)' }}>{fmt(totalIncome)}</div>
             <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
               {fmt(totalEffective)} allocated · {fmt(totalIncome - totalEffective)} unallocated
-              {totalBoost > 0 ? ` · ${fmt(totalBoost)} temp` : ''}
+              {totalAdded > 0 ? ` · ${fmt(totalAdded)} added` : ''}
             </div>
           </div>
 
@@ -171,12 +172,12 @@ export default function Dashboard({
                       +{fmt(over)} over allowance
                     </span>
                   </div>
-                  {onRemediate && (
+                  {onAdjust && (
                     <button
                       className="btn-secondary"
-                      onClick={() => onRemediate(c.id)}
+                      onClick={() => onAdjust(c.id)}
                       style={{ padding: '5px 12px', fontSize: 11, flexShrink: 0, borderColor: 'rgba(255,107,138,0.4)', color: 'var(--danger)' }}>
-                      Remediate
+                      Fix
                     </button>
                   )}
                 </div>
@@ -339,14 +340,22 @@ export default function Dashboard({
                       <div style={{ width: 8, height: 8, borderRadius: '50%', background: cat.color || 'var(--accent-blue)', flexShrink: 0 }} />
                       <div style={{ minWidth: 0 }}>
                         <span style={{ fontSize: 13, fontWeight: 500 }}>{cat.name}</span>
-                        {(allocations.length > 0 || cat.resetFrequency || cat.allowanceFormula || pacedStatus || boost > 0 || !fundingOk) && (
+                        {(allocations.length > 0 || cat.resetFrequency || cat.allowanceFormula || pacedStatus || boost !== 0 || !fundingOk) && (
                           <div style={{ display: 'flex', gap: 5, marginTop: 2, flexWrap: 'wrap' }}>
                             {boost > 0 && (
-                              <span title={`${fmt(boost)} temporary top-up — clears at next reset`} style={{
+                              <span title="Extra budget added for this cycle — clears at next reset" style={{
                                 fontSize: 10, color: 'var(--accent-mint)', background: 'rgba(79,255,176,0.12)',
                                 padding: '1px 6px', borderRadius: 10,
                               }}>
-                                +{fmt(boost)} temp
+                                +{fmt(boost)} added
+                              </span>
+                            )}
+                            {boost < 0 && (
+                              <span title="Lent to another category this cycle — restored at next reset" style={{
+                                fontSize: 10, color: 'var(--warn)', background: 'rgba(251,191,112,0.12)',
+                                padding: '1px 6px', borderRadius: 10,
+                              }}>
+                                −{fmt(Math.abs(boost))} lent
                               </span>
                             )}
                             {allocations.length > 0 ? (
@@ -399,8 +408,8 @@ export default function Dashboard({
                           {left < 0 ? '-' : ''}{fmt(Math.abs(left))} left
                         </span>
                       </div>
-                      {onRemediate && (
-                        <IconButton onClick={() => onRemediate(cat.id)} label={`Adjust ${cat.name}`} size={28} style={{ opacity: 0.6 }}>
+                      {onAdjust && (
+                        <IconButton onClick={() => onAdjust(cat.id)} label={`Adjust ${cat.name}`} size={28} style={{ opacity: 0.6 }}>
                           <SlidersHorizontal size={12} />
                         </IconButton>
                       )}
