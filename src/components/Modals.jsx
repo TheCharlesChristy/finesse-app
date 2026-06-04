@@ -1522,3 +1522,303 @@ export function ImportModeModal({ onConfirm, onClose }) {
     </Modal>
   );
 }
+
+// ── Remediate Modal ──────────────────────────────────────────────────────────
+const REMEDIATE_TABS = [
+  { id: 'move',       label: 'Move Spend' },
+  { id: 'oneoff',     label: 'One-Off Income' },
+  { id: 'unassigned', label: 'Use Unallocated' },
+];
+
+export function RemediateModal({
+  categories,
+  totalIncome,
+  totalAllowances,
+  defaultCategoryId,
+  onMoveSpend,
+  onAddOneOffIncome,
+  onAllocateUnassigned,
+  onClose,
+}) {
+  const [tab, setTab] = useState('move');
+  const unallocated = roundMoney(totalIncome - totalAllowances);
+
+  const firstCatId = categories[0]?.id ? String(categories[0].id) : '';
+  const defaultId = defaultCategoryId ? String(defaultCategoryId) : firstCatId;
+
+  // Move spend state
+  const [fromCatId, setFromCatId] = useState(defaultId);
+  const [toCatId, setToCatId] = useState('');
+  const [moveAmount, setMoveAmount] = useState(() => {
+    if (!defaultCategoryId) return '';
+    const cat = categories.find(c => c.id === Number(defaultCategoryId));
+    if (cat && (cat.spent || 0) > (cat.allowance || 0)) {
+      return String(roundMoney((cat.spent || 0) - (cat.allowance || 0)));
+    }
+    return '';
+  });
+
+  // One-off income state
+  const [incomeName, setIncomeName] = useState('');
+  const [incomeAmount, setIncomeAmount] = useState(() => {
+    if (!defaultCategoryId) return '';
+    const cat = categories.find(c => c.id === Number(defaultCategoryId));
+    if (cat && (cat.spent || 0) > (cat.allowance || 0)) {
+      return String(roundMoney((cat.spent || 0) - (cat.allowance || 0)));
+    }
+    return '';
+  });
+  const [incomeNote, setIncomeNote] = useState('');
+  const [incomeCatId, setIncomeCatId] = useState(defaultId);
+
+  // Unassigned state
+  const [unassignedCatId, setUnassignedCatId] = useState(defaultId);
+  const [unassignedAmount, setUnassignedAmount] = useState(() => {
+    if (!defaultCategoryId) return '';
+    const cat = categories.find(c => c.id === Number(defaultCategoryId));
+    if (cat && (cat.spent || 0) > (cat.allowance || 0)) {
+      return String(roundMoney((cat.spent || 0) - (cat.allowance || 0)));
+    }
+    return '';
+  });
+
+  // Derived values for move spend
+  const fromCat = categories.find(c => String(c.id) === fromCatId);
+  const toCat = categories.find(c => String(c.id) === toCatId);
+  const parsedMoveAmount = parseFloat(moveAmount) || 0;
+  const toAvailable = toCat ? roundMoney((toCat.allowance || 0) - (toCat.spent || 0)) : 0;
+  const fromOverspend = fromCat ? Math.max(0, roundMoney((fromCat.spent || 0) - (fromCat.allowance || 0))) : 0;
+  const toCatOptions = categories.filter(c => String(c.id) !== fromCatId);
+
+  // Derived values for one-off income
+  const parsedIncomeAmount = parseFloat(incomeAmount) || 0;
+
+  // Derived values for unassigned
+  const parsedUnassignedAmount = parseFloat(unassignedAmount) || 0;
+
+  const handleMoveSpend = async () => {
+    if (!fromCatId || !toCatId || parsedMoveAmount <= 0) return;
+    await onMoveSpend(Number(fromCatId), Number(toCatId), parsedMoveAmount);
+    onClose();
+  };
+
+  const handleOneOffIncome = async () => {
+    if (!incomeName.trim() || parsedIncomeAmount <= 0 || !incomeCatId) return;
+    await onAddOneOffIncome({ name: incomeName.trim(), amount: parsedIncomeAmount, note: incomeNote.trim() }, Number(incomeCatId));
+    onClose();
+  };
+
+  const handleAllocateUnassigned = async () => {
+    if (!unassignedCatId || parsedUnassignedAmount <= 0) return;
+    await onAllocateUnassigned(Number(unassignedCatId), parsedUnassignedAmount);
+    onClose();
+  };
+
+  // Keep toCatId in sync when fromCatId changes
+  const handleFromCatChange = (id) => {
+    setFromCatId(id);
+    if (toCatId === id) setToCatId('');
+  };
+
+  return (
+    <Modal title="Remediate Budget" onClose={onClose}>
+      {/* Tab bar */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'rgba(255,255,255,0.04)', borderRadius: 10, padding: 4 }}>
+        {REMEDIATE_TABS.map(t => (
+          <button key={t.id} type="button"
+            onClick={() => setTab(t.id)}
+            style={{
+              flex: 1,
+              padding: '7px 4px',
+              fontSize: 11,
+              fontWeight: 600,
+              borderRadius: 7,
+              border: 'none',
+              cursor: 'pointer',
+              transition: 'background 0.15s, color 0.15s',
+              background: tab === t.id ? 'rgba(79,255,176,0.15)' : 'transparent',
+              color: tab === t.id ? 'var(--accent-mint)' : 'var(--text-muted)',
+            }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Move Spend ── */}
+      {tab === 'move' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0, lineHeight: 1.6 }}>
+            Reclassify spending from one category to another. The source category's spend decreases and the destination's increases.
+          </p>
+          <Field label="From category">
+            {id => (
+              <select id={id} className="glass-input" value={fromCatId} onChange={e => handleFromCatChange(e.target.value)}>
+                {categories.map(c => {
+                  const over = Math.max(0, roundMoney((c.spent || 0) - (c.allowance || 0)));
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{over > 0 ? ` (overspent ${fmt(over)})` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            )}
+          </Field>
+          {fromCat && fromOverspend > 0 && (
+            <div style={{ fontSize: 12, color: 'var(--danger)', background: 'rgba(255,107,138,0.08)', borderRadius: 8, padding: '8px 12px' }}>
+              Overspent by {fmt(fromOverspend)} · current spend {fmt(fromCat.spent || 0)} / {fmt(fromCat.allowance || 0)} allowance
+            </div>
+          )}
+          <Field label="Amount (£)">
+            {id => (
+              <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
+                value={moveAmount} onChange={e => setMoveAmount(e.target.value)} />
+            )}
+          </Field>
+          <Field label="To category">
+            {id => (
+              <select id={id} className="glass-input" value={toCatId} onChange={e => setToCatId(e.target.value)}>
+                <option value="">Select category…</option>
+                {toCatOptions.map(c => {
+                  const avail = roundMoney((c.allowance || 0) - (c.spent || 0));
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {c.name} · {avail >= 0 ? fmt(avail) + ' left' : fmt(Math.abs(avail)) + ' over'}
+                    </option>
+                  );
+                })}
+              </select>
+            )}
+          </Field>
+          {toCat && parsedMoveAmount > 0 && (
+            <div style={{ fontSize: 12, color: toAvailable - parsedMoveAmount < 0 ? 'var(--warn)' : 'var(--text-muted)', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 12px' }}>
+              {toCat.name} will have {fmt(Math.abs(toAvailable - parsedMoveAmount))} {toAvailable - parsedMoveAmount < 0 ? 'over budget' : 'remaining'}
+            </div>
+          )}
+          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+            <button className="btn-primary" onClick={handleMoveSpend} style={{ flex: 2 }}
+              disabled={!fromCatId || !toCatId || parsedMoveAmount <= 0}>
+              Move Spend
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── One-Off Income ── */}
+      {tab === 'oneoff' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0, lineHeight: 1.6 }}>
+            Record a one-time income (e.g. a gift or refund) and assign it to extend a category's allowance.
+          </p>
+          <Field label="Source">
+            {id => (
+              <input id={id} className="glass-input" placeholder="e.g. Gift, refund, bonus…"
+                value={incomeName} onChange={e => setIncomeName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleOneOffIncome()} autoFocus />
+            )}
+          </Field>
+          <Field label="Amount (£)">
+            {id => (
+              <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
+                value={incomeAmount} onChange={e => setIncomeAmount(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleOneOffIncome()} />
+            )}
+          </Field>
+          <Field label="Note (optional)">
+            {id => (
+              <input id={id} className="glass-input" placeholder="Optional" value={incomeNote}
+                onChange={e => setIncomeNote(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleOneOffIncome()} />
+            )}
+          </Field>
+          <Field label="Extend category">
+            {id => (
+              <select id={id} className="glass-input" value={incomeCatId} onChange={e => setIncomeCatId(e.target.value)}>
+                {categories.map(c => {
+                  const over = Math.max(0, roundMoney((c.spent || 0) - (c.allowance || 0)));
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{over > 0 ? ` (overspent ${fmt(over)})` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            )}
+          </Field>
+          {parsedIncomeAmount > 0 && incomeCatId && (() => {
+            const cat = categories.find(c => String(c.id) === incomeCatId);
+            if (!cat) return null;
+            const newAllowance = roundMoney((cat.allowance || 0) + parsedIncomeAmount);
+            const newLeft = roundMoney(newAllowance - (cat.spent || 0));
+            return (
+              <div style={{ fontSize: 12, color: newLeft >= 0 ? 'var(--text-muted)' : 'var(--warn)', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 12px' }}>
+                {cat.name} allowance: {fmt(cat.allowance || 0)} → {fmt(newAllowance)} · {newLeft >= 0 ? fmt(newLeft) + ' remaining' : fmt(Math.abs(newLeft)) + ' still over'}
+              </div>
+            );
+          })()}
+          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+            <button className="btn-primary" onClick={handleOneOffIncome} style={{ flex: 2 }}
+              disabled={!incomeName.trim() || parsedIncomeAmount <= 0 || !incomeCatId}>
+              Claim &amp; Assign
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Use Unallocated ── */}
+      {tab === 'unassigned' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0, lineHeight: 1.6 }}>
+            Move unallocated income into a category's allowance to cover overspend or increase its budget.
+          </p>
+          <div style={{ fontSize: 13, color: unallocated > 0 ? 'var(--accent-mint)' : 'var(--danger)', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '10px 14px', fontWeight: 600 }}>
+            {fmt(Math.max(0, unallocated))} unallocated{unallocated < 0 ? ' (over-allocated)' : ' available'}
+          </div>
+          <Field label="Extend category">
+            {id => (
+              <select id={id} className="glass-input" value={unassignedCatId} onChange={e => setUnassignedCatId(e.target.value)}>
+                {categories.map(c => {
+                  const over = Math.max(0, roundMoney((c.spent || 0) - (c.allowance || 0)));
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{over > 0 ? ` (overspent ${fmt(over)})` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            )}
+          </Field>
+          <Field label="Amount (£)">
+            {id => (
+              <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
+                max={unallocated > 0 ? unallocated : undefined}
+                value={unassignedAmount} onChange={e => setUnassignedAmount(e.target.value)} />
+            )}
+          </Field>
+          {parsedUnassignedAmount > 0 && unassignedCatId && (() => {
+            const cat = categories.find(c => String(c.id) === unassignedCatId);
+            if (!cat) return null;
+            const newAllowance = roundMoney((cat.allowance || 0) + parsedUnassignedAmount);
+            const newLeft = roundMoney(newAllowance - (cat.spent || 0));
+            const newUnallocated = roundMoney(unallocated - parsedUnassignedAmount);
+            return (
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 12px' }}>
+                {cat.name}: {fmt(cat.allowance || 0)} → {fmt(newAllowance)} allowance · {newLeft >= 0 ? fmt(newLeft) + ' remaining' : fmt(Math.abs(newLeft)) + ' still over'}
+                {newUnallocated < 0 && <span style={{ color: 'var(--danger)', display: 'block', marginTop: 2 }}>⚠ Exceeds available unallocated by {fmt(Math.abs(newUnallocated))}</span>}
+              </div>
+            );
+          })()}
+          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+            <button className="btn-primary" onClick={handleAllocateUnassigned} style={{ flex: 2 }}
+              disabled={!unassignedCatId || parsedUnassignedAmount <= 0}>
+              Allocate Funds
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}

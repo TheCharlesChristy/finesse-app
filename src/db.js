@@ -790,6 +790,56 @@ export async function deleteVariable(id) {
   return db.variables.delete(id);
 }
 
+// ── Overspend remediation ────────────────────────────────────────────────────
+export async function moveSpendBetweenCategories(fromCategoryId, toCategoryId, amount) {
+  const fromId = Number(fromCategoryId);
+  const toId = Number(toCategoryId);
+  const moveAmount = roundMoney(amount);
+  if (!fromId || !toId || fromId === toId || moveAmount <= 0) return;
+
+  await db.transaction('rw', db.categories, async () => {
+    const [fromCat, toCat] = await Promise.all([
+      db.categories.get(fromId),
+      db.categories.get(toId),
+    ]);
+    if (fromCat) await db.categories.update(fromId, applyCategorySpendDelta(fromCat, -moveAmount));
+    if (toCat) await db.categories.update(toId, applyCategorySpendDelta(toCat, moveAmount));
+  });
+}
+
+export async function addOneOffIncomeAndAllocateToCategory({ name, amount, note = '' }, categoryId, accountId = null) {
+  const targetAccountId = accountId != null ? Number(accountId) : await getDefaultAccountId();
+  const incomeAmount = roundMoney(amount);
+  const catId = Number(categoryId);
+  if (!targetAccountId || incomeAmount <= 0 || !catId) return 0;
+
+  const eventId = await recordIncomeReceived({
+    accountId: targetAccountId,
+    name: name || 'One-off income',
+    amount: incomeAmount,
+    note,
+    type: 'one-off',
+  });
+
+  const cat = await db.categories.get(catId);
+  if (cat) {
+    await db.categories.update(catId, { allowance: roundMoney((cat.allowance || 0) + incomeAmount) });
+  }
+
+  return eventId;
+}
+
+export async function allocateUnassignedToCategory(categoryId, amount) {
+  const catId = Number(categoryId);
+  const allocationAmount = roundMoney(amount);
+  if (!catId || allocationAmount <= 0) return;
+
+  const cat = await db.categories.get(catId);
+  if (cat) {
+    await db.categories.update(catId, { allowance: roundMoney((cat.allowance || 0) + allocationAmount) });
+  }
+}
+
 // ── Budget reset ─────────────────────────────────────────────────────────────
 export async function resetBudget(accountId = null) {
   const now = new Date().toISOString();

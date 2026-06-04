@@ -11,7 +11,8 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   exportTransactionsCSV, clearAllData, resetBudget, resetCategory, resetCategoriesForIncome,
   addIncome, updateIncome, deleteIncome, getIncomeEvents, recordIncomeReceived, deleteIncomeEvent,
   getSubscriptions, addSubscription, updateSubscription, deleteSubscription, processDueSubscriptions,
-  addVariable, updateVariable, deleteVariable } from './db';
+  addVariable, updateVariable, deleteVariable,
+  moveSpendBetweenCategories, addOneOffIncomeAndAllocateToCategory, allocateUnassignedToCategory } from './db';
 import { calcNextReset, evaluateFormula, fmt, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations } from './utils';
 
 import Dashboard from './views/Dashboard';
@@ -26,7 +27,8 @@ import SettingsView from './views/Settings';
 import Variables from './views/Variables';
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
-  AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal } from './components/Modals';
+  AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
+  RemediateModal } from './components/Modals';
 import { Modal } from './components/ui';
 import { useDialog } from './components/useDialog';
 
@@ -77,6 +79,7 @@ export default function App() {
   const [editingWishlistList, setEditingWishlistList] = useState(null);
   const [wishlistDefaultCatId, setWishlistDefaultCatId] = useState(null);
   const [transactionDefaults, setTransactionDefaults] = useState(null);
+  const [remediateDefaultCategoryId, setRemediateDefaultCategoryId] = useState(null);
   const [activeAccountId, setActiveAccountId] = useState(() => {
     const stored = Number(localStorage.getItem('finesse.activeAccountId'));
     return Number.isFinite(stored) && stored > 0 ? stored : null;
@@ -355,6 +358,23 @@ export default function App() {
     });
   }, [activeAccountId]);
 
+  const handleMoveSpend = useCallback((fromCategoryId, toCategoryId, amount) => (
+    moveSpendBetweenCategories(fromCategoryId, toCategoryId, amount)
+  ), []);
+
+  const handleAddOneOffIncomeAndAllocate = useCallback((data, categoryId) => (
+    addOneOffIncomeAndAllocateToCategory(data, categoryId, activeAccountId)
+  ), [activeAccountId]);
+
+  const handleAllocateUnassigned = useCallback((categoryId, amount) => (
+    allocateUnassignedToCategory(categoryId, amount)
+  ), []);
+
+  const handleOpenRemediate = useCallback((categoryId = null) => {
+    setRemediateDefaultCategoryId(categoryId);
+    setModal('remediate');
+  }, []);
+
   const handleEditIncome = useCallback((income) => {
     setEditingIncome(income);
     setModal('editIncome');
@@ -574,6 +594,7 @@ export default function App() {
               onDeleteIncome={handleDeleteIncome}
               onEditCategory={handleEditCategory}
               onDeleteCategory={handleDeleteCategory}
+              onRemediate={handleOpenRemediate}
             />
           )}
           {view === 'accounts' && (
@@ -773,6 +794,18 @@ export default function App() {
       {modal === 'importMode' && (
         <ImportModeModal onConfirm={handleImportConfirm}
           onClose={() => { setPendingImport(null); setModal(null); }} />
+      )}
+      {modal === 'remediate' && categories.length > 0 && (
+        <RemediateModal
+          categories={categories}
+          totalIncome={incomes.length > 0 ? incomes.reduce((s, i) => s + (i.amount || 0), 0) : (settings?.income || 0)}
+          totalAllowances={categories.reduce((s, c) => s + (c.allowance || 0), 0)}
+          defaultCategoryId={remediateDefaultCategoryId}
+          onMoveSpend={handleMoveSpend}
+          onAddOneOffIncome={handleAddOneOffIncomeAndAllocate}
+          onAllocateUnassigned={handleAllocateUnassigned}
+          onClose={() => { setModal(null); setRemediateDefaultCategoryId(null); }}
+        />
       )}
       {dialogEl}
 
