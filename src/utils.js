@@ -332,6 +332,34 @@ export function getProjectedSpend(categories, settings) {
 }
 
 /**
+ * Total upcoming subscription charges for a category within the current budget period.
+ * Counts every recurrence from each active subscription's nextDueAt until the next reset.
+ */
+export function getUpcomingSubscriptionCost(subscriptions = [], categoryId, settings, now = new Date()) {
+  const nextResetResult = getEffectiveNextReset(settings);
+  if (!nextResetResult) return 0;
+  const nextReset = startOfDay(nextResetResult.date || nextResetResult);
+
+  const catSubs = subscriptions.filter(s =>
+    Number(s.categoryId) === Number(categoryId) && s.active !== false
+  );
+
+  let total = 0;
+  for (const sub of catSubs) {
+    if (!sub.nextDueAt) continue;
+    let due = startOfDay(new Date(sub.nextDueAt));
+    let guard = 0;
+    while (due < nextReset && guard < 60) {
+      total += Number(sub.amount) || 0;
+      due = addRecurringInterval(due, sub.intervalUnit || 'month', sub.interval || 1);
+      guard++;
+    }
+  }
+
+  return roundMoney(total);
+}
+
+/**
  * For a wishlist item, determine:
  * - canAffordNow: combined leftover across assigned categories >= item price
  * - daysUntil: if not now, how many days until burn rate frees enough

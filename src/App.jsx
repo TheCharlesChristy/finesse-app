@@ -599,6 +599,7 @@ export default function App() {
               settings={settings}
               transactions={transactions}
               incomes={incomes}
+              subscriptions={subscriptions}
               variables={variables}
               onAddTx={() => setModal('addTx')}
               onAddCategory={() => setModal('addCategory')}
