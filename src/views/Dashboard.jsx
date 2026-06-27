@@ -8,6 +8,7 @@ import {
   getIncomeCycleDays,
   getIncomeAllocationUsage,
   getPacedAllowanceStatus,
+  getUpcomingSubscriptionCost,
   normalizeIncomeAllocations,
   roundMoney,
 } from '../utils';
@@ -28,7 +29,7 @@ function ordinal(n) {
 }
 
 export default function Dashboard({
-  categories, settings, transactions, incomes = [],
+  categories, settings, transactions, incomes = [], subscriptions = [],
   onAddTx, onAddCategory, onAddIncome, onAddOneOffIncome, onAddSubscription,
   onIncomeHoldToggle, onIncomeFastForward,
   onEditIncome, onDeleteIncome,
@@ -333,6 +334,8 @@ export default function Dashboard({
               )];
               const catCycleDays = catAllocFreqs.length === 1 ? getIncomeCycleDays(catAllocFreqs[0]) : null;
               const pacedStatus = getPacedAllowanceStatus(cat, undefined, catCycleDays);
+              const catSubCost = getUpcomingSubscriptionCost(subscriptions, cat.id, settings);
+              const projectedLeft = roundMoney(left - catSubCost);
               return (
                 <div key={cat.id}>
                   <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 }}>
@@ -340,7 +343,7 @@ export default function Dashboard({
                       <div style={{ width: 8, height: 8, borderRadius: '50%', background: cat.color || 'var(--accent-blue)', flexShrink: 0 }} />
                       <div style={{ minWidth: 0 }}>
                         <span style={{ fontSize: 13, fontWeight: 500 }}>{cat.name}</span>
-                        {(allocations.length > 0 || cat.resetFrequency || cat.allowanceFormula || pacedStatus || boost !== 0 || !fundingOk) && (
+                        {(allocations.length > 0 || cat.resetFrequency || cat.allowanceFormula || pacedStatus || boost !== 0 || !fundingOk || catSubCost > 0) && (
                           <div style={{ display: 'flex', gap: 5, marginTop: 2, flexWrap: 'wrap' }}>
                             {boost > 0 && (
                               <span title="Extra budget added for this cycle — clears at next reset" style={{
@@ -406,6 +409,17 @@ export default function Dashboard({
                                 borderRadius: 10,
                               }}>
                                 {pacedStatus.paceBalance > 0 ? '+' : ''}{fmt(pacedStatus.paceBalance)} {pacedStatus.paceBalance > 0 ? 'ahead' : 'behind'}
+                              </span>
+                            )}
+                            {catSubCost > 0 && (
+                              <span title={`${fmt(catSubCost)} in upcoming subscriptions this period`} style={{
+                                fontSize: 10,
+                                color: projectedLeft >= 0 ? 'var(--accent-purple)' : 'var(--danger)',
+                                background: projectedLeft >= 0 ? 'rgba(167,139,250,0.12)' : 'rgba(255,107,138,0.1)',
+                                padding: '1px 6px',
+                                borderRadius: 10,
+                              }}>
+                                {fmt(Math.abs(projectedLeft))} {projectedLeft >= 0 ? 'left after subs' : 'over after subs'}
                               </span>
                             )}
                           </div>
