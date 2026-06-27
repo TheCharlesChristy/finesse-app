@@ -387,7 +387,7 @@ export default function Dashboard({
                               </span>
                             )}
                             {pacedStatus && (
-                              <span title={`${fmt(pacedStatus.paceBalance)} ${pacedStatus.paceBalance >= 0 ? 'ahead' : 'behind'} pace`} style={{
+                              <span style={{
                                 fontSize: 10,
                                 color: pacedStatus.availablePerPeriod >= pacedStatus.amount ? 'var(--good)' : pacedStatus.availablePerPeriod > 0 ? 'var(--warn)' : 'var(--danger)',
                                 background: 'rgba(255,255,255,0.06)',
@@ -395,6 +395,17 @@ export default function Dashboard({
                                 borderRadius: 10,
                               }}>
                                 {fmt(Math.max(0, pacedStatus.availablePerPeriod))}/{pacedStatus.periodLabel}
+                              </span>
+                            )}
+                            {pacedStatus && pacedStatus.paceBalance !== 0 && (
+                              <span style={{
+                                fontSize: 10,
+                                color: pacedStatus.paceBalance > 0 ? 'var(--good)' : 'var(--danger)',
+                                background: pacedStatus.paceBalance > 0 ? 'rgba(79,255,176,0.12)' : 'rgba(255,107,138,0.1)',
+                                padding: '1px 6px',
+                                borderRadius: 10,
+                              }}>
+                                {pacedStatus.paceBalance > 0 ? '+' : ''}{fmt(pacedStatus.paceBalance)} {pacedStatus.paceBalance > 0 ? 'ahead' : 'behind'}
                               </span>
                             )}
                           </div>
