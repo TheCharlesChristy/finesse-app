@@ -448,3 +448,36 @@ export function dateOnlyToISO(value) {
   const parsed = new Date(`${value}T00:00:00`);
   return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
 }
+
+function getCycleStartForDate(date, payDay) {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const day = date.getDate();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const effectiveDay = Math.min(payDay, daysInMonth);
+  if (day >= effectiveDay) {
+    return new Date(year, month, effectiveDay);
+  }
+  const prevYear = month === 0 ? year - 1 : year;
+  const prevMonth = month === 0 ? 11 : month - 1;
+  const daysInPrevMonth = new Date(prevYear, prevMonth + 1, 0).getDate();
+  return new Date(prevYear, prevMonth, Math.min(payDay, daysInPrevMonth));
+}
+
+export function getCumulativeOverspend(categoryId, allowance, transactions, payDayOfMonth = 1) {
+  if (!allowance || allowance <= 0) return 0;
+  const catTxs = transactions.filter(tx => tx.categoryId === categoryId);
+  if (!catTxs.length) return 0;
+  const payDay = Number(payDayOfMonth) || 1;
+  const cycleSpend = new Map();
+  for (const tx of catTxs) {
+    const cycleStart = getCycleStartForDate(new Date(tx.date), payDay);
+    const key = `${cycleStart.getFullYear()}-${cycleStart.getMonth()}-${cycleStart.getDate()}`;
+    cycleSpend.set(key, roundMoney((cycleSpend.get(key) || 0) + (Number(tx.amount) || 0)));
+  }
+  let cumulative = 0;
+  for (const spent of cycleSpend.values()) {
+    cumulative += spent - allowance;
+  }
+  return roundMoney(cumulative);
+}

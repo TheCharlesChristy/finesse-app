@@ -11,6 +11,7 @@ import {
   getUpcomingSubscriptionCost,
   normalizeIncomeAllocations,
   roundMoney,
+  getCumulativeOverspend,
 } from '../utils';
 import { format } from 'date-fns';
 import { CardTitle, IconButton } from '../components/ui';
@@ -336,6 +337,7 @@ export default function Dashboard({
               const pacedStatus = getPacedAllowanceStatus(cat, undefined, catCycleDays);
               const catSubCost = getUpcomingSubscriptionCost(subscriptions, cat.id, settings);
               const projectedLeft = roundMoney(left - catSubCost);
+              const cumulativeOverspend = getCumulativeOverspend(cat.id, cat.allowance, transactions, settings?.payDayOfMonth);
               return (
                 <div key={cat.id}>
                   <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 }}>
@@ -343,7 +345,7 @@ export default function Dashboard({
                       <div style={{ width: 8, height: 8, borderRadius: '50%', background: cat.color || 'var(--accent-blue)', flexShrink: 0 }} />
                       <div style={{ minWidth: 0 }}>
                         <span style={{ fontSize: 13, fontWeight: 500 }}>{cat.name}</span>
-                        {(allocations.length > 0 || cat.resetFrequency || cat.allowanceFormula || pacedStatus || boost !== 0 || !fundingOk || catSubCost > 0) && (
+                        {(allocations.length > 0 || cat.resetFrequency || cat.allowanceFormula || pacedStatus || boost !== 0 || !fundingOk || catSubCost > 0 || cumulativeOverspend !== 0) && (
                           <div style={{ display: 'flex', gap: 5, marginTop: 2, flexWrap: 'wrap' }}>
                             {boost > 0 && (
                               <span title="Extra budget added for this cycle — clears at next reset" style={{
@@ -420,6 +422,17 @@ export default function Dashboard({
                                 borderRadius: 10,
                               }}>
                                 {fmt(Math.abs(projectedLeft))} {projectedLeft >= 0 ? 'left after subs' : 'over after subs'}
+                              </span>
+                            )}
+                            {cumulativeOverspend !== 0 && (
+                              <span title="Running total of over/underspend vs allowance across all budget cycles" style={{
+                                fontSize: 10,
+                                color: cumulativeOverspend > 0 ? 'var(--danger)' : 'var(--good)',
+                                background: cumulativeOverspend > 0 ? 'rgba(255,107,138,0.1)' : 'rgba(79,255,176,0.12)',
+                                padding: '1px 6px',
+                                borderRadius: 10,
+                              }}>
+                                {cumulativeOverspend > 0 ? '+' : '-'}{fmt(Math.abs(cumulativeOverspend))} all-time
                               </span>
                             )}
                           </div>
