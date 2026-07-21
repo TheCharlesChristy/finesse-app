@@ -609,6 +609,7 @@ export async function recordIncomeReceived({
   date = new Date().toISOString(),
   type = 'recurring',
   receiptKey = null,
+  categoryId = null,
 }) {
   const targetAccountId = accountId != null ? Number(accountId) : await getDefaultAccountId();
   const incomeAmount = roundMoney(amount);
@@ -623,6 +624,7 @@ export async function recordIncomeReceived({
       ? `${targetAccountId}:income:${recurringIncomeId}:${eventDate}`
       : null
   );
+  const allocatedCategoryId = type === 'one-off' && categoryId != null ? Number(categoryId) : null;
 
   if (dedupeKey) {
     const existing = await db.incomeEvents.where('receiptKey').equals(dedupeKey).first();
@@ -640,10 +642,11 @@ export async function recordIncomeReceived({
     createdAt: new Date().toISOString(),
   };
   if (dedupeKey) event.receiptKey = dedupeKey;
+  if (allocatedCategoryId != null) event.allocatedCategoryId = allocatedCategoryId;
 
   let id = 0;
   try {
-    await db.transaction('rw', db.accounts, db.incomeEvents, async () => {
+    await db.transaction('rw', db.accounts, db.incomeEvents, db.categories, async () => {
       const account = await db.accounts.get(targetAccountId);
       if (!account) return;
 
@@ -651,6 +654,17 @@ export async function recordIncomeReceived({
       await db.accounts.update(targetAccountId, {
         balance: roundMoney((account.balance || 0) + incomeAmount),
       });
+
+      if (allocatedCategoryId != null) {
+        const cat = await db.categories.get(allocatedCategoryId);
+        if (cat) {
+          const sources = Array.isArray(cat.boostSources) ? cat.boostSources : [];
+          await db.categories.update(allocatedCategoryId, {
+            temporaryBoost: roundMoney((cat.temporaryBoost || 0) + incomeAmount),
+            boostSources: [...sources, { from: 'income', amount: incomeAmount, incomeEventId: id }],
+          });
+        }
+      }
     });
   } catch (error) {
     if (dedupeKey && error?.name === 'ConstraintError') {
@@ -664,7 +678,7 @@ export async function recordIncomeReceived({
 }
 
 export async function deleteIncomeEvent(id) {
-  await db.transaction('rw', db.accounts, db.incomeEvents, async () => {
+  await db.transaction('rw', db.accounts, db.incomeEvents, db.categories, async () => {
     const event = await db.incomeEvents.get(id);
     if (!event) return;
 
@@ -675,6 +689,21 @@ export async function deleteIncomeEvent(id) {
         balance: roundMoney((account.balance || 0) - (Number(event.amount) || 0)),
       });
     }
+
+    if (event.allocatedCategoryId != null) {
+      const cat = await db.categories.get(Number(event.allocatedCategoryId));
+      if (cat) {
+        const sources = Array.isArray(cat.boostSources) ? cat.boostSources : [];
+        const boostEntry = sources.find(entry => entry.incomeEventId === id);
+        if (boostEntry) {
+          await db.categories.update(cat.id, {
+            temporaryBoost: Math.max(0, roundMoney((cat.temporaryBoost || 0) - (boostEntry.amount || 0))),
+            boostSources: sources.filter(entry => entry.incomeEventId !== id),
+          });
+        }
+      }
+    }
+
     await db.incomeEvents.delete(id);
   });
 }
