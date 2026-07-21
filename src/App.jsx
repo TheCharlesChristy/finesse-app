@@ -8,7 +8,7 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   getWishlistItems, addWishlistItem, updateWishlistItem, deleteWishlistItem,
   getWishlistCategories,
   addWishlistCategory, updateWishlistCategory, deleteWishlistCategory, exportData, importData,
-  exportSnapshot, exportChatSummary,
+  exportSnapshot, exportChatSummary, getExportableSchema,
   exportTransactionsCSV, clearAllData, resetBudget, resetCategory, resetCategoriesForIncome,
   addIncome, updateIncome, deleteIncome, getIncomeEvents, recordIncomeReceived, deleteIncomeEvent,
   getSubscriptions, addSubscription, updateSubscription, deleteSubscription, processDueSubscriptions,
@@ -29,7 +29,7 @@ const Variables     = lazy(() => import('./views/Variables'));
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
-  AdjustBudgetModal } from './components/Modals';
+  AdjustBudgetModal, ExportChatSummaryOptionsModal } from './components/Modals';
 import { Modal } from './components/ui';
 import { useDialog } from './components/useDialog';
 
@@ -70,6 +70,7 @@ export default function App() {
   const [view, setView] = useState('dashboard');
   const [modal, setModal] = useState(null);
   const [pendingImport, setPendingImport] = useState(null);
+  const [chatSummarySchema, setChatSummarySchema] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [fastForwardIncomeId, setFastForwardIncomeId] = useState(null);
   const [editingCategory, setEditingCategory] = useState(null);
@@ -255,8 +256,14 @@ export default function App() {
     URL.revokeObjectURL(url);
   }, [activeAccountId]);
 
-  const handleExportChatSummary = useCallback(async () => {
-    const data = await exportChatSummary();
+  const handleOpenExportChatSummary = useCallback(async () => {
+    const schema = await getExportableSchema();
+    setChatSummarySchema(schema);
+    setModal('exportChatSummaryOptions');
+  }, []);
+
+  const handleExportChatSummary = useCallback(async (selection) => {
+    const data = await exportChatSummary(selection);
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -264,6 +271,7 @@ export default function App() {
     a.download = `finesse-chat-summary-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
+    setModal(null);
   }, []);
 
   const handleGenerateShareUrl = useCallback(async () => {
@@ -725,7 +733,7 @@ export default function App() {
           {view === 'settings' && (
             <SettingsView onExport={handleExport} onExportCSV={handleExportCSV}
               onImport={handleImport} onResetBudget={() => resetBudget(activeAccountId)}
-              onGenerateShareUrl={handleGenerateShareUrl} onExportChatSummary={handleExportChatSummary}
+              onGenerateShareUrl={handleGenerateShareUrl} onOpenExportChatSummary={handleOpenExportChatSummary}
               categories={categories} settings={settings} onSaveSettings={handleSaveSettings}
               incomes={incomes} onResetIncome={(incomeId) => resetCategoriesForIncome(incomeId, undefined, activeAccountId)}
               onFullReset={handleFullReset}
@@ -847,6 +855,10 @@ export default function App() {
       {modal === 'importMode' && (
         <ImportModeModal onConfirm={handleImportConfirm}
           onClose={() => { setPendingImport(null); setModal(null); }} />
+      )}
+      {modal === 'exportChatSummaryOptions' && chatSummarySchema && (
+        <ExportChatSummaryOptionsModal schema={chatSummarySchema} onConfirm={handleExportChatSummary}
+          onClose={() => setModal(null)} />
       )}
       {modal === 'adjust' && categories.length > 0 && (
         <AdjustBudgetModal

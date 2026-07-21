@@ -1016,9 +1016,66 @@ export async function exportSnapshot() {
   return { accounts, settings, categories, incomes, subscriptions, wishlist, wishlistCategories, variables, exportedAt: new Date().toISOString(), version: 7 };
 }
 
+// ── Chat Summary export: field picker support ───────────────────────────────
+// The picker shown before export needs to know which fields actually exist on
+// each table. Dexie only declares *indexed* columns in the schema, so the
+// only accurate source for "every field that exists" is the data itself —
+// this reads each table and unions the keys found across its rows.
+const EXPORT_TABLE_NAMES = ['categories', 'transactions', 'incomes', 'incomeEvents',
+  'subscriptions', 'wishlist', 'wishlistCategories', 'variables', 'accountTransfers'];
+// Structural identifiers, always kept and never user-toggleable.
+const EXPORT_ALWAYS_INCLUDED_KEYS = new Set(['id', 'accountId']);
+// Pure linking/dedupe plumbing with no analytical meaning to a reader.
+const EXPORT_NEVER_INCLUDED_KEYS = new Set(['subscriptionRunKey', 'receiptKey']);
+const EXPORT_SENSITIVE_FIELD_PATTERN = /note|memo|description|comment|url/i;
+
+export async function getExportableSchema() {
+  const tables = {};
+  for (const name of EXPORT_TABLE_NAMES) {
+    const rows = await db[name].toArray();
+    const keys = new Set();
+    for (const row of rows) Object.keys(row).forEach(k => keys.add(k));
+    tables[name] = [...keys]
+      .filter(k => !EXPORT_ALWAYS_INCLUDED_KEYS.has(k) && !EXPORT_NEVER_INCLUDED_KEYS.has(k))
+      .map(key => ({ key, sensitive: EXPORT_SENSITIVE_FIELD_PATTERN.test(key) }));
+  }
+  return tables;
+}
+
+// Computed/derived summaries aren't raw table columns, so there's no live
+// schema to read them off of — this list stays static.
+export const EXPORT_COMPUTED_SECTIONS = [
+  { key: 'categoryBreakdown', label: 'Category breakdown (allowance vs spent)' },
+  { key: 'monthlyHistory', label: 'Monthly spend history' },
+  { key: 'incomeVsSpending', label: 'Income vs. spending totals' },
+  { key: 'subscriptionsSummary', label: 'Subscriptions summary' },
+  { key: 'upcomingSubscriptionCostByCategory', label: 'Upcoming subscription costs' },
+  { key: 'wishlistSummary', label: 'Wishlist affordability' },
+];
+
+export function buildDefaultExportSelection(schema) {
+  const tables = {};
+  for (const [table, fields] of Object.entries(schema || {})) {
+    tables[table] = fields.filter(f => !f.sensitive).map(f => f.key);
+  }
+  return { tables, computed: EXPORT_COMPUTED_SECTIONS.map(s => s.key) };
+}
+
+function pickFields(row, fieldKeys = []) {
+  const picked = {};
+  for (const key of EXPORT_ALWAYS_INCLUDED_KEYS) {
+    if (key in row) picked[key] = row[key];
+  }
+  for (const key of fieldKeys) {
+    if (key in row) picked[key] = row[key];
+  }
+  return picked;
+}
+
 // Structured export for handing data to a financial expert / LLM for
-// analysis: full raw data across every account plus computed breakdowns.
-export async function exportChatSummary() {
+// analysis: computed breakdowns plus raw data across every account, filtered
+// down to whatever tables/fields/computed-sections `selection` includes.
+export async function exportChatSummary(selection) {
   const [accounts, categories, transactions, incomes, incomeEvents, subscriptions, wishlist, wishlistCategories, variables, accountTransfers, settingsRows] = await Promise.all([
     db.accounts.toArray(),
     db.categories.toArray(),
@@ -1032,6 +1089,11 @@ export async function exportChatSummary() {
     db.accountTransfers.toArray(),
     db.settings.toArray(),
   ]);
+
+  const tableSelection = selection?.tables || {};
+  const computedSelection = new Set(selection?.computed || EXPORT_COMPUTED_SECTIONS.map(s => s.key));
+  const includeTable = (name) => Array.isArray(tableSelection[name]) && tableSelection[name].length > 0;
+  const pickRows = (name, rows) => rows.map(row => pickFields(row, tableSelection[name]));
 
   const byAccount = (rows) => (accountId) => rows.filter(row => Number(row.accountId) === Number(accountId));
   const categoriesByAccount = byAccount(categories);
@@ -1051,67 +1113,79 @@ export async function exportChatSummary() {
     const accWishlist = wishlistByAccount(account.id);
     const accSettings = settingsRows.find(s => Number(s.accountId) === Number(account.id)) || null;
 
-    const categoryBreakdown = accCategories.map(cat => ({
-      id: cat.id,
-      name: cat.name,
-      allowance: cat.allowance,
-      effectiveAllowance: getEffectiveAllowance(cat),
-      spent: cat.spent,
-      spare: getCategorySpare(cat),
-    }));
+    const summary = { account, settings: accSettings };
 
-    const totalIncome = accIncomes.reduce((sum, income) => sum + (Number(income.amount) || 0), 0);
-    const totalSpent = accCategories.reduce((sum, cat) => sum + (Number(cat.spent) || 0), 0);
+    if (computedSelection.has('categoryBreakdown')) {
+      summary.categoryBreakdown = accCategories.map(cat => ({
+        id: cat.id,
+        name: cat.name,
+        allowance: cat.allowance,
+        effectiveAllowance: getEffectiveAllowance(cat),
+        spent: cat.spent,
+        spare: getCategorySpare(cat),
+      }));
+    }
 
-    const categoryIdsWithSubs = [...new Set(accSubscriptions.map(sub => sub.categoryId))];
-    const upcomingSubscriptionCostByCategory = Object.fromEntries(
-      categoryIdsWithSubs.map(categoryId => [categoryId, getUpcomingSubscriptionCost(accSubscriptions, categoryId, accSettings)])
-    );
-    const subscriptionsSummary = accSubscriptions.map(sub => ({
-      id: sub.id,
-      name: sub.name,
-      amount: sub.amount,
-      interval: sub.interval,
-      intervalUnit: sub.intervalUnit,
-      active: sub.active,
-      nextDueAt: sub.nextDueAt,
-      categoryId: sub.categoryId,
-    }));
+    if (computedSelection.has('monthlyHistory')) {
+      summary.monthlyHistory = buildMonthlyHistory(accTransactions, accCategories);
+    }
 
-    const wishlistSummary = accWishlist.map(item => ({
-      id: item.id,
-      name: item.name,
-      price: item.price,
-      affordability: wishlistAffordability(item, accCategories, accSettings),
-    }));
-
-    return {
-      account,
-      settings: accSettings,
-      categoryBreakdown,
-      monthlyHistory: buildMonthlyHistory(accTransactions, accCategories),
-      incomeVsSpending: {
+    if (computedSelection.has('incomeVsSpending')) {
+      const totalIncome = accIncomes.reduce((sum, income) => sum + (Number(income.amount) || 0), 0);
+      const totalSpent = accCategories.reduce((sum, cat) => sum + (Number(cat.spent) || 0), 0);
+      summary.incomeVsSpending = {
         totalIncome,
         totalSpent,
         projectedEndBalance: projectedEndBalance(accCategories, accSettings, accIncomes),
-      },
-      subscriptionsSummary,
-      upcomingSubscriptionCostByCategory,
-      wishlistSummary,
-      raw: {
-        categories: accCategories,
-        transactions: accTransactions,
-        incomes: accIncomes,
-        incomeEvents: incomeEventsByAccount(account.id),
-        subscriptions: accSubscriptions,
-        wishlist: accWishlist,
-        wishlistCategories: wishlistCategoriesByAccount(account.id),
-        variables: variablesByAccount(account.id),
-      },
-    };
+      };
+    }
+
+    if (computedSelection.has('subscriptionsSummary')) {
+      summary.subscriptionsSummary = accSubscriptions.map(sub => ({
+        id: sub.id,
+        name: sub.name,
+        amount: sub.amount,
+        interval: sub.interval,
+        intervalUnit: sub.intervalUnit,
+        active: sub.active,
+        nextDueAt: sub.nextDueAt,
+        categoryId: sub.categoryId,
+      }));
+    }
+
+    if (computedSelection.has('upcomingSubscriptionCostByCategory')) {
+      const categoryIdsWithSubs = [...new Set(accSubscriptions.map(sub => sub.categoryId))];
+      summary.upcomingSubscriptionCostByCategory = Object.fromEntries(
+        categoryIdsWithSubs.map(categoryId => [categoryId, getUpcomingSubscriptionCost(accSubscriptions, categoryId, accSettings)])
+      );
+    }
+
+    if (computedSelection.has('wishlistSummary')) {
+      summary.wishlistSummary = accWishlist.map(item => ({
+        id: item.id,
+        name: item.name,
+        price: item.price,
+        affordability: wishlistAffordability(item, accCategories, accSettings),
+      }));
+    }
+
+    const raw = {};
+    if (includeTable('categories')) raw.categories = pickRows('categories', accCategories);
+    if (includeTable('transactions')) raw.transactions = pickRows('transactions', accTransactions);
+    if (includeTable('incomes')) raw.incomes = pickRows('incomes', accIncomes);
+    if (includeTable('incomeEvents')) raw.incomeEvents = pickRows('incomeEvents', incomeEventsByAccount(account.id));
+    if (includeTable('subscriptions')) raw.subscriptions = pickRows('subscriptions', accSubscriptions);
+    if (includeTable('wishlist')) raw.wishlist = pickRows('wishlist', accWishlist);
+    if (includeTable('wishlistCategories')) raw.wishlistCategories = pickRows('wishlistCategories', wishlistCategoriesByAccount(account.id));
+    if (includeTable('variables')) raw.variables = pickRows('variables', variablesByAccount(account.id));
+    summary.raw = raw;
+
+    return summary;
   });
 
-  return { generatedAt: new Date().toISOString(), version: 7, accounts: accountSummaries, accountTransfers };
+  const result = { generatedAt: new Date().toISOString(), version: 7, accounts: accountSummaries };
+  if (includeTable('accountTransfers')) result.accountTransfers = pickRows('accountTransfers', accountTransfers);
+  return result;
 }
 
 export async function importData(data, mode = 'replace') {
