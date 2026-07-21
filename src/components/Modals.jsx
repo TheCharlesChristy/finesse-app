@@ -1428,11 +1428,12 @@ export function AddIncomeModal({ onAdd, onClose, income = null, onSave }) {
 }
 
 // ── Add One-Off Income Modal ─────────────────────────────────────────────────
-export function AddOneOffIncomeModal({ onAdd, onClose }) {
+export function AddOneOffIncomeModal({ onAdd, onClose, categories = [] }) {
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [note, setNote] = useState('');
+  const [categoryId, setCategoryId] = useState('');
   const parsedAmount = parseFloat(amount) || 0;
 
   const handleSubmit = () => {
@@ -1442,6 +1443,7 @@ export function AddOneOffIncomeModal({ onAdd, onClose }) {
       amount: parsedAmount,
       date: dateOnlyToISO(date),
       note: note.trim(),
+      categoryId: categoryId ? Number(categoryId) : null,
     });
     onClose();
   };
@@ -1472,6 +1474,18 @@ export function AddOneOffIncomeModal({ onAdd, onClose }) {
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
           )}
         </Field>
+        {categories.length > 0 && (
+          <Field label="Allocate to category (optional)">
+            {id => (
+              <select id={id} className="glass-input" value={categoryId} onChange={e => setCategoryId(e.target.value)}>
+                <option value="">None — just add to balance</option>
+                {categories.map(cat => (
+                  <option key={cat.id} value={cat.id}>{cat.name}</option>
+                ))}
+              </select>
+            )}
+          </Field>
+        )}
         <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
           <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
           <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}

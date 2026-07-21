@@ -10,6 +10,7 @@ export default function Accounts({
   activeAccountId,
   transfers = [],
   incomeEvents = [],
+  categories = [],
   onSelectAccount,
   onAddAccount,
   onUpdateAccount,
@@ -30,6 +31,10 @@ export default function Accounts({
   const accountMap = useMemo(
     () => new Map(accounts.map(account => [Number(account.id), account])),
     [accounts]
+  );
+  const categoryMap = useMemo(
+    () => new Map(categories.map(category => [Number(category.id), category])),
+    [categories]
   );
   const totalBalance = accounts.reduce((sum, account) => sum + (Number(account.balance) || 0), 0);
   const activeAccount = accountMap.get(Number(activeAccountId));
@@ -263,6 +268,9 @@ export default function Accounts({
                     {' · '}
                     {event.type === 'one-off' ? 'One-off' : 'Recurring'}
                     {event.note ? ` · ${event.note}` : ''}
+                    {event.allocatedCategoryId != null && categoryMap.get(Number(event.allocatedCategoryId))
+                      ? ` · Boosted ${categoryMap.get(Number(event.allocatedCategoryId)).name}`
+                      : ''}
                   </div>
                 </div>
                 <div className="mobile-actions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>

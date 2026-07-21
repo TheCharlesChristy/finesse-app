@@ -621,6 +621,7 @@ export default function App() {
               activeAccountId={activeAccountId}
               transfers={accountTransfers}
               incomeEvents={incomeEvents}
+              categories={categories}
               onSelectAccount={setActiveAccountId}
               onAddAccount={handleAddAccount}
               onUpdateAccount={handleUpdateAccount}
@@ -730,7 +731,7 @@ export default function App() {
         />
       )}
       {modal === 'addOneOffIncome' && (
-        <AddOneOffIncomeModal onAdd={handleAddOneOffIncome} onClose={() => setModal(null)} />
+        <AddOneOffIncomeModal onAdd={handleAddOneOffIncome} onClose={() => setModal(null)} categories={categories} />
       )}
       {modal === 'editIncome' && editingIncome && (
         <AddIncomeModal
