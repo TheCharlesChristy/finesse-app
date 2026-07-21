@@ -8,7 +8,7 @@ export default function Settings({
   onImport,
   onExportCSV,
   onGenerateShareUrl,
-  onExportChatSummary,
+  onOpenExportChatSummary,
   onResetBudget,
   incomes = [],
   categories = [],
@@ -243,12 +243,12 @@ export default function Settings({
           <button className="btn-secondary" onClick={onGenerateShareUrl} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             <Link2 size={14} /> Copy Share Link
           </button>
-          <button className="btn-secondary" onClick={onExportChatSummary} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <button className="btn-secondary" onClick={onOpenExportChatSummary} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             <FileJson size={14} /> Chat Summary (.json)
           </button>
         </div>
         <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10 }}>
-          Share Link carries your accounts, categories, incomes, subscriptions and wishlist to a new device — it excludes transaction history. Chat Summary is a full data export with computed spending insights, meant for sharing with a financial advisor or an AI assistant for analysis.
+          Share Link carries your accounts, categories, incomes, subscriptions and wishlist to a new device — it excludes transaction history. Chat Summary lets you pick exactly which data and fields to include before generating a JSON export with computed spending insights, meant for sharing with a financial advisor or an AI assistant for analysis.
         </div>
 
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 18, paddingTop: 18 }}>
