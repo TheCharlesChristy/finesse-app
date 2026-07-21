@@ -1,4 +1,5 @@
 import { addDays, addMonths, addWeeks, addYears, getDate, getDaysInMonth, setDate, isAfter, isBefore, differenceInDays, format, startOfDay } from 'date-fns';
+import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
 
 // ── Schedule helpers ─────────────────────────────────────────────────────────
 
@@ -480,4 +481,27 @@ export function getCumulativeOverspend(categoryId, allowance, transactions, payD
     cumulative += spent - allowance;
   }
   return roundMoney(cumulative);
+}
+
+/**
+ * Compress a JSON-serialisable snapshot into a URL-safe string for embedding
+ * in a share link's hash fragment.
+ */
+export function encodeSnapshotForUrl(snapshot) {
+  return compressToEncodedURIComponent(JSON.stringify(snapshot));
+}
+
+/**
+ * Reverse of encodeSnapshotForUrl. Returns null on any decode/parse failure
+ * so callers can safely no-op on a missing or corrupt fragment.
+ */
+export function decodeSnapshotFromUrl(encoded) {
+  if (!encoded) return null;
+  try {
+    const json = decompressFromEncodedURIComponent(encoded);
+    if (!json) return null;
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
 }

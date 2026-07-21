@@ -1,5 +1,7 @@
 import Dexie from 'dexie';
-import { getNextRecurringDate, normalizeIncomeAllocations, roundMoney, getEffectiveAllowance } from './utils';
+import { getNextRecurringDate, normalizeIncomeAllocations, roundMoney, getEffectiveAllowance,
+  getCategorySpare, buildMonthlyHistory, projectedEndBalance, getUpcomingSubscriptionCost,
+  wishlistAffordability } from './utils';
 
 export const db = new Dexie('FinanceApp');
 
@@ -996,6 +998,120 @@ export async function exportData() {
     db.variables.toArray(),
   ]);
   return { accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, subscriptions, variables, exportedAt: new Date().toISOString(), version: 7 };
+}
+
+// Lightweight snapshot for the "share URL" feature: high-level setup only,
+// no transaction/event logs, so it stays small enough to embed in a URL.
+export async function exportSnapshot() {
+  const [accounts, settings, categories, incomes, subscriptions, wishlist, wishlistCategories, variables] = await Promise.all([
+    db.accounts.toArray(),
+    db.settings.toArray(),
+    db.categories.toArray(),
+    db.incomes.toArray(),
+    db.subscriptions.toArray(),
+    db.wishlist.toArray(),
+    db.wishlistCategories.toArray(),
+    db.variables.toArray(),
+  ]);
+  return { accounts, settings, categories, incomes, subscriptions, wishlist, wishlistCategories, variables, exportedAt: new Date().toISOString(), version: 7 };
+}
+
+// Structured export for handing data to a financial expert / LLM for
+// analysis: full raw data across every account plus computed breakdowns.
+export async function exportChatSummary() {
+  const [accounts, categories, transactions, incomes, incomeEvents, subscriptions, wishlist, wishlistCategories, variables, accountTransfers, settingsRows] = await Promise.all([
+    db.accounts.toArray(),
+    db.categories.toArray(),
+    db.transactions.toArray(),
+    db.incomes.toArray(),
+    db.incomeEvents.toArray(),
+    db.subscriptions.toArray(),
+    db.wishlist.toArray(),
+    db.wishlistCategories.toArray(),
+    db.variables.toArray(),
+    db.accountTransfers.toArray(),
+    db.settings.toArray(),
+  ]);
+
+  const byAccount = (rows) => (accountId) => rows.filter(row => Number(row.accountId) === Number(accountId));
+  const categoriesByAccount = byAccount(categories);
+  const transactionsByAccount = byAccount(transactions);
+  const incomesByAccount = byAccount(incomes);
+  const incomeEventsByAccount = byAccount(incomeEvents);
+  const subscriptionsByAccount = byAccount(subscriptions);
+  const wishlistByAccount = byAccount(wishlist);
+  const wishlistCategoriesByAccount = byAccount(wishlistCategories);
+  const variablesByAccount = byAccount(variables);
+
+  const accountSummaries = accounts.map(account => {
+    const accCategories = categoriesByAccount(account.id);
+    const accTransactions = transactionsByAccount(account.id);
+    const accIncomes = incomesByAccount(account.id);
+    const accSubscriptions = subscriptionsByAccount(account.id);
+    const accWishlist = wishlistByAccount(account.id);
+    const accSettings = settingsRows.find(s => Number(s.accountId) === Number(account.id)) || null;
+
+    const categoryBreakdown = accCategories.map(cat => ({
+      id: cat.id,
+      name: cat.name,
+      allowance: cat.allowance,
+      effectiveAllowance: getEffectiveAllowance(cat),
+      spent: cat.spent,
+      spare: getCategorySpare(cat),
+    }));
+
+    const totalIncome = accIncomes.reduce((sum, income) => sum + (Number(income.amount) || 0), 0);
+    const totalSpent = accCategories.reduce((sum, cat) => sum + (Number(cat.spent) || 0), 0);
+
+    const categoryIdsWithSubs = [...new Set(accSubscriptions.map(sub => sub.categoryId))];
+    const upcomingSubscriptionCostByCategory = Object.fromEntries(
+      categoryIdsWithSubs.map(categoryId => [categoryId, getUpcomingSubscriptionCost(accSubscriptions, categoryId, accSettings)])
+    );
+    const subscriptionsSummary = accSubscriptions.map(sub => ({
+      id: sub.id,
+      name: sub.name,
+      amount: sub.amount,
+      interval: sub.interval,
+      intervalUnit: sub.intervalUnit,
+      active: sub.active,
+      nextDueAt: sub.nextDueAt,
+      categoryId: sub.categoryId,
+    }));
+
+    const wishlistSummary = accWishlist.map(item => ({
+      id: item.id,
+      name: item.name,
+      price: item.price,
+      affordability: wishlistAffordability(item, accCategories, accSettings),
+    }));
+
+    return {
+      account,
+      settings: accSettings,
+      categoryBreakdown,
+      monthlyHistory: buildMonthlyHistory(accTransactions, accCategories),
+      incomeVsSpending: {
+        totalIncome,
+        totalSpent,
+        projectedEndBalance: projectedEndBalance(accCategories, accSettings, accIncomes),
+      },
+      subscriptionsSummary,
+      upcomingSubscriptionCostByCategory,
+      wishlistSummary,
+      raw: {
+        categories: accCategories,
+        transactions: accTransactions,
+        incomes: accIncomes,
+        incomeEvents: incomeEventsByAccount(account.id),
+        subscriptions: accSubscriptions,
+        wishlist: accWishlist,
+        wishlistCategories: wishlistCategoriesByAccount(account.id),
+        variables: variablesByAccount(account.id),
+      },
+    };
+  });
+
+  return { generatedAt: new Date().toISOString(), version: 7, accounts: accountSummaries, accountTransfers };
 }
 
 export async function importData(data, mode = 'replace') {

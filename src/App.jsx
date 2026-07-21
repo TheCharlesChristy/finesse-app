@@ -8,12 +8,13 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   getWishlistItems, addWishlistItem, updateWishlistItem, deleteWishlistItem,
   getWishlistCategories,
   addWishlistCategory, updateWishlistCategory, deleteWishlistCategory, exportData, importData,
+  exportSnapshot, exportChatSummary,
   exportTransactionsCSV, clearAllData, resetBudget, resetCategory, resetCategoriesForIncome,
   addIncome, updateIncome, deleteIncome, getIncomeEvents, recordIncomeReceived, deleteIncomeEvent,
   getSubscriptions, addSubscription, updateSubscription, deleteSubscription, processDueSubscriptions,
   addVariable, updateVariable, deleteVariable,
   topUpCategoryFromIncome, borrowBudgetBetweenCategories, resetCategoryTopUps } from './db';
-import { calcNextReset, evaluateFormula, fmt, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations } from './utils';
+import { calcNextReset, evaluateFormula, fmt, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
 
 const Dashboard     = lazy(() => import('./views/Dashboard'));
 const Transactions  = lazy(() => import('./views/Transactions'));
@@ -105,6 +106,18 @@ export default function App() {
   useEffect(() => {
     if (activeAccountId) localStorage.setItem('finesse.activeAccountId', String(activeAccountId));
   }, [activeAccountId]);
+
+  // ── Share-link import (one-time check on load) ──────────────────────────
+  useEffect(() => {
+    const hash = window.location.hash;
+    const match = hash.match(/snapshot=([^&]+)/);
+    if (!match) return;
+    const snapshot = decodeSnapshotFromUrl(match[1]);
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    if (!snapshot) return;
+    setPendingImport(snapshot);
+    setModal('importMode');
+  }, []);
 
   const settings  = useLiveQuery(() => activeAccountId ? getSettings(activeAccountId) : null, [activeAccountId]);
   const categories = useLiveQuery(() => activeAccountId ? getCategories(activeAccountId) : [], [activeAccountId]) || [];
@@ -241,6 +254,32 @@ export default function App() {
     a.click();
     URL.revokeObjectURL(url);
   }, [activeAccountId]);
+
+  const handleExportChatSummary = useCallback(async () => {
+    const data = await exportChatSummary();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `finesse-chat-summary-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const handleGenerateShareUrl = useCallback(async () => {
+    const snapshot = await exportSnapshot();
+    const encoded = encodeSnapshotForUrl(snapshot);
+    const url = `${window.location.origin}${window.location.pathname}#snapshot=${encoded}`;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      // clipboard access may be unavailable; the prompt below still lets the user copy manually
+    }
+    await showPrompt(
+      'Share this link to load your accounts, categories, incomes, subscriptions and wishlist on another device. It does not include transaction history.\n\nThe link has been copied to your clipboard.',
+      { title: 'Share Link', defaultValue: url, confirmText: 'Copy' },
+    );
+  }, [showPrompt]);
 
   const handleImport = useCallback((data) => {
     setPendingImport(data);
@@ -686,6 +725,7 @@ export default function App() {
           {view === 'settings' && (
             <SettingsView onExport={handleExport} onExportCSV={handleExportCSV}
               onImport={handleImport} onResetBudget={() => resetBudget(activeAccountId)}
+              onGenerateShareUrl={handleGenerateShareUrl} onExportChatSummary={handleExportChatSummary}
               categories={categories} settings={settings} onSaveSettings={handleSaveSettings}
               incomes={incomes} onResetIncome={(incomeId) => resetCategoriesForIncome(incomeId, undefined, activeAccountId)}
               onFullReset={handleFullReset}

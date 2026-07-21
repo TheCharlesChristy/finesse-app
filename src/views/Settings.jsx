@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Download, Upload, FileText, RefreshCcw, Trash2, Sun, Moon, Monitor } from 'lucide-react';
+import { Download, Upload, FileText, RefreshCcw, Trash2, Sun, Moon, Monitor, Link2, FileJson } from 'lucide-react';
 import CategorySelect from '../components/CategorySelect';
 import { CardTitle } from '../components/ui';
 
@@ -7,6 +7,8 @@ export default function Settings({
   onExport,
   onImport,
   onExportCSV,
+  onGenerateShareUrl,
+  onExportChatSummary,
   onResetBudget,
   incomes = [],
   categories = [],
@@ -235,6 +237,18 @@ export default function Settings({
         </div>
         <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10 }}>
           Import will ask whether to replace or merge existing data.
+        </div>
+
+        <div className="mobile-actions mobile-actions-full" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 16 }}>
+          <button className="btn-secondary" onClick={onGenerateShareUrl} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <Link2 size={14} /> Copy Share Link
+          </button>
+          <button className="btn-secondary" onClick={onExportChatSummary} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <FileJson size={14} /> Chat Summary (.json)
+          </button>
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10 }}>
+          Share Link carries your accounts, categories, incomes, subscriptions and wishlist to a new device — it excludes transaction history. Chat Summary is a full data export with computed spending insights, meant for sharing with a financial advisor or an AI assistant for analysis.
         </div>
 
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 18, paddingTop: 18 }}>
