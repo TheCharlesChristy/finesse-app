@@ -1,19 +1,18 @@
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { CalendarDays, CreditCard, LayoutDashboard, ListOrdered, Menu, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
-import { useLiveQuery } from 'dexie-react-hooks';
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
-  getSettings, saveSettings, getCategories, addCategory, updateCategory, deleteCategory,
-  getTransactions, addTransaction, addTransactionsBulk, updateTransaction, deleteTransaction,
-  getWishlistItems, addWishlistItem, updateWishlistItem, deleteWishlistItem,
-  getWishlistCategories,
+  getSettings, saveSettings, addCategory, updateCategory, deleteCategory,
+  addTransaction, addTransactionsBulk, updateTransaction, deleteTransaction,
+  addWishlistItem, updateWishlistItem, deleteWishlistItem,
   addWishlistCategory, updateWishlistCategory, deleteWishlistCategory, exportData, importData,
   exportSnapshot, exportChatSummary, getExportableSchema,
   exportTransactionsCSV, clearAllData, resetBudget, resetCategory, resetCategoriesForIncome,
-  addIncome, updateIncome, deleteIncome, getIncomeEvents, recordIncomeReceived, deleteIncomeEvent,
-  getSubscriptions, addSubscription, updateSubscription, deleteSubscription, processDueSubscriptions,
+  addIncome, updateIncome, deleteIncome, recordIncomeReceived, deleteIncomeEvent,
+  addSubscription, updateSubscription, deleteSubscription, processDueSubscriptions,
   addVariable, updateVariable, deleteVariable,
   topUpCategoryFromIncome, borrowBudgetBetweenCategories, resetCategoryTopUps } from './db';
+import { useFinesseData } from './hooks/useFinesseData';
 import { calcNextReset, evaluateFormula, fmt, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
 
 const Dashboard     = lazy(() => import('./views/Dashboard'));
@@ -29,9 +28,10 @@ const Variables     = lazy(() => import('./views/Variables'));
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
-  AdjustBudgetModal, ExportChatSummaryOptionsModal } from './components/Modals';
+  AdjustBudgetModal, ExportChatSummaryOptionsModal } from './components/modals';
 import { Modal } from './components/ui';
 import { useDialog } from './components/useDialog';
+import { useToast } from './components/Toast';
 
 const NAV = [
   { id: 'dashboard',   label: 'Dashboard',   Icon: LayoutDashboard },
@@ -66,6 +66,7 @@ function getLatestDueIncomeReset(income, now = new Date()) {
 
 export default function App() {
   const { dialogEl, showConfirm, showAlert, showPrompt } = useDialog();
+  const { toastEl, showToast } = useToast();
 
   const [view, setView] = useState('dashboard');
   const [modal, setModal] = useState(null);
@@ -87,8 +88,10 @@ export default function App() {
     return Number.isFinite(stored) && stored > 0 ? stored : null;
   });
 
-  const accountsQuery = useLiveQuery(() => db.accounts.toArray(), []);
-  const accounts = accountsQuery || [];
+  const {
+    accountsQuery, accounts, accountTransfers, settings, categories, transactions,
+    wishlistItems, wishlistCategories, incomeEvents, subscriptions, incomes, variables,
+  } = useFinesseData(activeAccountId);
   const activeAccount = accounts.find(account => Number(account.id) === Number(activeAccountId)) || null;
 
   useEffect(() => {
@@ -119,17 +122,6 @@ export default function App() {
     setPendingImport(snapshot);
     setModal('importMode');
   }, []);
-
-  const settings  = useLiveQuery(() => activeAccountId ? getSettings(activeAccountId) : null, [activeAccountId]);
-  const categories = useLiveQuery(() => activeAccountId ? getCategories(activeAccountId) : [], [activeAccountId]) || [];
-  const transactions = useLiveQuery(() => activeAccountId ? getTransactions(activeAccountId) : [], [activeAccountId]) || [];
-  const wishlistItems = useLiveQuery(() => activeAccountId ? getWishlistItems(activeAccountId) : [], [activeAccountId]) || [];
-  const wishlistCategories = useLiveQuery(() => activeAccountId ? getWishlistCategories(activeAccountId) : [], [activeAccountId]) || [];
-  const accountTransfers = useLiveQuery(() => db.accountTransfers.toArray(), []) || [];
-  const incomeEvents = useLiveQuery(() => activeAccountId ? getIncomeEvents(activeAccountId) : [], [activeAccountId]) || [];
-  const incomes   = useLiveQuery(() => activeAccountId ? db.incomes.where('accountId').equals(Number(activeAccountId)).toArray() : [], [activeAccountId]) || [];
-  const subscriptions = useLiveQuery(() => activeAccountId ? getSubscriptions(activeAccountId) : [], [activeAccountId]) || [];
-  const variables = useLiveQuery(() => activeAccountId ? db.variables.where('accountId').equals(Number(activeAccountId)).toArray() : [], [activeAccountId]) || [];
 
   // Per-category auto-reset for legacy categories without income funding.
   useEffect(() => {
@@ -167,13 +159,23 @@ export default function App() {
     })();
   }, [categories, incomes]);
 
-  // Subscriptions are logged automatically when their due date arrives.
+  // Subscriptions are logged automatically when their due date arrives. Say so:
+  // money leaving a budget without the user doing anything should never be
+  // silent, or a subscription charge looks like a discrepancy.
   useEffect(() => {
     if (!activeAccountId || !subscriptions.length) return;
-    processDueSubscriptions(activeAccountId).catch(error => {
-      console.error('Failed to process due subscriptions', error);
-    });
-  }, [activeAccountId, subscriptions]);
+    processDueSubscriptions(activeAccountId)
+      .then(created => {
+        if (created > 0) {
+          showToast(`Logged ${created} due subscription${created === 1 ? '' : 's'}`, {
+            detail: 'Charged automatically to their categories.',
+          });
+        }
+      })
+      .catch(error => {
+        console.error('Failed to process due subscriptions', error);
+      });
+  }, [activeAccountId, subscriptions, showToast]);
 
   // Income auto-reset: funded categories reset when their associated income resets.
   useEffect(() => {
@@ -872,6 +874,7 @@ export default function App() {
         />
       )}
       {dialogEl}
+      {toastEl}
 
       <style>{`
         @media (min-width: 768px) {

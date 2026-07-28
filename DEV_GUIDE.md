@@ -48,10 +48,19 @@ src/
 │   ├── Wishlist.jsx      # Wishlist items with affordability tracking
 │   └── Settings.jsx      # Income config, category management, data export/import
 │
-└── components/
-    └── Modals.jsx        # AddTransactionModal, AddWishlistItemModal,
-                          # FastForwardModal, ImportModeModal
+├── hooks/
+│   └── useFinesseData.js # Every useLiveQuery call, called once by App.jsx
+├── components/
+│   ├── modals/           # Modal dialogs split by domain, re-exported via index.js
+│   ├── ui.jsx            # Modal shell, IconButton, Field, CardTitle
+│   ├── useDialog.jsx     # Promise-based confirm / alert / prompt
+│   └── Toast.jsx         # Transient confirmations with an optional Undo
+└── __tests__/            # Vitest suites for utils.js and db.js
 ```
+
+> The views list above is abbreviated. The app currently has ten: Dashboard,
+> Accounts, Transactions, PurchaseCheck, Calendar, Subscriptions, Forecasting,
+> Wishlist, Variables and Settings.
 
 ---
 
