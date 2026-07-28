@@ -273,6 +273,41 @@ if (dismissedTitle && afterReload.includes(dismissedTitle)) {
 }
 step('dismissal persists across a reload');
 
+// ── Calendar & planning ──────────────────────────────────────────────────
+
+await page.getByRole('button', { name: 'Calendar', exact: true }).click();
+await page.waitForTimeout(500);
+
+// Clicking a day opens its detail sheet.
+const todayCell = page.locator('.finance-calendar-day.today');
+await todayCell.click();
+await page.waitForTimeout(400);
+const calText = await page.locator('body').innerText();
+if (!/Add expense here/i.test(calText)) errors.push('calendar day sheet did not open');
+step('calendar days open a detail sheet');
+
+// Logging from a day should date the transaction to that day.
+await page.getByRole('button', { name: 'Add expense here' }).click();
+await page.getByRole('dialog').waitFor({ timeout: 5000 });
+await page.getByLabel('Amount (£)').fill('7.25');
+await page.getByLabel('Note / merchant').fill('From calendar');
+await page.getByRole('button', { name: 'Add Expense', exact: true }).click();
+await page.getByRole('dialog').waitFor({ state: 'detached' });
+await page.waitForTimeout(500);
+
+await page.getByRole('button', { name: 'Transactions', exact: true }).click();
+await page.waitForTimeout(500);
+const txList = await page.locator('body').innerText();
+if (!txList.includes('From calendar')) errors.push('expense logged from the calendar is missing');
+step('logging from a calendar day works');
+
+await page.getByRole('button', { name: 'Forecasting', exact: true }).click();
+await page.waitForTimeout(700);
+const fc = await page.locator('body').innerText();
+if (!/Cash Flow/i.test(fc)) errors.push('cash-flow forecast missing');
+if (!/(goes negative|stay in the black)/i.test(fc)) errors.push('cash-flow verdict missing');
+step('cash-flow forecast renders with a verdict');
+
 await browser.close();
 
 if (errors.length) {

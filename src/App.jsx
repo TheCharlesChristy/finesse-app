@@ -628,6 +628,11 @@ export default function App() {
     }
   }, [templates, activeAccountId, showToast]);
 
+  const handleAddExpenseOnDate = useCallback((date) => {
+    setTransactionDefaults({ date: date instanceof Date ? date.toISOString() : date });
+    setModal('addTx');
+  }, []);
+
   const handleRepeatTransaction = useCallback((tx) => {
     // Prefill rather than log outright: the amount is usually right but not
     // always, and a silent duplicate is hard to notice and easy to resent.
@@ -885,7 +890,8 @@ export default function App() {
           )}
           {view === 'forecasting' && (
             <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes}
-              incomeEvents={incomeEvents} transfers={accountTransfers} account={activeAccount} />
+              incomeEvents={incomeEvents} transfers={accountTransfers} subscriptions={subscriptions}
+              account={activeAccount} />
           )}
           {view === 'purchase' && (
             <PurchaseCheck categories={categories} onLogPurchase={handleLogPurchase} />
@@ -895,10 +901,13 @@ export default function App() {
               categories={categories}
               incomes={incomes}
               subscriptions={subscriptions}
+              transactions={transactions}
               onAddSubscription={() => setModal('addSubscription')}
               onEditSubscription={handleEditSubscription}
               onDeleteSubscription={handleDeleteSubscription}
               onToggleSubscription={handleToggleSubscription}
+              onAddExpenseOn={handleAddExpenseOnDate}
+              onEditTransaction={handleEditTransaction}
             />
           )}
           {view === 'subscriptions' && (

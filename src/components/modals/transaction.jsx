@@ -95,7 +95,12 @@ export function AddTransactionModal({
   const [note, setNote] = useState(transaction?.note || initial?.note || '');
   const [tagInput, setTagInput] = useState((transaction?.tags || initial?.tags || []).join(', '));
   const [type, setType] = useState(transaction?.type === TX_REFUND ? TX_REFUND : TX_EXPENSE);
-  const [date, setDate] = useState(format(transaction?.date ? new Date(transaction.date) : new Date(), 'yyyy-MM-dd'));
+  // `initial.date` is how the calendar hands over a clicked day.
+  const [date, setDate] = useState(
+    format(transaction?.date ? new Date(transaction.date)
+      : initial?.date ? new Date(initial.date)
+      : new Date(), 'yyyy-MM-dd'),
+  );
   const [splitOpen, setSplitOpen] = useState(false);
   const [splitParts, setSplitParts] = useState([{ categoryId: '', amount: '' }]);
   const [suggestion, setSuggestion] = useState(null);

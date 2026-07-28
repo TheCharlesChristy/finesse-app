@@ -4,6 +4,7 @@ import { addDays, format, subMonths } from 'date-fns';
 import {
   AVERAGE_MONTH_DAYS,
   buildNudges,
+  buildCashFlowForecast,
   filterDismissedNudges,
   buildMonthlyHistory,
   getCategoryCycle,
@@ -867,5 +868,72 @@ describe('nudges', () => {
     // The due date is in the id, so dismissing this month's charge doesn't
     // silence next month's.
     expect(find(nudges, 'sub-due-')[0].id).toMatch(/\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('cash-flow forecast', () => {
+  const account = { id: 1, balance: 500 };
+
+  it('starts at the current balance and applies scheduled income and subscriptions', () => {
+    const { series } = buildCashFlowForecast({
+      account,
+      incomes: [makeIncome({ id: 10, amount: 1000, resetFrequency: 'weekly', daysAgo: 0 })],
+      subscriptions: [{ id: 1, name: 'Rent', amount: 200, active: true, intervalUnit: 'month', interval: 1, nextDueAt: iso(addDays(new Date(), 3)) }],
+      days: 10,
+    });
+
+    expect(series[0].balance).toBe(500);          // today, untouched
+    expect(series).toHaveLength(11);              // today plus 10 days
+    // Rent lands on day 3 and income on day 7.
+    expect(series[3].events.map(e => e.label)).toContain('Rent');
+    expect(series[7].events.map(e => e.label)).toContain('Income 10');
+  });
+
+  it('finds the first day the balance goes negative', () => {
+    const { firstNegative, lowest } = buildCashFlowForecast({
+      account: { id: 1, balance: 100 },
+      subscriptions: [{ id: 1, name: 'Rent', amount: 400, active: true, intervalUnit: 'month', interval: 1, nextDueAt: iso(addDays(new Date(), 2)) }],
+      days: 10,
+    });
+
+    expect(firstNegative).toBeInstanceOf(Date);
+    expect(lowest.balance).toBeLessThan(0);
+  });
+
+  it('reports no negative day when income covers the outgoings', () => {
+    const { firstNegative } = buildCashFlowForecast({
+      account: { id: 1, balance: 5000 },
+      subscriptions: [{ id: 1, name: 'Rent', amount: 100, active: true, intervalUnit: 'month', interval: 1, nextDueAt: iso(addDays(new Date(), 2)) }],
+      days: 10,
+    });
+    expect(firstNegative).toBeNull();
+  });
+
+  it('does not double-count subscriptions in the burn rate', () => {
+    // A category whose entire spend is one subscription should contribute
+    // nothing extra to the daily burn — the charge lands on its own date.
+    const incomes = [makeIncome({ id: 10, resetFrequency: 'monthly', daysAgo: 10 })];
+    const categories = [makeCategory({ id: 1, allowance: 300, spent: 100, incomeId: 10, daysAgo: 10 })];
+    const subscriptions = [{
+      id: 1, categoryId: 1, name: 'Rent', amount: 300, active: true,
+      intervalUnit: 'month', interval: 1, nextDueAt: iso(addDays(new Date(), 5)),
+    }];
+
+    const withSub = buildCashFlowForecast({ account, categories, incomes, subscriptions, days: 10 });
+    const withoutSub = buildCashFlowForecast({ account, categories, incomes, subscriptions: [], days: 10 });
+
+    expect(withSub.dailyBurn).toBeLessThan(withoutSub.dailyBurn);
+    expect(withSub.dailyBurn).toBeGreaterThanOrEqual(0);
+  });
+
+  it('ignores paused subscriptions and held incomes', () => {
+    const { series } = buildCashFlowForecast({
+      account,
+      incomes: [makeIncome({ id: 10, amount: 1000, resetFrequency: 'weekly', daysAgo: 0, holdActive: true })],
+      subscriptions: [{ id: 1, name: 'Paused', amount: 200, active: false, intervalUnit: 'month', interval: 1, nextDueAt: iso(addDays(new Date(), 3)) }],
+      days: 10,
+    });
+
+    expect(series.every(point => point.events.length === 0)).toBe(true);
   });
 });

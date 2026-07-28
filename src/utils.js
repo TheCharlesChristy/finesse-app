@@ -987,6 +987,109 @@ export function getGoalCommitment(goals = [], incomes = [], settings = null, now
   return total;
 }
 
+// ── Cash-flow forecast ───────────────────────────────────────────────────────
+
+/**
+ * Day-by-day projected account balance.
+ *
+ * Budget categories answer "can I afford this out of my Groceries allowance?".
+ * This answers the different and more urgent question: "will the money actually
+ * be in the account when that direct debit comes out?" — the one that produces
+ * failed payments.
+ *
+ * Combines scheduled income, scheduled subscriptions, and the current burn rate
+ * for everything else. Returns the series plus the first date the balance goes
+ * negative, if any.
+ */
+export function buildCashFlowForecast({
+  account = null,
+  categories = [],
+  incomes = [],
+  subscriptions = [],
+  settings = null,
+  days = 45,
+  now = new Date(),
+} = {}) {
+  const today = startOfDay(now);
+  const end = addDays(today, days);
+
+  // Discretionary burn, excluding anything a subscription already accounts for
+  // — those land on their own dates below and would otherwise be counted twice.
+  const burnRates = getDailyBurnRate(categories, settings, incomes, now);
+  const subscriptionDailyCost = subscriptions
+    .filter(sub => sub.active !== false)
+    .reduce((sum, sub) => {
+      const interval = Math.max(1, Number(sub.interval) || 1);
+      const unitDays = { day: 1, week: 7, month: AVERAGE_MONTH_DAYS, year: 365.25 }[sub.intervalUnit || 'month'] ?? AVERAGE_MONTH_DAYS;
+      return sum + (Number(sub.amount) || 0) / (interval * unitDays);
+    }, 0);
+  const dailyBurn = Math.max(0, Object.values(burnRates).reduce((sum, rate) => sum + rate, 0) - subscriptionDailyCost);
+
+  const events = new Map(); // yyyy-MM-dd → [{ label, amount }]
+  const addEvent = (date, label, amount) => {
+    const day = startOfDay(date);
+    if (day < today || day > end) return;
+    const key = format(day, 'yyyy-MM-dd');
+    if (!events.has(key)) events.set(key, []);
+    events.get(key).push({ label, amount: roundMoney(amount) });
+  };
+
+  for (const income of incomes) {
+    if (income.holdActive) continue;
+    const freq = income.resetFrequency || (income.payDayOfMonth ? 'monthly' : null);
+    if (!freq) continue;
+
+    let next = calcNextReset(freq, income.payDayOfMonth, toValidDate(income.lastPaid) || today);
+    let guard = 0;
+    while (next <= end && guard < 240) {
+      if (next > today) addEvent(next, income.name || 'Income', Number(income.amount) || 0);
+      next = calcNextReset(freq, income.payDayOfMonth, next);
+      guard += 1;
+    }
+  }
+
+  for (const sub of subscriptions) {
+    if (sub.active === false || !sub.nextDueAt) continue;
+    let next = toValidDate(sub.nextDueAt);
+    if (!next) continue;
+    next = startOfDay(next);
+
+    let guard = 0;
+    while (next <= end && guard < 240) {
+      addEvent(next, sub.name || 'Subscription', -(Number(sub.amount) || 0));
+      next = addRecurringInterval(next, sub.intervalUnit || 'month', sub.interval || 1);
+      guard += 1;
+    }
+  }
+
+  const series = [];
+  let balance = roundMoney(Number(account?.balance) || 0);
+  let lowest = { date: null, balance };
+  let firstNegative = null;
+
+  for (let day = today; day <= end; day = addDays(day, 1)) {
+    const key = format(day, 'yyyy-MM-dd');
+    const dayEvents = events.get(key) || [];
+
+    if (day > today) {
+      for (const event of dayEvents) balance = roundMoney(balance + event.amount);
+      balance = roundMoney(balance - dailyBurn);
+    }
+
+    if (balance < lowest.balance) lowest = { date: day, balance };
+    if (firstNegative === null && balance < 0) firstNegative = day;
+
+    series.push({
+      date: key,
+      label: format(day, 'd MMM'),
+      balance,
+      events: dayEvents,
+    });
+  }
+
+  return { series, firstNegative, lowest, dailyBurn: roundMoney(dailyBurn) };
+}
+
 // ── Nudges ───────────────────────────────────────────────────────────────────
 
 export const NUDGE_DANGER = 'danger';

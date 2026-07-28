@@ -370,6 +370,11 @@ body {
 }
 
 .finance-calendar-day {
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  width: 100%;
   min-height: 94px;
   border-radius: 12px;
   padding: 8px;
@@ -382,6 +387,11 @@ body {
   opacity: 0.42;
 }
 
+.finance-calendar-day:hover { border-color: var(--glass-border-strong); }
+.finance-calendar-day.selected {
+  border-color: rgba(79,255,176,0.5);
+  background: rgba(79,255,176,0.08);
+}
 .finance-calendar-day.today {
   border-color: rgba(93,184,255,0.4);
   background: rgba(93,184,255,0.08);
@@ -403,6 +413,11 @@ body {
   background: rgba(79,255,176,0.1);
 }
 
+.finance-calendar-event.expense,
+.finance-calendar-event.refund {
+  background: rgba(255,255,255,0.05);
+  color: var(--text-muted);
+}
 .finance-calendar-event.subscription {
   background: rgba(251,191,112,0.1);
 }
@@ -433,6 +448,11 @@ body {
   }
 
   .finance-calendar-day {
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  width: 100%;
     min-height: 72px;
     padding: 6px;
   }

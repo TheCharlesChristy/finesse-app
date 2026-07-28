@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
 import {
-  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ReferenceLine,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend
 } from 'recharts';
+import { AlertTriangle, Check } from 'lucide-react';
 import { differenceInDays, format, startOfDay } from 'date-fns';
 import {
   fmt,
@@ -18,6 +19,7 @@ import {
   getNormalisedIncomeTotal,
   getMerchantBreakdown,
   buildBalanceHistory,
+  buildCashFlowForecast,
   normalizeIncomeAllocations,
 } from '../utils';
 import { CardTitle } from '../components/ui';
@@ -84,9 +86,15 @@ const PieTooltip = ({ active, payload }) => {
   );
 };
 
-export default function Forecasting({ categories, settings, transactions, incomes = [], incomeEvents = [], transfers = [], account = null }) {
+export default function Forecasting({ categories, settings, transactions, incomes = [], incomeEvents = [], transfers = [], subscriptions = [], account = null }) {
   const monthlyHistory = useMemo(() => buildMonthlyHistory(transactions, categories), [transactions, categories]);
   const merchantSpend = useMemo(() => getMerchantBreakdown(transactions, { limit: 8 }), [transactions]);
+  const cashFlow = useMemo(
+    () => (account
+      ? buildCashFlowForecast({ account, categories, incomes, subscriptions, settings, days: 45 })
+      : null),
+    [account, categories, incomes, subscriptions, settings],
+  );
   const balanceHistory = useMemo(
     () => (account ? buildBalanceHistory(account, { transactions, incomeEvents, transfers, days: 60 }) : []),
     [account, transactions, incomeEvents, transfers],
@@ -420,6 +428,64 @@ export default function Forecasting({ categories, settings, transactions, income
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Cash-flow forecast ──
+           Category budgets answer "can I afford this out of Groceries?". This
+           answers the different, more urgent question: will the money actually
+           be there when the direct debit comes out? */}
+      {cashFlow && cashFlow.series.length > 1 && (
+        <div className="glass mobile-card-pad" style={{
+          borderRadius: 18,
+          padding: '22px 24px',
+          borderColor: cashFlow.firstNegative ? 'rgba(255,107,138,0.3)' : undefined,
+          background: cashFlow.firstNegative ? 'rgba(255,107,138,0.04)' : undefined,
+        }}>
+          <CardTitle as="h2" style={{ marginBottom: 6 }}>Cash Flow</CardTitle>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>
+            Next 45 days, combining scheduled income, subscriptions and your current burn rate
+          </div>
+
+          {cashFlow.firstNegative ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 10, background: 'rgba(255,107,138,0.1)', color: 'var(--danger)', fontSize: 13 }}>
+              <AlertTriangle size={15} aria-hidden="true" />
+              <span>
+                On current trends your balance goes negative on{' '}
+                <strong>{format(cashFlow.firstNegative, 'd MMM')}</strong>.
+              </span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 10, background: 'rgba(79,255,176,0.08)', color: 'var(--good)', fontSize: 13 }}>
+              <Check size={15} aria-hidden="true" />
+              <span>
+                You stay in the black. Lowest point is{' '}
+                <strong>{fmt(cashFlow.lowest.balance)}</strong>
+                {cashFlow.lowest.date ? ` on ${format(cashFlow.lowest.date, 'd MMM')}` : ''}.
+              </span>
+            </div>
+          )}
+
+          <div className="mobile-chart-scroll">
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={cashFlow.series}>
+                <defs>
+                  <linearGradient id="grad-cashflow" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} stopOpacity={0.35} />
+                    <stop offset="95%" stopColor={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" interval={Math.max(0, Math.floor(cashFlow.series.length / 6) - 1)} />
+                <YAxis tickFormatter={v => `£${Math.round(v)}`} />
+                <Tooltip content={<GlassTooltip />} />
+                <ReferenceLine y={0} stroke="rgba(255,107,138,0.5)" strokeDasharray="4 4" />
+                <Area type="monotone" dataKey="balance" name="Projected balance"
+                  stroke={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} strokeWidth={2}
+                  fill="url(#grad-cashflow)" />
+              </AreaChart>
+            </ResponsiveContainer>
           </div>
         </div>
       )}
