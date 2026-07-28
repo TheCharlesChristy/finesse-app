@@ -16,7 +16,7 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   addTemplate, deleteTemplate, logTemplate,
   addGoal, updateGoal, deleteGoal, contributeToGoal, autoContributeGoals } from './db';
 import { useFinesseData } from './hooks/useFinesseData';
-import { calcNextReset, evaluateFormula, fmt, getGoalCommitment, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
+import { buildNudges, calcNextReset, evaluateFormula, filterDismissedNudges, fmt, getGoalCommitment, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
 
 const Dashboard     = lazy(() => import('./views/Dashboard'));
 const Transactions  = lazy(() => import('./views/Transactions'));
@@ -40,6 +40,8 @@ import { useDialog } from './components/useDialog';
 import { useToast } from './components/Toast';
 import QuickAdd from './components/QuickAdd';
 import CommandPalette from './components/CommandPalette';
+import NudgeCenter from './components/NudgeCenter';
+import { notifyNudges } from './notifications';
 
 const NAV = [
   { id: 'dashboard',   label: 'Dashboard',   Icon: LayoutDashboard },
@@ -124,6 +126,15 @@ export default function App() {
   useEffect(() => {
     if (activeAccountId) localStorage.setItem('finesse.activeAccountId', String(activeAccountId));
   }, [activeAccountId]);
+
+  // ── Home-screen shortcut actions (one-time check on load) ───────────────
+  useEffect(() => {
+    const action = new URLSearchParams(window.location.search).get('action');
+    if (!action) return;
+    history.replaceState(null, '', window.location.pathname + window.location.hash);
+    if (action === 'log-expense') setModal('addTx');
+    if (action === 'purchase-check') setView('purchase');
+  }, []);
 
   // ── Share-link import (one-time check on load) ──────────────────────────
   useEffect(() => {
@@ -261,7 +272,11 @@ export default function App() {
     a.download = `finance-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
-  }, []);
+
+    // Remember it, so "no backup for N days" can be honest about N.
+    const current = await getSettings(activeAccountId);
+    await saveSettings({ ...(current || {}), lastBackupAt: new Date().toISOString() }, activeAccountId);
+  }, [activeAccountId]);
 
   const handleExportCSV = useCallback(async () => {
     const csv = await exportTransactionsCSV(activeAccountId);
@@ -653,6 +668,37 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [modal]);
 
+  // ── Nudges ───────────────────────────────────────────────────────────────
+  const nudges = useMemo(() => filterDismissedNudges(
+    buildNudges({ categories, incomes, subscriptions, goals, transactions, settings }),
+    settings?.dismissedNudges,
+  ), [categories, incomes, subscriptions, goals, transactions, settings]);
+
+  const handleDismissNudge = useCallback(async (nudge) => {
+    const current = await getSettings(activeAccountId);
+    await saveSettings({
+      ...(current || {}),
+      dismissedNudges: { ...(current?.dismissedNudges || {}), [nudge.id]: new Date().toISOString() },
+    }, activeAccountId);
+  }, [activeAccountId]);
+
+  const handleNudgeNavigate = useCallback((nudge) => {
+    if (nudge.view) navigate(nudge.view);
+  }, [navigate]);
+
+  // OS notifications can't wake the app up without a backend, so they fire when
+  // it opens or regains focus. The in-app centre remains the primary channel.
+  useEffect(() => {
+    if (!settings?.notificationsEnabled || nudges.length === 0) return undefined;
+
+    const deliver = () => {
+      if (document.visibilityState === 'visible') notifyNudges(nudges, { enabled: true });
+    };
+    deliver();
+    document.addEventListener('visibilitychange', deliver);
+    return () => document.removeEventListener('visibilitychange', deliver);
+  }, [nudges, settings?.notificationsEnabled]);
+
   const paletteCommands = useMemo(() => [
     { id: 'log-expense', label: 'Log an expense', keywords: 'add spend transaction new', run: () => setModal('addTx') },
     { id: 'log-refund', label: 'Log a refund', keywords: 'return money back credit', run: () => setModal('addTx') },
@@ -747,11 +793,12 @@ export default function App() {
               borderRadius: 10, width: 38, height: 38, cursor: 'pointer', color: 'white',
               display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
             }}><Menu size={18} aria-hidden="true" /></button>
-            <h1 className="font-display" style={{ fontSize: 20, fontWeight: 400, margin: 0 }}>
+            <h1 className="font-display" style={{ fontSize: 20, fontWeight: 400, margin: 0, flex: 1, minWidth: 0 }}>
               {view === 'categoryDetail'
                 ? (categories.find(c => Number(c.id) === Number(detailCategoryId))?.name || 'Category')
                 : NAV.find(n => n.id === view)?.label}
             </h1>
+            <NudgeCenter nudges={nudges} onDismiss={handleDismissNudge} onNavigate={handleNudgeNavigate} />
           </div>
 
           {!accountsQuery ? (
@@ -895,6 +942,7 @@ export default function App() {
               onFullReset={handleFullReset}
               rules={rules} onAddRule={handleAddRule} onUpdateRule={handleUpdateRule} onDeleteRule={handleDeleteRule}
               templates={templates} onAddTemplate={handleAddTemplate} onDeleteTemplate={handleDeleteTemplate}
+              nudgeCount={nudges.length}
               showConfirm={showConfirm} showAlert={showAlert} showPrompt={showPrompt} />
           )}
           </Suspense>)}

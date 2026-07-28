@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Download, Upload, FileText, RefreshCcw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap } from 'lucide-react';
+import { Bell, Download, Upload, FileText, RefreshCcw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap } from 'lucide-react';
 import { fmt } from '../utils';
+import { notificationPermission, notificationsSupported, requestNotificationPermission } from '../notifications';
 import CategorySelect from '../components/CategorySelect';
 import { CardTitle, IconButton } from '../components/ui';
 
@@ -23,6 +24,7 @@ export default function Settings({
   templates = [],
   onAddTemplate,
   onDeleteTemplate,
+  nudgeCount = 0,
   showConfirm,
   showAlert,
   showPrompt,
@@ -32,6 +34,23 @@ export default function Settings({
   const [templateName, setTemplateName] = useState('');
   const [templateAmount, setTemplateAmount] = useState('');
   const [templateCategoryId, setTemplateCategoryId] = useState('');
+  const [permission, setPermission] = useState(() => notificationPermission());
+
+  const notificationsOn = Boolean(settings?.notificationsEnabled) && permission === 'granted';
+
+  const handleToggleNotifications = async () => {
+    if (notificationsOn) {
+      onSaveSettings?.({ ...(settings || {}), notificationsEnabled: false });
+      return;
+    }
+    // Requested from a click, never on load: iOS only grants from a gesture,
+    // and an unprompted permission dialog is just noise.
+    const result = await requestNotificationPermission();
+    setPermission(result);
+    if (result === 'granted') {
+      onSaveSettings?.({ ...(settings || {}), notificationsEnabled: true });
+    }
+  };
 
   const categoryName = (id) => categories.find(c => Number(c.id) === Number(id))?.name || 'Missing category';
 
@@ -249,6 +268,42 @@ export default function Settings({
         )}
       </div>
 
+      {/* Reminders */}
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+          <Bell size={16} color="var(--accent-blue)" aria-hidden="true" />
+          <CardTitle as="h2">Reminders</CardTitle>
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>
+          Finesse always collects what needs your attention — due subscriptions,
+          over-budget categories, goals slipping, a stale backup — under the bell
+          at the top of the page.
+          {nudgeCount > 0
+            ? ` There ${nudgeCount === 1 ? 'is 1 item' : `are ${nudgeCount} items`} there now.`
+            : ' Nothing is outstanding right now.'}
+        </div>
+
+        {!notificationsSupported() ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            This browser doesn&rsquo;t support notifications, so the bell is the only channel.
+          </div>
+        ) : (
+          <>
+            <button className={notificationsOn ? 'btn-primary' : 'btn-secondary'}
+              onClick={handleToggleNotifications}
+              disabled={permission === 'denied'}
+              style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Bell size={14} /> {notificationsOn ? 'Notifications on' : 'Also notify me'}
+            </button>
+            <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10, lineHeight: 1.6 }}>
+              {permission === 'denied'
+                ? 'Notifications are blocked for this site in your browser settings.'
+                : 'Finesse has no server, so notifications appear when you open the app or return to it — they can\u2019t wake your phone. On iPhone this needs the app added to your home screen.'}
+            </div>
+          </>
+        )}
+      </div>
+
       {/* Auto-categorisation rules */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
@@ -394,7 +449,10 @@ export default function Settings({
             <input type="file" accept=".json" onChange={handleFileImport} style={{ display: 'none' }} />
           </label>
         </div>
-        <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10 }}>
+        <div style={{ color: settings?.lastBackupAt ? 'var(--text-muted)' : 'var(--warn)', fontSize: 11, marginTop: 10 }}>
+          {settings?.lastBackupAt
+            ? `Last backup ${new Date(settings.lastBackupAt).toLocaleDateString('en-GB')}. `
+            : 'You have never exported a backup. Your data exists only in this browser. '}
           Import will ask whether to replace or merge existing data.
         </div>
 

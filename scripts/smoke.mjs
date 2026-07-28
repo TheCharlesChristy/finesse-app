@@ -241,6 +241,38 @@ if (!/savings/i.test(dashWithGoal)) {
 }
 step('pending savings held back from safe-to-spend');
 
+// ── Reminders ────────────────────────────────────────────────────────────
+
+// A fresh install has never backed up, and that's worth saying.
+const bell = page.getByRole('button', { name: /notifications/i });
+const bellLabel = await bell.getAttribute('aria-label');
+if (!/\d+ notifications/.test(bellLabel || '')) {
+  errors.push(`nudge bell shows no count (aria-label was "${bellLabel}")`);
+}
+await bell.click();
+await page.getByRole('dialog', { name: 'Notifications' }).waitFor({ timeout: 5000 });
+const panel = await page.getByRole('dialog', { name: 'Notifications' }).innerText();
+if (!/never backed up/i.test(panel)) {
+  errors.push(`backup nudge missing from the panel:\n${panel}`);
+}
+step('nudge centre lists outstanding items');
+
+// Dismissal has to survive a reload, or it isn't a dismissal.
+const firstDismiss = page.getByRole('button', { name: /^Dismiss:/ }).first();
+const dismissedLabel = await firstDismiss.getAttribute('aria-label');
+await firstDismiss.click();
+await page.waitForTimeout(500);
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForTimeout(800);
+await page.getByRole('button', { name: /notifications/i }).click();
+await page.getByRole('dialog', { name: 'Notifications' }).waitFor({ timeout: 5000 });
+const afterReload = await page.getByRole('dialog', { name: 'Notifications' }).innerText();
+const dismissedTitle = (dismissedLabel || '').replace(/^Dismiss:\s*/, '');
+if (dismissedTitle && afterReload.includes(dismissedTitle)) {
+  errors.push(`dismissed nudge came back after reload: ${dismissedTitle}`);
+}
+step('dismissal persists across a reload');
+
 await browser.close();
 
 if (errors.length) {

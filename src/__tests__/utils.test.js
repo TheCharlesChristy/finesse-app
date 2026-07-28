@@ -3,6 +3,8 @@ import { addDays, format, subMonths } from 'date-fns';
 
 import {
   AVERAGE_MONTH_DAYS,
+  buildNudges,
+  filterDismissedNudges,
   buildMonthlyHistory,
   getCategoryCycle,
   getCumulativeOverspend,
@@ -733,5 +735,137 @@ describe('rollover', () => {
 
   it('does nothing when the category has not opted in', () => {
     expect(getRolloverForNextCycle({ allowance: 100, spent: 10 })).toBe(0);
+  });
+});
+
+describe('nudges', () => {
+  const now = new Date();
+  const day = (offset) => iso(addDays(now, offset));
+  const find = (nudges, prefix) => nudges.filter(n => n.id.startsWith(prefix));
+
+  it('warns about subscriptions due soon or overdue, but not distant ones', () => {
+    const subscriptions = [
+      { id: 1, name: 'Netflix', amount: 10, active: true, nextDueAt: day(1) },
+      { id: 2, name: 'Gym', amount: 30, active: true, nextDueAt: day(-2) },
+      { id: 3, name: 'Insurance', amount: 90, active: true, nextDueAt: day(20) },
+      { id: 4, name: 'Paused', amount: 5, active: false, nextDueAt: day(0) },
+    ];
+    const nudges = buildNudges({ subscriptions });
+    const due = find(nudges, 'sub-due-');
+
+    expect(due).toHaveLength(2);
+    expect(due.find(n => n.id.includes('-2-')).severity).toBe('warn'); // overdue
+    expect(due.find(n => n.id.includes('-1-')).severity).toBe('info');
+  });
+
+  it('flags over-budget categories as the most severe thing on the list', () => {
+    const nudges = buildNudges({
+      categories: [{ id: 1, name: 'Food', allowance: 100, spent: 150 }],
+      transactions: [{ id: 1, amount: 150, date: day(-1) }],
+      settings: { lastBackupAt: day(-1) },
+    });
+
+    expect(nudges[0].severity).toBe('danger');
+    expect(nudges[0].title).toMatch(/over budget/);
+  });
+
+  it('nags about backups only when there is something to lose', () => {
+    expect(find(buildNudges({}), 'backup-')).toHaveLength(0);
+
+    const never = buildNudges({ categories: [{ id: 1, name: 'Food', allowance: 100, spent: 0 }] });
+    expect(find(never, 'backup-')[0].title).toMatch(/never backed up/);
+
+    const stale = buildNudges({
+      categories: [{ id: 1, name: 'Food', allowance: 100, spent: 0 }],
+      settings: { lastBackupAt: day(-45) },
+    });
+    expect(find(stale, 'backup-')[0].title).toMatch(/45 days/);
+
+    const fresh = buildNudges({
+      categories: [{ id: 1, name: 'Food', allowance: 100, spent: 0 }],
+      settings: { lastBackupAt: day(-2) },
+    });
+    expect(find(fresh, 'backup-')).toHaveLength(0);
+  });
+
+  it('spots a subscription price change from its charge history', () => {
+    const nudges = buildNudges({
+      subscriptions: [{ id: 1, name: 'Netflix', amount: 12, active: true, nextDueAt: day(20) }],
+      transactions: [
+        { id: 1, subscriptionId: 1, amount: 12, date: day(-1) },
+        { id: 2, subscriptionId: 1, amount: 10, date: day(-31) },
+      ],
+    });
+    const price = find(nudges, 'sub-price-');
+
+    expect(price).toHaveLength(1);
+    expect(price[0].body).toMatch(/£10\.00 → £12\.00/);
+  });
+
+  it('stays quiet about price when there is only one charge to go on', () => {
+    const nudges = buildNudges({
+      subscriptions: [{ id: 1, name: 'Netflix', amount: 12, active: true, nextDueAt: day(20) }],
+      transactions: [{ id: 1, subscriptionId: 1, amount: 12, date: day(-1) }],
+    });
+    expect(find(nudges, 'sub-price-')).toHaveLength(0);
+  });
+
+  it('prompts a review of long-running subscriptions with the total paid', () => {
+    const transactions = Array.from({ length: 8 }, (_, i) => ({
+      id: i + 1, subscriptionId: 1, amount: 10, date: day(-30 * (i + 1)),
+    }));
+    const nudges = buildNudges({
+      subscriptions: [{ id: 1, name: 'Netflix', amount: 10, active: true, nextDueAt: day(20) }],
+      transactions,
+    });
+    const review = find(nudges, 'sub-review-');
+
+    expect(review).toHaveLength(1);
+    expect(review[0].title).toMatch(/£80\.00/);
+  });
+
+  it('flags categories whose funding does not add up', () => {
+    const nudges = buildNudges({
+      incomes: [makeIncome({ id: 10, amount: 1000 })],
+      categories: [{ id: 1, name: 'Food', allowance: 100, spent: 0, incomeAllocations: [{ incomeId: 10, percent: 50 }] }],
+    });
+    expect(find(nudges, 'funding-')[0].title).toMatch(/not fully funded/);
+  });
+
+  it('sorts danger before warn before info', () => {
+    const nudges = buildNudges({
+      incomes: [makeIncome({ id: 10, amount: 1000 })],
+      categories: [
+        { id: 1, name: 'Over', allowance: 10, spent: 50, incomeAllocations: [{ incomeId: 10, percent: 100 }] },
+        { id: 2, name: 'Broken', allowance: 10, spent: 0, incomeAllocations: [{ incomeId: 10, percent: 20 }] },
+      ],
+      subscriptions: [{ id: 1, name: 'Netflix', amount: 10, active: true, nextDueAt: day(1) }],
+      settings: { lastBackupAt: day(-1) },
+    });
+
+    const severities = nudges.map(n => n.severity);
+    expect(severities).toEqual([...severities].sort(
+      (a, b) => ({ danger: 0, warn: 1, info: 2 }[a] - { danger: 0, warn: 1, info: 2 }[b])
+    ));
+  });
+
+  it('hides dismissed nudges but keeps the rest', () => {
+    const nudges = buildNudges({
+      categories: [{ id: 1, name: 'Food', allowance: 100, spent: 150 }],
+      transactions: [{ id: 1, amount: 150, date: day(-1) }],
+    });
+    const dismissed = { [nudges[0].id]: iso(now) };
+
+    expect(filterDismissedNudges(nudges, dismissed)).toHaveLength(nudges.length - 1);
+    expect(filterDismissedNudges(nudges, {})).toHaveLength(nudges.length);
+  });
+
+  it('keys time-bound nudges by their period so they return next time', () => {
+    const nudges = buildNudges({
+      subscriptions: [{ id: 1, name: 'Netflix', amount: 10, active: true, nextDueAt: day(1) }],
+    });
+    // The due date is in the id, so dismissing this month's charge doesn't
+    // silence next month's.
+    expect(find(nudges, 'sub-due-')[0].id).toMatch(/\d{4}-\d{2}-\d{2}$/);
   });
 });

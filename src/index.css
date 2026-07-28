@@ -1030,3 +1030,36 @@ html[data-theme="light"] .sidebar-overlay {
   .safe-to-spend { padding: 18px 18px; }
   .cycle-compare-row { grid-template-columns: 1fr auto; }
 }
+
+/* ── Nudge centre ───────────────────────────────────────────────────────── */
+.nudge-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 45;
+  width: min(360px, calc(100vw - 32px));
+  border-radius: 14px;
+  background: rgba(18, 26, 48, 0.97);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid var(--glass-border-strong);
+  box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+  overflow: hidden;
+}
+.nudge-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+.nudge-panel-list { max-height: 60vh; overflow-y: auto; }
+.nudge-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.nudge-item:last-child { border-bottom: none; }

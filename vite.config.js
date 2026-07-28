@@ -24,6 +24,22 @@ export default defineConfig({
           { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
         ],
+        // Long-press the installed icon to go straight to the two things people
+        // actually open the app for. Handled by the ?action= check in App.jsx.
+        shortcuts: [
+          {
+            name: 'Log an expense',
+            short_name: 'Log expense',
+            url: '/finesse-app/?action=log-expense',
+            icons: [{ src: 'icons/icon-192.png', sizes: '192x192' }],
+          },
+          {
+            name: 'Can I purchase it?',
+            short_name: 'Can I buy it',
+            url: '/finesse-app/?action=purchase-check',
+            icons: [{ src: 'icons/icon-192.png', sizes: '192x192' }],
+          },
+        ],
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,woff2}'],

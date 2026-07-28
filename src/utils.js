@@ -987,6 +987,207 @@ export function getGoalCommitment(goals = [], incomes = [], settings = null, now
   return total;
 }
 
+// ── Nudges ───────────────────────────────────────────────────────────────────
+
+export const NUDGE_DANGER = 'danger';
+export const NUDGE_WARN = 'warn';
+export const NUDGE_INFO = 'info';
+
+const SUBSCRIPTION_DUE_WINDOW_DAYS = 3;
+const BACKUP_STALE_DAYS = 30;
+const SUBSCRIPTION_REVIEW_MONTHS = 6;
+
+/**
+ * Everything the app wants to tell you, as plain data.
+ *
+ * One source for both the in-app nudge centre and OS notifications, so the two
+ * can never disagree about what's outstanding. Pure and synchronous: no
+ * permissions, no scheduling, no side effects — callers decide how to deliver.
+ *
+ * Each nudge's `id` embeds the period it belongs to, so dismissing "payday
+ * today" hides it for today and not forever.
+ */
+export function buildNudges({
+  categories = [],
+  incomes = [],
+  subscriptions = [],
+  goals = [],
+  transactions = [],
+  settings = null,
+  now = new Date(),
+} = {}) {
+  const today = startOfDay(now);
+  const nudges = [];
+  const dayKey = format(today, 'yyyy-MM-dd');
+
+  // ── Subscriptions due or overdue ──
+  for (const sub of subscriptions) {
+    if (sub.active === false || !sub.nextDueAt) continue;
+    const due = toValidDate(sub.nextDueAt);
+    if (!due) continue;
+
+    const days = differenceInDays(startOfDay(due), today);
+    if (days > SUBSCRIPTION_DUE_WINDOW_DAYS) continue;
+
+    nudges.push({
+      id: `sub-due-${sub.id}-${format(startOfDay(due), 'yyyy-MM-dd')}`,
+      severity: days < 0 ? NUDGE_WARN : NUDGE_INFO,
+      title: days < 0 ? `${sub.name} is overdue`
+        : days === 0 ? `${sub.name} is due today`
+        : `${sub.name} due in ${days} day${days === 1 ? '' : 's'}`,
+      body: `${fmt(sub.amount || 0)} will be logged automatically.`,
+      view: 'subscriptions',
+    });
+  }
+
+  // ── Payday ──
+  for (const income of incomes) {
+    if (income.holdActive) continue;
+    const freq = income.resetFrequency || (income.payDayOfMonth ? 'monthly' : null);
+    if (!freq) continue;
+
+    const base = toValidDate(income.lastPaid) || today;
+    let next = calcNextReset(freq, income.payDayOfMonth, base);
+    let guard = 0;
+    while (next <= today && guard < 240) {
+      next = calcNextReset(freq, income.payDayOfMonth, next);
+      guard += 1;
+    }
+
+    const days = differenceInDays(startOfDay(next), today);
+    if (days > 1) continue;
+
+    nudges.push({
+      id: `payday-${income.id}-${format(startOfDay(next), 'yyyy-MM-dd')}`,
+      severity: NUDGE_INFO,
+      title: days === 0 ? `${income.name} lands today` : `${income.name} lands tomorrow`,
+      body: `${fmt(income.amount || 0)} — funded categories will reset.`,
+      view: 'dashboard',
+    });
+  }
+
+  // ── Over budget ──
+  const overspent = categories.filter(cat => (cat.spent || 0) > getEffectiveAllowance(cat) + 0.005);
+  if (overspent.length > 0) {
+    const total = roundMoney(overspent.reduce(
+      (sum, cat) => sum + ((cat.spent || 0) - getEffectiveAllowance(cat)), 0));
+    nudges.push({
+      id: `overspent-${dayKey}`,
+      severity: NUDGE_DANGER,
+      title: `${overspent.length} categor${overspent.length === 1 ? 'y is' : 'ies are'} over budget`,
+      body: `${fmt(total)} over in total: ${overspent.map(c => c.name).join(', ')}.`,
+      view: 'dashboard',
+    });
+  }
+
+  // ── Broken funding ──
+  const incomeIds = new Set(incomes.map(income => Number(income.id)));
+  const brokenFunding = categories.filter(cat => {
+    if (!incomes.length) return false;
+    const allocations = normalizeIncomeAllocations(cat.incomeAllocations);
+    return Math.abs(getAllocationPercentTotal(allocations) - 100) > 0.01
+      || allocations.some(allocation => !incomeIds.has(allocation.incomeId));
+  });
+  if (brokenFunding.length > 0) {
+    nudges.push({
+      id: `funding-${dayKey}`,
+      severity: NUDGE_WARN,
+      title: `${brokenFunding.length} categor${brokenFunding.length === 1 ? 'y is' : 'ies are'} not fully funded`,
+      body: `${brokenFunding.map(c => c.name).join(', ')} won't reset properly until fixed.`,
+      view: 'dashboard',
+    });
+  }
+
+  // ── Unallocated income ──
+  const unallocated = getUnallocatedIncomeTotal(incomes, categories);
+  const incomeTotal = incomes.reduce((sum, income) => sum + (Number(income.amount) || 0), 0);
+  if (incomeTotal > 0 && unallocated > incomeTotal * 0.2) {
+    nudges.push({
+      id: `unallocated-${dayKey}`,
+      severity: NUDGE_INFO,
+      title: `${fmt(unallocated)} of income isn't budgeted`,
+      body: 'Money without a job tends to get spent. Give it a category or a goal.',
+      view: 'dashboard',
+    });
+  }
+
+  // ── Goals off track ──
+  for (const goal of goals) {
+    if (!isGoalOffTrack(goal, incomes, now)) continue;
+    const { remaining } = getGoalProgress(goal);
+    nudges.push({
+      id: `goal-${goal.id}-${format(today, 'yyyy-MM')}`,
+      severity: NUDGE_WARN,
+      title: `"${goal.name}" won't hit its date`,
+      body: `${fmt(remaining)} still to go at the current rate.`,
+      view: 'goals',
+    });
+  }
+
+  // ── Subscription price changes ──
+  for (const sub of subscriptions) {
+    if (sub.active === false) continue;
+    const charges = transactions
+      .filter(tx => Number(tx.subscriptionId) === Number(sub.id))
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+    if (charges.length < 2) continue;
+
+    const latest = Math.abs(Number(charges[0].amount) || 0);
+    const previous = Math.abs(Number(charges[1].amount) || 0);
+    if (previous <= 0 || Math.abs(latest - previous) < 0.01) continue;
+
+    nudges.push({
+      id: `sub-price-${sub.id}-${latest}`,
+      severity: NUDGE_WARN,
+      title: `${sub.name} changed price`,
+      body: `${fmt(previous)} → ${fmt(latest)} per charge.`,
+      view: 'subscriptions',
+    });
+  }
+
+  // ── Long-running subscriptions worth a look ──
+  for (const sub of subscriptions) {
+    if (sub.active === false) continue;
+    const charges = transactions.filter(tx => Number(tx.subscriptionId) === Number(sub.id));
+    if (charges.length < SUBSCRIPTION_REVIEW_MONTHS) continue;
+
+    const total = roundMoney(charges.reduce((sum, tx) => sum + getSignedAmount(tx), 0));
+    nudges.push({
+      id: `sub-review-${sub.id}-${format(today, 'yyyy-MM')}`,
+      severity: NUDGE_INFO,
+      title: `You've paid ${fmt(total)} for ${sub.name}`,
+      body: `${charges.length} charges so far. Still worth it?`,
+      view: 'subscriptions',
+    });
+  }
+
+  // ── Backup health ──
+  // Everything lives in one browser. Clearing site data loses the lot, and
+  // there is no server-side copy to fall back on.
+  const lastBackup = toValidDate(settings?.lastBackupAt);
+  const hasData = transactions.length > 0 || categories.length > 0;
+  if (hasData) {
+    const daysSince = lastBackup ? differenceInDays(today, startOfDay(lastBackup)) : null;
+    if (daysSince == null || daysSince >= BACKUP_STALE_DAYS) {
+      nudges.push({
+        id: `backup-${format(today, 'yyyy-MM')}`,
+        severity: NUDGE_WARN,
+        title: lastBackup ? `No backup for ${daysSince} days` : 'You have never backed up',
+        body: 'Your data lives only in this browser. Clearing site data would lose it.',
+        view: 'settings',
+      });
+    }
+  }
+
+  const order = { [NUDGE_DANGER]: 0, [NUDGE_WARN]: 1, [NUDGE_INFO]: 2 };
+  return nudges.sort((a, b) => order[a.severity] - order[b.severity]);
+}
+
+/** Drop nudges the user has already dismissed. */
+export function filterDismissedNudges(nudges = [], dismissed = {}) {
+  return nudges.filter(nudge => !dismissed?.[nudge.id]);
+}
+
 // ── Insight ──────────────────────────────────────────────────────────────────
 
 /**
