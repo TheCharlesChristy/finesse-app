@@ -16,6 +16,12 @@ import {
   getSafeToSpend,
   getUnallocatedIncomeTotal,
   getUpcomingSubscriptionCost,
+  getAllTags,
+  getMerchantSuggestions,
+  getSignedAmount,
+  isRefund,
+  normaliseTags,
+  suggestCategoryForNote,
   hasMixedIncomeFrequencies,
   projectedEndBalance,
   wishlistAffordability,
@@ -409,5 +415,104 @@ describe('getIncomeCycleAverageDays', () => {
     expect(getIncomeCycleAverageDays('4weekly')).toBe(28);
     expect(getIncomeCycleAverageDays('monthly')).toBe(AVERAGE_MONTH_DAYS);
     expect(getIncomeCycleAverageDays(undefined)).toBe(AVERAGE_MONTH_DAYS);
+  });
+});
+
+describe('merchant memory', () => {
+  const txs = [
+    { note: 'Tesco', categoryId: 1, amount: 20, date: '2026-07-01T00:00:00Z' },
+    { note: 'Tesco', categoryId: 2, amount: 35, date: '2026-07-20T00:00:00Z' },
+    { note: 'Costa', categoryId: 3, amount: 3.2, date: '2026-07-25T00:00:00Z' },
+  ];
+
+  it('ranks by frequency, then recency', () => {
+    const [first, second] = getMerchantSuggestions(txs);
+    expect(first.label).toBe('Tesco');
+    expect(first.count).toBe(2);
+    expect(second.label).toBe('Costa');
+  });
+
+  it('remembers the category and amount from the most recent visit', () => {
+    const [tesco] = getMerchantSuggestions(txs, 'tes');
+    expect(tesco.lastCategoryId).toBe(2);
+    expect(tesco.lastAmount).toBe(35);
+  });
+
+  it('filters on a substring, case-insensitively', () => {
+    expect(getMerchantSuggestions(txs, 'COST').map(s => s.label)).toEqual(['Costa']);
+    expect(getMerchantSuggestions(txs, 'zzz')).toEqual([]);
+  });
+
+  it('prefers an explicit merchant field over the note', () => {
+    const [entry] = getMerchantSuggestions([{ merchant: 'Sainsburys', note: 'weekly shop', categoryId: 1, amount: 5 }]);
+    expect(entry.label).toBe('Sainsburys');
+  });
+});
+
+describe('category suggestion', () => {
+  const categories = [{ id: 1 }, { id: 2 }, { id: 3 }];
+  const transactions = [{ note: 'Tesco', categoryId: 2, amount: 30, date: '2026-07-20T00:00:00Z' }];
+  const rules = [{ match: 'tesco', categoryId: 3 }];
+
+  it('prefers an explicit rule over learned history', () => {
+    expect(suggestCategoryForNote('Tesco Metro', { rules, transactions, categories }))
+      .toMatchObject({ categoryId: 3, source: 'rule' });
+  });
+
+  it('falls back to the category last used at that merchant', () => {
+    expect(suggestCategoryForNote('Tesco', { rules: [], transactions, categories }))
+      .toMatchObject({ categoryId: 2, source: 'history' });
+  });
+
+  it('returns null when nothing matches, rather than guessing', () => {
+    expect(suggestCategoryForNote('Unknown shop', { rules, transactions, categories })).toBeNull();
+    expect(suggestCategoryForNote('', { rules, transactions, categories })).toBeNull();
+  });
+
+  it('ignores rules pointing at a deleted category', () => {
+    expect(suggestCategoryForNote('Tesco', { rules: [{ match: 'tesco', categoryId: 99 }], transactions: [], categories }))
+      .toBeNull();
+  });
+});
+
+describe('tags', () => {
+  it('collects distinct tags alphabetically', () => {
+    expect(getAllTags([
+      { tags: ['work', 'travel'] }, { tags: ['travel'] }, { tags: [] }, {},
+    ])).toEqual(['travel', 'work']);
+  });
+
+  it('normalises free-text entry, dropping blanks, hashes and duplicates', () => {
+    expect(normaliseTags(' holiday , #work,, holiday ')).toEqual(['holiday', 'work']);
+    expect(normaliseTags(['a', 'A'])).toEqual(['a']);
+    expect(normaliseTags('')).toEqual([]);
+  });
+});
+
+describe('signed amounts', () => {
+  it('treats a refund as negative spend and an expense as positive', () => {
+    expect(getSignedAmount({ amount: 25 })).toBe(25);
+    expect(getSignedAmount({ amount: 25, type: 'refund' })).toBe(-25);
+    expect(isRefund({ type: 'refund' })).toBe(true);
+  });
+
+  it('ignores a stray negative stored amount', () => {
+    expect(getSignedAmount({ amount: -25 })).toBe(25);
+    expect(getSignedAmount({ amount: -25, type: 'refund' })).toBe(-25);
+  });
+
+  it('nets refunds out of monthly history and cumulative overspend', () => {
+    const now = new Date().toISOString();
+    const categories = [{ id: 1, name: 'Food' }];
+    const history = buildMonthlyHistory([
+      { categoryId: 1, amount: 100, date: now },
+      { categoryId: 1, amount: 30, date: now, type: 'refund' },
+    ], categories);
+    expect(history[0].Food).toBe(70);
+
+    expect(getCumulativeOverspend(1, 50, [
+      { categoryId: 1, amount: 100, date: now },
+      { categoryId: 1, amount: 30, date: now, type: 'refund' },
+    ], 1)).toBe(20);
   });
 });

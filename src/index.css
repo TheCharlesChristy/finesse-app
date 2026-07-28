@@ -410,7 +410,7 @@ body {
 .bulk-expense-header,
 .bulk-expense-row {
   display: grid;
-  grid-template-columns: 104px minmax(160px, 1fr) 154px 34px;
+  grid-template-columns: 100px minmax(140px, 1fr) minmax(130px, 170px) 150px 34px;
   gap: 8px;
   align-items: center;
 }
@@ -459,6 +459,7 @@ body {
   }
 
   .bulk-expense-note,
+  .bulk-expense-category,
   .bulk-expense-date {
     grid-column: 1 / -1;
   }
@@ -560,6 +561,119 @@ body {
   overflow-y: auto;
   padding: 28px;
 }
+
+/* ── Quick add (floating action button) ─────────────────────────────────── */
+.quick-add {
+  position: fixed;
+  right: calc(18px + env(safe-area-inset-right, 0px));
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.quick-add-templates {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.quick-add-template {
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  color: var(--text-secondary);
+  background: rgba(18, 26, 48, 0.94);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+}
+.quick-add-template:hover { color: var(--text-primary); border-color: var(--glass-border-strong); }
+.quick-add-button {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #06121f;
+  background: linear-gradient(135deg, var(--accent-mint), var(--accent-blue));
+  border: none;
+  box-shadow: 0 10px 30px rgba(79,255,176,0.28), 0 2px 6px rgba(0,0,0,0.3);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.quick-add-button:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(79,255,176,0.34); }
+.quick-add-button:active { transform: translateY(0); }
+/* Desktop has the keyboard shortcut and inline buttons; the FAB would just
+   cover content. */
+@media (min-width: 768px) {
+  .quick-add { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .quick-add-button { transition: none; }
+  .quick-add-button:hover { transform: none; }
+}
+
+/* ── Command palette ────────────────────────────────────────────────────── */
+.command-palette {
+  width: 100%;
+  max-width: 560px;
+  background: rgba(18, 26, 48, 0.97);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: 16px;
+  box-shadow: 0 40px 80px rgba(0,0,0,0.5);
+  overflow: hidden;
+}
+.command-palette-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+.command-palette-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-family: 'DM Sans', sans-serif;
+}
+.command-palette-input::placeholder { color: var(--text-muted); }
+.command-palette-kbd {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  flex-shrink: 0;
+}
+.command-palette-results { max-height: 52vh; overflow-y: auto; }
+.command-palette-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 16px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  font-family: 'DM Sans', sans-serif;
+  color: var(--text-primary);
+}
+.command-palette-item:hover { background: rgba(255,255,255,0.07); }
 
 /* ── Toasts ─────────────────────────────────────────────────────────────── */
 .toast-stack {

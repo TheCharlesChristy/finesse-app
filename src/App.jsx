@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
 import { CalendarDays, CreditCard, LayoutDashboard, ListOrdered, Menu, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
@@ -11,7 +11,9 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   addIncome, updateIncome, deleteIncome, recordIncomeReceived, deleteIncomeEvent,
   addSubscription, updateSubscription, deleteSubscription, processDueSubscriptions,
   addVariable, updateVariable, deleteVariable,
-  topUpCategoryFromIncome, borrowBudgetBetweenCategories, resetCategoryTopUps } from './db';
+  topUpCategoryFromIncome, borrowBudgetBetweenCategories, resetCategoryTopUps,
+  addSplitTransaction, addRule, updateRule, deleteRule,
+  addTemplate, deleteTemplate, logTemplate } from './db';
 import { useFinesseData } from './hooks/useFinesseData';
 import { calcNextReset, evaluateFormula, fmt, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
 
@@ -32,6 +34,8 @@ import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportMode
 import { Modal } from './components/ui';
 import { useDialog } from './components/useDialog';
 import { useToast } from './components/Toast';
+import QuickAdd from './components/QuickAdd';
+import CommandPalette from './components/CommandPalette';
 
 const NAV = [
   { id: 'dashboard',   label: 'Dashboard',   Icon: LayoutDashboard },
@@ -83,6 +87,7 @@ export default function App() {
   const [wishlistDefaultCatId, setWishlistDefaultCatId] = useState(null);
   const [transactionDefaults, setTransactionDefaults] = useState(null);
   const [adjustCategoryId, setAdjustCategoryId] = useState(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [activeAccountId, setActiveAccountId] = useState(() => {
     const stored = Number(localStorage.getItem('finesse.activeAccountId'));
     return Number.isFinite(stored) && stored > 0 ? stored : null;
@@ -91,6 +96,7 @@ export default function App() {
   const {
     accountsQuery, accounts, accountTransfers, settings, categories, transactions,
     wishlistItems, wishlistCategories, incomeEvents, subscriptions, incomes, variables,
+    rules, templates,
   } = useFinesseData(activeAccountId);
   const activeAccount = accounts.find(account => Number(account.id) === Number(activeAccountId)) || null;
 
@@ -486,8 +492,8 @@ export default function App() {
     setModal('editTx');
   }, []);
 
-  const handleBulkAddExpenses = useCallback((data) => (
-    addTransactionsBulk({ ...data, accountId: activeAccountId })
+  const handleBulkAddExpenses = useCallback((rows) => (
+    addTransactionsBulk(rows, activeAccountId)
   ), [activeAccountId]);
 
   const handleEditWishlistItem = useCallback((item) => {
@@ -557,7 +563,91 @@ export default function App() {
   const handleUpdateVariable = useCallback((id, d) => updateVariable(id, d), []);
   const handleDeleteVariable = useCallback(id   => deleteVariable(id), []);
 
-  const navigate = (id) => { setView(id); setSidebarOpen(false); };
+  const navigate = useCallback((id) => { setView(id); setSidebarOpen(false); }, []);
+
+  // ── Fast capture handlers ────────────────────────────────────────────────
+  const handleAddSplit = useCallback((data) => (
+    addSplitTransaction({ ...data, accountId: activeAccountId })
+  ), [activeAccountId]);
+
+  const handleAddRule = useCallback((rule) => addRule(rule, activeAccountId), [activeAccountId]);
+  const handleUpdateRule = useCallback((id, data) => updateRule(id, data), []);
+  const handleDeleteRule = useCallback((id) => deleteRule(id), []);
+  const handleAddTemplate = useCallback((template) => addTemplate(template, activeAccountId), [activeAccountId]);
+  const handleDeleteTemplate = useCallback((id) => deleteTemplate(id), []);
+
+  const handleLogTemplate = useCallback(async (templateId) => {
+    const template = templates.find(item => Number(item.id) === Number(templateId));
+    await logTemplate(templateId, activeAccountId);
+    if (template) {
+      showToast(`Logged ${template.name}`, { detail: fmt(template.amount) });
+    }
+  }, [templates, activeAccountId, showToast]);
+
+  const handleRepeatTransaction = useCallback((tx) => {
+    // Prefill rather than log outright: the amount is usually right but not
+    // always, and a silent duplicate is hard to notice and easy to resent.
+    setTransactionDefaults({
+      categoryId: tx.categoryId,
+      amount: tx.amount,
+      note: tx.note,
+      tags: tx.tags || [],
+    });
+    setModal('addTx');
+  }, []);
+
+  // ── Keyboard shortcuts ───────────────────────────────────────────────────
+  useEffect(() => {
+    const isTyping = (target) => (
+      target instanceof HTMLElement
+      && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+    );
+
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen(open => !open);
+        return;
+      }
+      // Single-letter shortcuts must never fire while the user is typing, or
+      // "a" becomes unusable in every text field in the app.
+      if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
+      if (modal) return;
+
+      if (e.key === 'a' || e.key === 'A') {
+        e.preventDefault();
+        setModal('addTx');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [modal]);
+
+  const paletteCommands = useMemo(() => [
+    { id: 'log-expense', label: 'Log an expense', keywords: 'add spend transaction new', run: () => setModal('addTx') },
+    { id: 'log-refund', label: 'Log a refund', keywords: 'return money back credit', run: () => setModal('addTx') },
+    { id: 'bulk-add', label: 'Bulk add expenses', keywords: 'many multiple paste import', run: () => setModal('bulkAddTx') },
+    { id: 'one-off-income', label: 'Add one-off income', keywords: 'gift refund bonus paid', run: () => setModal('addOneOffIncome') },
+    { id: 'add-income', label: 'Add an income source', keywords: 'salary wage pay', run: () => setModal('addIncome') },
+    { id: 'add-category', label: 'Add a budget category', keywords: 'budget allowance', run: () => setModal('addCategory') },
+    { id: 'add-subscription', label: 'Add a subscription', keywords: 'recurring bill netflix', run: () => setModal('addSubscription') },
+    { id: 'adjust-budget', label: 'Adjust a budget', keywords: 'top up borrow move money', run: () => handleOpenAdjust(null) },
+    ...NAV.map(item => ({
+      id: `go-${item.id}`,
+      label: `Go to ${item.label}`,
+      keywords: `view navigate ${item.label}`,
+      Icon: item.Icon,
+      run: () => navigate(item.id),
+    })),
+    ...templates.map(template => ({
+      id: `template-${template.id}`,
+      label: `Log ${template.name}`,
+      hint: fmt(template.amount),
+      keywords: 'template quick repeat',
+      run: () => handleLogTemplate(template.id),
+    })),
+  ], [navigate, templates, handleLogTemplate, handleOpenAdjust]);
 
   return (
     <div style={{ minHeight: '100vh', position: 'relative' }}>
@@ -682,6 +772,7 @@ export default function App() {
           {view === 'transactions' && (
             <Transactions transactions={transactions} categories={categories}
               onDelete={handleDeleteTransaction} onEdit={handleEditTransaction} onAdd={() => setModal('addTx')}
+              onRepeat={handleRepeatTransaction}
               onBulkAdd={() => setModal('bulkAddTx')}
               onAddSubscription={() => setModal('addSubscription')} />
           )}
@@ -739,6 +830,8 @@ export default function App() {
               categories={categories} settings={settings} onSaveSettings={handleSaveSettings}
               incomes={incomes} onResetIncome={(incomeId) => resetCategoriesForIncome(incomeId, undefined, activeAccountId)}
               onFullReset={handleFullReset}
+              rules={rules} onAddRule={handleAddRule} onUpdateRule={handleUpdateRule} onDeleteRule={handleDeleteRule}
+              templates={templates} onAddTemplate={handleAddTemplate} onDeleteTemplate={handleDeleteTemplate}
               showConfirm={showConfirm} showAlert={showAlert} showPrompt={showPrompt} />
           )}
           </Suspense>)}
@@ -799,7 +892,10 @@ export default function App() {
       {modal === 'addTx' && categories.length > 0 && (
         <AddTransactionModal
           categories={categories}
+          transactions={transactions}
+          rules={rules}
           onAdd={(data) => addTransaction({ ...data, accountId: activeAccountId })}
+          onAddSplit={handleAddSplit}
           initial={transactionDefaults}
           defaultCategoryId={settings?.defaultCategoryId}
           onClose={() => { setModal(null); setTransactionDefaults(null); }}
@@ -808,6 +904,8 @@ export default function App() {
       {modal === 'bulkAddTx' && categories.length > 0 && (
         <BulkAddExpensesModal
           categories={categories}
+          transactions={transactions}
+          rules={rules}
           defaultCategoryId={settings?.defaultCategoryId}
           onAdd={handleBulkAddExpenses}
           onClose={() => setModal(null)}
@@ -816,6 +914,8 @@ export default function App() {
       {modal === 'editTx' && editingTransaction && categories.length > 0 && (
         <AddTransactionModal
           categories={categories}
+          transactions={transactions}
+          rules={rules}
           transaction={editingTransaction}
           onSave={(id, data) => { updateTransaction(id, data); setModal(null); setEditingTransaction(null); }}
           defaultCategoryId={settings?.defaultCategoryId}
@@ -873,6 +973,24 @@ export default function App() {
           onClose={() => { setModal(null); setAdjustCategoryId(null); }}
         />
       )}
+      {categories.length > 0 && (
+        <QuickAdd
+          onClick={() => setModal('addTx')}
+          templates={templates}
+          onLogTemplate={handleLogTemplate}
+        />
+      )}
+
+      {paletteOpen && (
+      <CommandPalette
+        onClose={() => setPaletteOpen(false)}
+        commands={paletteCommands}
+        transactions={transactions}
+        categories={categories}
+        onPickTransaction={handleEditTransaction}
+      />
+      )}
+
       {dialogEl}
       {toastEl}
 

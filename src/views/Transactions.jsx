@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
-import { CreditCard, Layers3, Pencil, Trash2, Search } from 'lucide-react';
-import { fmt } from '../utils';
+import { CopyPlus, CreditCard, Layers3, Pencil, Trash2, Search, Undo2 } from 'lucide-react';
+import { fmt, getAllTags, getSignedAmount, isRefund } from '../utils';
 import { format, isSameDay, isSameMonth, startOfDay, subDays } from 'date-fns';
 import CategorySelect from '../components/CategorySelect';
 import { IconButton } from '../components/ui';
@@ -21,9 +21,10 @@ const amountFilterOptions = [
 ];
 
 const typeFilterOptions = [
-  ['all', 'All expenses'],
+  ['all', 'All types'],
   ['manual', 'Manual only'],
   ['subscription', 'Subscriptions'],
+  ['refund', 'Refunds only'],
 ];
 
 const sortOptions = [
@@ -85,8 +86,9 @@ function matchesAmountFilter(tx, filter) {
 
 function matchesTypeFilter(tx, filter) {
   const subscription = isSubscriptionTransaction(tx);
-  if (filter === 'manual') return !subscription;
+  if (filter === 'manual') return !subscription && !isRefund(tx);
   if (filter === 'subscription') return subscription;
+  if (filter === 'refund') return isRefund(tx);
   return true;
 }
 
@@ -94,28 +96,33 @@ function compareText(a, b) {
   return String(a || '').localeCompare(String(b || ''), undefined, { sensitivity: 'base' });
 }
 
-export default function Transactions({ transactions, categories, onDelete, onEdit, onAdd, onBulkAdd, onAddSubscription }) {
+export default function Transactions({ transactions, categories, onDelete, onEdit, onAdd, onRepeat, onBulkAdd, onAddSubscription }) {
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState('all');
   const [dateFilter, setDateFilter] = useState('all');
   const [amountFilter, setAmountFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [sortBy, setSortBy] = useState('date-desc');
+  const [tagFilter, setTagFilter] = useState('all');
 
   const catMap = useMemo(() => Object.fromEntries(categories.map(c => [c.id, c])), [categories]);
+  const allTags = useMemo(() => getAllTags(transactions), [transactions]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     const visible = transactions.filter(tx => {
       const matchCat = filterCat === 'all' || tx.categoryId === Number(filterCat);
-      if (!matchCat || !matchesDateFilter(tx, dateFilter) || !matchesAmountFilter(tx, amountFilter) || !matchesTypeFilter(tx, typeFilter)) return false;
+      const matchTag = tagFilter === 'all' || (Array.isArray(tx.tags) && tx.tags.includes(tagFilter));
+      if (!matchCat || !matchTag || !matchesDateFilter(tx, dateFilter) || !matchesAmountFilter(tx, amountFilter) || !matchesTypeFilter(tx, typeFilter)) return false;
 
       if (!query) return true;
       const txDate = getTransactionDate(tx);
       const searchable = [
         tx.note,
+        tx.merchant,
         catMap[tx.categoryId]?.name,
         tx.amount,
+        ...(Array.isArray(tx.tags) ? tx.tags : []),
         txDate ? format(txDate, 'd MMM yyyy HH:mm') : '',
       ].filter(Boolean).join(' ').toLowerCase();
       return searchable.includes(query);
@@ -156,10 +163,10 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
           return fallback;
       }
     });
-  }, [transactions, filterCat, search, catMap, dateFilter, amountFilter, typeFilter, sortBy]);
+  }, [transactions, filterCat, search, catMap, dateFilter, amountFilter, typeFilter, tagFilter, sortBy]);
 
-  const totalFiltered = filtered.reduce((s, tx) => s + tx.amount, 0);
-  const filtersActive = search.trim() || filterCat !== 'all' || dateFilter !== 'all' || amountFilter !== 'all' || typeFilter !== 'all' || sortBy !== 'date-desc';
+  const totalFiltered = filtered.reduce((s, tx) => s + getSignedAmount(tx), 0);
+  const filtersActive = search.trim() || filterCat !== 'all' || dateFilter !== 'all' || amountFilter !== 'all' || typeFilter !== 'all' || tagFilter !== 'all' || sortBy !== 'date-desc';
 
   const resetFilters = () => {
     setSearch('');
@@ -167,6 +174,7 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
     setDateFilter('all');
     setAmountFilter('all');
     setTypeFilter('all');
+    setTagFilter('all');
     setSortBy('date-desc');
   };
 
@@ -222,6 +230,12 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
           <select className="glass-input" value={typeFilter} onChange={e => setTypeFilter(e.target.value)} aria-label="Filter by expense type">
             {typeFilterOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
+          {allTags.length > 0 && (
+            <select className="glass-input" value={tagFilter} onChange={e => setTagFilter(e.target.value)} aria-label="Filter by tag">
+              <option value="all">Any tag</option>
+              {allTags.map(tag => <option key={tag} value={tag}>#{tag}</option>)}
+            </select>
+          )}
           <select className="glass-input" value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="Sort transactions">
             {sortOptions.map(([value, label]) => <option key={value} value={value}>Sort: {label}</option>)}
           </select>
@@ -266,15 +280,23 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
           )}
         </div>
       ) : (
-        grouped.map(([date, txs]) => (
+        grouped.map(([date, txs]) => {
+          const dayTotal = txs.reduce((sum, tx) => sum + getSignedAmount(tx), 0);
+          return (
           <div key={date}>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8, paddingLeft: 4 }}>
-              {date}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 8, padding: '0 4px' }}>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                {date}
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>
+                {dayTotal < 0 ? '+' : ''}{fmt(Math.abs(dayTotal))}
+              </span>
             </div>
             <div className="glass" style={{ borderRadius: 16, overflow: 'hidden' }}>
               {txs.map((tx, i) => {
                 const cat = catMap[tx.categoryId];
                 const txDate = getTransactionDate(tx);
+                const refund = isRefund(tx);
                 return (
                   <div key={tx.id} className="mobile-list-row" style={{
                     display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px',
@@ -286,13 +308,34 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
                       <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {tx.note || cat?.name || 'Expense'}
                       </div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                        {cat?.name || 'Unknown'} · {txDate ? format(txDate, 'HH:mm') : 'No time'}
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <span>{cat?.name || 'Unknown'} · {txDate ? format(txDate, 'HH:mm') : 'No time'}</span>
+                        {tx.splitGroupId && (
+                          <span title="Part of a split purchase" style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 6px', borderRadius: 10 }}>
+                            split
+                          </span>
+                        )}
+                        {(tx.tags || []).map(tag => (
+                          <span key={tag} style={{ background: 'rgba(93,184,255,0.12)', color: 'var(--accent-blue)', padding: '1px 6px', borderRadius: 10 }}>
+                            #{tag}
+                          </span>
+                        ))}
                       </div>
                     </div>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--accent-warm)', flexShrink: 0 }}>
-                      -{fmt(tx.amount)}
+                    <div style={{
+                      fontSize: 14, fontWeight: 600, flexShrink: 0,
+                      color: refund ? 'var(--good)' : 'var(--accent-warm)',
+                      display: 'flex', alignItems: 'center', gap: 4,
+                    }}>
+                      {refund && <Undo2 size={12} aria-hidden="true" />}
+                      {refund ? '+' : '-'}{fmt(tx.amount)}
                     </div>
+                    {onRepeat && (
+                      <IconButton onClick={() => onRepeat(tx)} style={{ opacity: 0.62 }}
+                        label={`Log ${tx.note || cat?.name || 'this'} again`}>
+                        <CopyPlus size={13} />
+                      </IconButton>
+                    )}
                     <IconButton onClick={() => onEdit(tx)} style={{ opacity: 0.68 }}
                       label={`Edit ${tx.note || cat?.name || 'expense'}`}>
                       <Pencil size={13} />
@@ -306,7 +349,8 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
               })}
             </div>
           </div>
-        ))
+          );
+        })
       )}
     </div>
   );

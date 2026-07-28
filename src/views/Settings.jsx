@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
-import { Download, Upload, FileText, RefreshCcw, Trash2, Sun, Moon, Monitor, Link2, FileJson } from 'lucide-react';
+import { Download, Upload, FileText, RefreshCcw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap } from 'lucide-react';
+import { fmt } from '../utils';
 import CategorySelect from '../components/CategorySelect';
-import { CardTitle } from '../components/ui';
+import { CardTitle, IconButton } from '../components/ui';
 
 export default function Settings({
   onExport,
@@ -16,10 +17,41 @@ export default function Settings({
   onResetIncome,
   onSaveSettings,
   onFullReset,
+  rules = [],
+  onAddRule,
+  onDeleteRule,
+  templates = [],
+  onAddTemplate,
+  onDeleteTemplate,
   showConfirm,
   showAlert,
   showPrompt,
 }) {
+  const [ruleMatch, setRuleMatch] = useState('');
+  const [ruleCategoryId, setRuleCategoryId] = useState('');
+  const [templateName, setTemplateName] = useState('');
+  const [templateAmount, setTemplateAmount] = useState('');
+  const [templateCategoryId, setTemplateCategoryId] = useState('');
+
+  const categoryName = (id) => categories.find(c => Number(c.id) === Number(id))?.name || 'Missing category';
+
+  const handleAddRule = () => {
+    const match = ruleMatch.trim();
+    const categoryId = ruleCategoryId || categories[0]?.id;
+    if (!match || !categoryId) return;
+    onAddRule?.({ match, categoryId: Number(categoryId) });
+    setRuleMatch('');
+  };
+
+  const handleAddTemplate = () => {
+    const name = templateName.trim();
+    const amount = parseFloat(templateAmount);
+    const categoryId = templateCategoryId || categories[0]?.id;
+    if (!name || !(amount > 0) || !categoryId) return;
+    onAddTemplate?.({ name, amount, categoryId: Number(categoryId), note: name });
+    setTemplateName('');
+    setTemplateAmount('');
+  };
   const [resetIncomeId, setResetIncomeId] = useState('');
   const [resetStatus, setResetStatus] = useState('');
   const [fullResetStatus, setFullResetStatus] = useState('');
@@ -213,6 +245,133 @@ export default function Settings({
                 {resetStatus}
               </div>
             )}
+          </>
+        )}
+      </div>
+
+      {/* Auto-categorisation rules */}
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+          <Wand2 size={16} color="var(--accent-mint)" aria-hidden="true" />
+          <CardTitle as="h2">Auto-Categorise</CardTitle>
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>
+          When a note contains your text, that category gets picked automatically.
+          Rules beat the app&rsquo;s own guesses from your history.
+        </div>
+
+        {categories.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            Add categories on the Dashboard first.
+          </div>
+        ) : (
+          <>
+            {rules.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+                {rules.map(rule => (
+                  <div key={rule.id} className="mobile-list-row" style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '10px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: 10,
+                  }}>
+                    <span className="mobile-list-main" style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
+                      Note contains <strong>&ldquo;{rule.match}&rdquo;</strong> &rarr; {categoryName(rule.categoryId)}
+                    </span>
+                    <IconButton onClick={() => onDeleteRule?.(rule.id)} size={28} style={{ opacity: 0.55 }}
+                      label={`Delete rule for ${rule.match}`}>
+                      <Trash2 size={12} />
+                    </IconButton>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mobile-row-stack" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ flex: '2 1 160px' }}>
+                <label htmlFor="rule-match" className="field-label">If the note contains</label>
+                <input id="rule-match" className="glass-input" placeholder="e.g. Tesco" value={ruleMatch}
+                  onChange={e => setRuleMatch(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddRule()} />
+              </div>
+              <div style={{ flex: '2 1 160px' }}>
+                <div className="field-label">Use category</div>
+                <CategorySelect categories={categories}
+                  value={String(ruleCategoryId || categories[0]?.id || '')}
+                  onChange={setRuleCategoryId} aria-label="Rule category" />
+              </div>
+              <button className="btn-primary mobile-full" onClick={handleAddRule} disabled={!ruleMatch.trim()}
+                style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Plus size={14} /> Add Rule
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Expense templates */}
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+          <Zap size={16} color="var(--accent-warm)" aria-hidden="true" />
+          <CardTitle as="h2">Quick Expenses</CardTitle>
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>
+          Spending that repeats at the same price. Your three most-used appear
+          above the add button on mobile, and all of them in the command palette.
+        </div>
+
+        {categories.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            Add categories on the Dashboard first.
+          </div>
+        ) : (
+          <>
+            {templates.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+                {templates.map(template => (
+                  <div key={template.id} className="mobile-list-row" style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '10px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: 10,
+                  }}>
+                    <span className="mobile-list-main" style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600 }}>
+                      {template.name}
+                    </span>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      {categoryName(template.categoryId)} · {fmt(template.amount)}
+                      {template.useCount > 0 ? ` · ${template.useCount}×` : ''}
+                    </span>
+                    <IconButton onClick={() => onDeleteTemplate?.(template.id)} size={28} style={{ opacity: 0.55 }}
+                      label={`Delete quick expense ${template.name}`}>
+                      <Trash2 size={12} />
+                    </IconButton>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mobile-row-stack" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ flex: '2 1 140px' }}>
+                <label htmlFor="template-name" className="field-label">Name</label>
+                <input id="template-name" className="glass-input" placeholder="e.g. Coffee" value={templateName}
+                  onChange={e => setTemplateName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddTemplate()} />
+              </div>
+              <div style={{ flex: '1 1 100px' }}>
+                <label htmlFor="template-amount" className="field-label">Amount (£)</label>
+                <input id="template-amount" className="glass-input" type="number" min="0" step="0.01" placeholder="3.20"
+                  value={templateAmount} onChange={e => setTemplateAmount(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddTemplate()} />
+              </div>
+              <div style={{ flex: '2 1 150px' }}>
+                <div className="field-label">Category</div>
+                <CategorySelect categories={categories}
+                  value={String(templateCategoryId || categories[0]?.id || '')}
+                  onChange={setTemplateCategoryId} aria-label="Quick expense category" />
+              </div>
+              <button className="btn-primary mobile-full" onClick={handleAddTemplate}
+                disabled={!templateName.trim() || !(parseFloat(templateAmount) > 0)}
+                style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Plus size={14} /> Add
+              </button>
+            </div>
           </>
         )}
       </div>

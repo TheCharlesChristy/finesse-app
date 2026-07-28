@@ -16,6 +16,12 @@ import {
   resetCategoriesForIncome,
   resetCategoryTopUps,
   transferMoney,
+  addSplitTransaction,
+  addRule,
+  getRules,
+  addTemplate,
+  getTemplates,
+  logTemplate,
 } from '../db';
 
 const getCategory = (id) => db.categories.get(id);
@@ -103,6 +109,24 @@ describe('spend counter invariants', () => {
     expect(await db.transactions.count()).toBe(3);
     expect((await getCategory(catId)).spent).toBe(35.25);
     expect((await getAccount(accountId)).balance).toBe(964.75);
+  });
+
+  it('bulk-adds rows with per-row categories in one pass', async () => {
+    const foodId = await makeCategory({ name: 'Food' });
+    const funId = await makeCategory({ name: 'Fun' });
+
+    await addTransactionsBulk([
+      { categoryId: foodId, amount: 10 },
+      { categoryId: foodId, amount: 15 },
+      { categoryId: funId, amount: 20 },
+      { categoryId: funId, amount: 5, type: 'refund' },
+      { categoryId: null, amount: 99 },   // no category — dropped
+    ], accountId);
+
+    expect((await getCategory(foodId)).spent).toBe(25);
+    expect((await getCategory(funId)).spent).toBe(15);      // 20 − 5 refund
+    expect((await getAccount(accountId)).balance).toBe(960); // 1000 − 40 + 5
+    expect(await db.transactions.count()).toBe(4);
   });
 
   it('refunds the account when a category is deleted with its transactions', async () => {
@@ -272,5 +296,122 @@ describe('B7 — recalculateSpendCounters', () => {
     const cat = await getCategory(catId);
     expect(cat.spent).toBe(200);
     expect(cat.spentByIncome).toEqual({ 1: 50, 2: 150 });
+  });
+});
+
+describe('refunds', () => {
+  it('reduces category spend and credits the account', async () => {
+    const catId = await makeCategory();
+    await addTransaction({ accountId, categoryId: catId, amount: 100 });
+    await addTransaction({ accountId, categoryId: catId, amount: 30, type: 'refund' });
+
+    expect((await getCategory(catId)).spent).toBe(70);
+    expect((await getAccount(accountId)).balance).toBe(930); // -100 +30
+  });
+
+  it('reverses cleanly on delete', async () => {
+    const catId = await makeCategory();
+    await addTransaction({ accountId, categoryId: catId, amount: 100 });
+    const refundId = await addTransaction({ accountId, categoryId: catId, amount: 30, type: 'refund' });
+    await deleteTransaction(refundId);
+
+    expect((await getCategory(catId)).spent).toBe(100);
+    expect((await getAccount(accountId)).balance).toBe(900);
+  });
+
+  it('flips both counters when an expense is switched to a refund', async () => {
+    const catId = await makeCategory();
+    const txId = await addTransaction({ accountId, categoryId: catId, amount: 40 });
+    await updateTransaction(txId, { type: 'refund' });
+
+    expect((await getCategory(catId)).spent).toBe(0);
+    expect((await getAccount(accountId)).balance).toBe(1040);
+    // Stored amount stays positive; `type` carries the direction.
+    expect((await db.transactions.get(txId)).amount).toBe(40);
+  });
+
+  it('is counted signed when counters are rebuilt', async () => {
+    const catId = await makeCategory();
+    await addTransaction({ accountId, categoryId: catId, amount: 80 });
+    await addTransaction({ accountId, categoryId: catId, amount: 20, type: 'refund' });
+    await db.categories.update(catId, { spent: 999 });
+
+    await recalculateSpendCounters(accountId);
+    expect((await getCategory(catId)).spent).toBe(60);
+  });
+});
+
+describe('split transactions', () => {
+  it('writes one transaction per part, sharing a split group', async () => {
+    const foodId = await makeCategory({ name: 'Food' });
+    const funId = await makeCategory({ name: 'Fun' });
+
+    const ids = await addSplitTransaction({
+      accountId,
+      merchant: 'Supermarket',
+      parts: [{ categoryId: foodId, amount: 60 }, { categoryId: funId, amount: 15 }],
+    });
+
+    expect(ids).toHaveLength(2);
+    expect((await getCategory(foodId)).spent).toBe(60);
+    expect((await getCategory(funId)).spent).toBe(15);
+    expect((await getAccount(accountId)).balance).toBe(925);
+
+    const rows = await db.transactions.toArray();
+    expect(new Set(rows.map(r => r.splitGroupId)).size).toBe(1);
+    expect(rows.every(r => r.merchant === 'Supermarket')).toBe(true);
+  });
+
+  it('drops zero-amount parts and no-ops on an empty split', async () => {
+    const catId = await makeCategory();
+    await addSplitTransaction({ accountId, parts: [{ categoryId: catId, amount: 10 }, { categoryId: catId, amount: 0 }] });
+    expect(await db.transactions.count()).toBe(1);
+
+    expect(await addSplitTransaction({ accountId, parts: [] })).toEqual([]);
+  });
+
+  it('lets one part be deleted independently', async () => {
+    const foodId = await makeCategory({ name: 'Food' });
+    const funId = await makeCategory({ name: 'Fun' });
+    const [firstId] = await addSplitTransaction({
+      accountId, parts: [{ categoryId: foodId, amount: 60 }, { categoryId: funId, amount: 15 }],
+    });
+
+    await deleteTransaction(firstId);
+
+    expect((await getCategory(foodId)).spent).toBe(0);
+    expect((await getCategory(funId)).spent).toBe(15);
+  });
+});
+
+describe('rules and templates', () => {
+  it('sorts rules by priority, then by most specific match', async () => {
+    const catId = await makeCategory();
+    await addRule({ match: 'tesco', categoryId: catId, priority: 1 }, accountId);
+    await addRule({ match: 'tesco express', categoryId: catId, priority: 1 }, accountId);
+    await addRule({ match: 'aldi', categoryId: catId, priority: 0 }, accountId);
+
+    const rules = await getRules(accountId);
+    expect(rules.map(r => r.match)).toEqual(['aldi', 'tesco express', 'tesco']);
+  });
+
+  it('logs a template as an expense and counts the use', async () => {
+    const catId = await makeCategory();
+    const templateId = await addTemplate({ name: 'Coffee', categoryId: catId, amount: 3.2 }, accountId);
+
+    await logTemplate(templateId, accountId);
+    await logTemplate(templateId, accountId);
+
+    expect((await getCategory(catId)).spent).toBe(6.4);
+    expect((await db.templates.get(templateId)).useCount).toBe(2);
+  });
+
+  it('orders templates by how often they are used', async () => {
+    const catId = await makeCategory();
+    await addTemplate({ name: 'Rare', categoryId: catId, amount: 1 }, accountId);
+    const commonId = await addTemplate({ name: 'Common', categoryId: catId, amount: 2 }, accountId);
+    await logTemplate(commonId, accountId);
+
+    expect((await getTemplates(accountId)).map(t => t.name)).toEqual(['Common', 'Rare']);
   });
 });

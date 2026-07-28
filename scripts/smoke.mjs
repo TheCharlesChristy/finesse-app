@@ -66,7 +66,7 @@ step('category added and funded');
 await page.getByRole('button', { name: '+ Log Expense' }).click();
 await page.getByRole('dialog').waitFor();
 await page.getByLabel('Amount (£)').fill('25.50');
-await page.getByLabel('Note (optional)').fill('Tesco');
+await page.getByLabel('Note / merchant').fill('Tesco');
 await page.getByRole('button', { name: 'Add Expense', exact: true }).click();
 await page.getByRole('dialog').waitFor({ state: 'detached' });
 await page.getByText('Recent Transactions').waitFor({ timeout: 5000 });
@@ -94,6 +94,79 @@ if (!adjust.includes('Spare income')) errors.push('adjust modal: no spare-income
 if (!adjust.includes('£1,600.00')) errors.push(`adjust modal: wrong free pool\n${adjust}`);
 await page.getByRole('button', { name: 'Close dialog' }).click();
 step('adjust-budget pool computed per income source');
+
+// ── Fast capture ─────────────────────────────────────────────────────────
+
+// Command palette: opens on ⌘K, and running a command does the thing.
+await page.keyboard.press('ControlOrMeta+k');
+await page.getByRole('dialog', { name: 'Command palette' }).waitFor({ timeout: 5000 });
+await page.getByPlaceholder('Jump to a view').fill('forecast');
+await page.keyboard.press('Enter');
+await page.waitForTimeout(400);
+if (!(await page.locator('h1').innerText()).includes('Forecasting')) {
+  errors.push('command palette did not navigate to Forecasting');
+}
+step('command palette navigates');
+
+// Merchant memory: typing a known merchant should re-suggest its category.
+await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+await page.waitForTimeout(300);
+await page.keyboard.press('a'); // shortcut
+await page.getByRole('dialog').waitFor({ timeout: 5000 });
+await page.getByLabel('Amount (£)').fill('12');
+await page.getByLabel('Note / merchant').fill('Tesco');
+await page.waitForTimeout(250);
+const modalText = await page.getByRole('dialog').innerText();
+if (!/usually put "Tesco"|Matched your rule/.test(modalText)) {
+  errors.push(`no merchant suggestion shown for a repeat merchant:\n${modalText}`);
+}
+step('“a” shortcut opens capture; merchant memory suggests a category');
+
+// Refund: reduces category spend rather than inflating it.
+await page.getByRole('button', { name: 'Refund' }).click();
+await page.getByRole('button', { name: 'Add Refund', exact: true }).click();
+await page.getByRole('dialog').waitFor({ state: 'detached' });
+await page.waitForTimeout(400);
+const afterRefund = await page.locator('body').innerText();
+// 25.50 spent − 12 refunded = 13.50 spent, so 386.50 of 400 remains.
+if (!afterRefund.includes('£386.50')) {
+  errors.push(`refund did not reduce category spend (expected £386.50 left)`);
+}
+step('refund reduces spend and credits the account');
+
+// Split: one purchase across two categories, as separate linked rows.
+await page.getByRole('button', { name: '+ Category' }).click();
+await page.getByRole('dialog').waitFor();
+await page.getByLabel('Name').fill('Fun');
+await page.locator('input[placeholder*="300"]').fill('200');
+await page.getByRole('button', { name: 'Add Category', exact: true }).click();
+await page.getByRole('dialog').waitFor({ state: 'detached' });
+
+await page.keyboard.press('a');
+await page.getByRole('dialog').waitFor();
+await page.getByLabel('Amount (£)').fill('50');
+await page.getByLabel('Note / merchant').fill('Big shop');
+await page.getByRole('button', { name: 'Split across categories' }).click();
+await page.getByRole('button', { name: 'Add part' }).click();
+const splitAmounts = page.getByLabel(/^Split part \d+ amount$/);
+await splitAmounts.nth(0).fill('30');
+await splitAmounts.nth(1).fill('20');
+const splitCats = page.getByLabel(/^Split part \d+ category$/);
+await splitCats.nth(0).click();
+await page.getByRole('option', { name: /Groceries/ }).first().click();
+await splitCats.nth(1).click();
+await page.getByRole('option', { name: /Fun/ }).first().click();
+await page.getByRole('button', { name: 'Add Split' }).click();
+await page.getByRole('dialog').waitFor({ state: 'detached' });
+await page.waitForTimeout(400);
+
+await page.getByRole('button', { name: 'Transactions', exact: true }).click();
+await page.waitForTimeout(400);
+const txText = await page.locator('body').innerText();
+if ((txText.match(/split/g) || []).length < 2) {
+  errors.push('split did not produce two linked transactions');
+}
+step('split writes one row per category, tagged as a split');
 
 await browser.close();
 

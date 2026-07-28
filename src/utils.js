@@ -495,6 +495,154 @@ export function getCategoryCycle(category, incomes = [], settings = null, now = 
   return { start, end, freq, days, elapsed, remaining: Math.max(0, days - elapsed) };
 }
 
+// ── Transactions ─────────────────────────────────────────────────────────────
+
+export const TX_EXPENSE = 'expense';
+export const TX_REFUND = 'refund';
+
+/**
+ * A transaction's effect on spend, signed.
+ *
+ * `amount` is always stored positive and `type` carries the direction, so a
+ * refund reduces the category's spend and credits the account. Anything that
+ * totals transactions must go through this, or refunds get counted as spend.
+ */
+export function getSignedAmount(transaction) {
+  const amount = Math.abs(Number(transaction?.amount) || 0);
+  return roundMoney(transaction?.type === TX_REFUND ? -amount : amount);
+}
+
+export function isRefund(transaction) {
+  return transaction?.type === TX_REFUND;
+}
+
+// ── Fast capture: merchant memory & rules ────────────────────────────────────
+
+/** The label a transaction is remembered by — explicit merchant, else its note. */
+export function getTransactionMerchant(transaction) {
+  return String(transaction?.merchant || transaction?.note || '').trim();
+}
+
+/**
+ * Places you've spent before, most useful first.
+ *
+ * Ranked by frequency then recency, so the shop you visit weekly outranks the
+ * one you visited once yesterday. Each entry carries the category you last
+ * used, which is what makes one-tap categorisation possible.
+ */
+export function getMerchantSuggestions(transactions = [], query = '', limit = 6) {
+  const search = String(query || '').trim().toLowerCase();
+  const byMerchant = new Map();
+
+  for (const tx of transactions) {
+    const label = getTransactionMerchant(tx);
+    if (!label) continue;
+
+    const key = label.toLowerCase();
+    const date = toValidDate(tx.date);
+    const existing = byMerchant.get(key);
+
+    if (!existing) {
+      byMerchant.set(key, {
+        label, count: 1, lastDate: date, lastCategoryId: tx.categoryId, lastAmount: Number(tx.amount) || 0,
+      });
+      continue;
+    }
+
+    existing.count += 1;
+    if (date && (!existing.lastDate || date > existing.lastDate)) {
+      existing.lastDate = date;
+      existing.lastCategoryId = tx.categoryId;
+      existing.lastAmount = Number(tx.amount) || 0;
+    }
+  }
+
+  return [...byMerchant.values()]
+    .filter(entry => !search || entry.label.toLowerCase().includes(search))
+    .sort((a, b) => (
+      b.count - a.count
+      || (b.lastDate?.getTime() || 0) - (a.lastDate?.getTime() || 0)
+      || a.label.localeCompare(b.label)
+    ))
+    .slice(0, limit);
+}
+
+/**
+ * First rule whose match text appears in `text`, or null.
+ * Rules are expected pre-sorted by priority (see `getRules` in db.js).
+ */
+export function matchRule(text, rules = []) {
+  const haystack = String(text || '').toLowerCase();
+  if (!haystack) return null;
+  return rules.find(rule => {
+    const needle = String(rule?.match || '').trim().toLowerCase();
+    return needle && haystack.includes(needle);
+  }) || null;
+}
+
+/**
+ * Best guess at the category for a note, and why.
+ *
+ * Explicit rules win over learned history: a rule is something the user stated,
+ * history is only inference. Returns null when there's nothing to go on, so
+ * callers can leave the current selection alone rather than guessing wildly.
+ */
+export function suggestCategoryForNote(text, { rules = [], transactions = [], categories = [] } = {}) {
+  const label = String(text || '').trim();
+  if (!label) return null;
+
+  const validCategory = (id) => categories.some(cat => Number(cat.id) === Number(id));
+
+  const rule = matchRule(label, rules);
+  if (rule && validCategory(rule.categoryId)) {
+    return { categoryId: Number(rule.categoryId), source: 'rule', match: rule.match };
+  }
+
+  const lower = label.toLowerCase();
+  const [best] = getMerchantSuggestions(transactions, '', Infinity)
+    .filter(entry => entry.label.toLowerCase() === lower || entry.label.toLowerCase().startsWith(lower));
+
+  if (best && validCategory(best.lastCategoryId)) {
+    return {
+      categoryId: Number(best.lastCategoryId),
+      source: 'history',
+      match: best.label,
+      lastAmount: best.lastAmount,
+    };
+  }
+
+  return null;
+}
+
+/** Every distinct tag in use, alphabetically — for filter chips and autocomplete. */
+export function getAllTags(transactions = []) {
+  const tags = new Set();
+  for (const tx of transactions) {
+    if (!Array.isArray(tx?.tags)) continue;
+    for (const tag of tx.tags) {
+      const clean = String(tag || '').trim();
+      if (clean) tags.add(clean);
+    }
+  }
+  return [...tags].sort((a, b) => a.localeCompare(b));
+}
+
+/** Normalise free-text tag entry: trimmed, de-duplicated, no empties. */
+export function normaliseTags(input) {
+  const list = Array.isArray(input) ? input : String(input || '').split(',');
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    const tag = String(raw || '').trim().replace(/^#/, '');
+    if (!tag) continue;
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(tag);
+  }
+  return out;
+}
+
 // ── Forecasting ──────────────────────────────────────────────────────────────
 
 /**
@@ -681,7 +829,7 @@ export function buildMonthlyHistory(transactions, categories, monthCount = 6) {
 
     const bucket = byMonth.get(sortKey);
     const catName = catMap[tx.categoryId] || 'Other';
-    bucket[catName] = roundMoney((bucket[catName] || 0) + (Number(tx.amount) || 0));
+    bucket[catName] = roundMoney((bucket[catName] || 0) + getSignedAmount(tx));
   }
 
   return [...byMonth.values()]
@@ -781,7 +929,7 @@ export function getCumulativeOverspend(categoryId, allowance, transactions, opti
       const cycleStart = getCycleStartForDate(date, payDay);
       key = `${cycleStart.getFullYear()}-${cycleStart.getMonth()}-${cycleStart.getDate()}`;
     }
-    cycleSpend.set(key, roundMoney((cycleSpend.get(key) || 0) + (Number(tx.amount) || 0)));
+    cycleSpend.set(key, roundMoney((cycleSpend.get(key) || 0) + getSignedAmount(tx)));
   }
 
   let cumulative = 0;

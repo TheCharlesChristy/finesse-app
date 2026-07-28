@@ -1,7 +1,8 @@
 import Dexie from 'dexie';
 import { getNextRecurringDate, normalizeIncomeAllocations, roundMoney, getEffectiveAllowance,
   getCategorySpare, buildMonthlyHistory, projectedEndBalance, getUpcomingSubscriptionCost,
-  getCategoryCycle, getNormalisedIncomeTotal, wishlistAffordability } from './utils';
+  getCategoryCycle, getNormalisedIncomeTotal, getSignedAmount, TX_EXPENSE, TX_REFUND,
+  wishlistAffordability } from './utils';
 
 export const db = new Dexie('FinanceApp');
 
@@ -108,7 +109,28 @@ db.version(7).stores({
   variables: '++id, accountId, name',
 });
 
+// v8 adds fast-capture tables and a multi-entry index on transaction tags.
+// Purely additive — no upgrade function is needed, since Dexie stores arbitrary
+// fields and every new column is optional on existing rows.
+db.version(8).stores({
+  accounts: '++id, name',
+  accountTransfers: '++id, fromAccountId, toAccountId, date',
+  incomeEvents: '++id, accountId, incomeId, date, &receiptKey',
+  settings: '++id, accountId',
+  categories: '++id, accountId, name',
+  transactions: '++id, accountId, categoryId, date, &subscriptionRunKey, *tags',
+  wishlist: '++id, accountId, name',
+  wishlistCategories: '++id, accountId, name',
+  incomes: '++id, accountId, name',
+  subscriptions: '++id, accountId, categoryId, nextDueAt, active',
+  variables: '++id, accountId, name',
+  rules: '++id, accountId, priority',
+  templates: '++id, accountId, name',
+  goals: '++id, accountId, name',
+});
+
 const ACCOUNT_COLORS = ['#4fffb0', '#5db8ff', '#c084fc', '#fbbf70', '#ff6b8a', '#67e8f9'];
+
 
 // ── Spend bucket helpers ────────────────────────────────────────────────────
 function toSpendMap(value) {
@@ -278,6 +300,9 @@ export async function deleteAccount(id) {
     db.incomes,
     db.subscriptions,
     db.variables,
+    db.rules,
+    db.templates,
+    db.goals,
     async () => {
       await db.accountTransfers
         .where('fromAccountId').equals(id)
@@ -292,6 +317,9 @@ export async function deleteAccount(id) {
       await db.incomes.where('accountId').equals(id).delete();
       await db.subscriptions.where('accountId').equals(id).delete();
       await db.variables.where('accountId').equals(id).delete();
+      await db.rules.where('accountId').equals(id).delete();
+      await db.templates.where('accountId').equals(id).delete();
+      await db.goals.where('accountId').equals(id).delete();
       await db.accounts.delete(id);
     }
   );
@@ -381,10 +409,12 @@ export async function updateCategory(id, data) {
 export async function deleteCategory(id) {
   await db.transaction('rw', db.categories, db.transactions, db.accounts, db.subscriptions, async () => {
     const transactions = await db.transactions.where('categoryId').equals(id).toArray();
+    // Signed, so deleting a category that contains refunds doesn't credit the
+    // account for money that was never spent.
     const refundByAccount = transactions.reduce((acc, tx) => {
       if (tx.accountId == null) return acc;
       const key = Number(tx.accountId);
-      acc[key] = roundMoney((acc[key] || 0) + (Number(tx.amount) || 0));
+      acc[key] = roundMoney((acc[key] || 0) + getSignedAmount(tx));
       return acc;
     }, {});
 
@@ -412,55 +442,115 @@ export async function getTransactions(accountId = null) {
 
 export async function addTransaction(tx) {
   const accountId = tx.accountId != null ? Number(tx.accountId) : await getDefaultAccountId();
+  const signed = getSignedAmount(tx);
   let id;
   await db.transaction('rw', db.transactions, db.categories, db.accounts, async () => {
     id = await db.transactions.add({ ...tx, accountId, date: tx.date || new Date().toISOString() });
     const cat = await db.categories.get(tx.categoryId);
     if (cat) {
-      await db.categories.update(tx.categoryId, applyCategorySpendDelta(cat, tx.amount));
+      await db.categories.update(tx.categoryId, applyCategorySpendDelta(cat, signed));
     }
     const account = await db.accounts.get(accountId);
     if (account) {
       await db.accounts.update(accountId, {
-        balance: roundMoney((account.balance || 0) - (Number(tx.amount) || 0)),
+        balance: roundMoney((account.balance || 0) - signed),
       });
     }
   });
   return id;
 }
 
-export async function addTransactionsBulk({ categoryId, transactions = [], accountId = null } = {}) {
+/**
+ * One purchase split across several categories.
+ *
+ * Written as N ordinary transactions sharing a `splitGroupId`, rather than a
+ * parent row with children: every existing query, filter, total and reset then
+ * treats the parts correctly with no special-casing, and a single part can be
+ * edited or deleted on its own.
+ */
+export async function addSplitTransaction({ accountId = null, parts = [], note = '', date = null, merchant = '', tags = [], type = TX_EXPENSE } = {}) {
   const targetAccountId = accountId != null ? Number(accountId) : await getDefaultAccountId();
-  const targetCategoryId = Number(categoryId);
-  if (!targetAccountId || !targetCategoryId) return [];
+  const cleanParts = parts
+    .map(part => ({ categoryId: Number(part.categoryId), amount: roundMoney(part.amount), note: String(part.note || note || '').trim() }))
+    .filter(part => part.categoryId && part.amount > 0);
 
-  const rows = transactions
+  if (!targetAccountId || cleanParts.length === 0) return [];
+
+  const splitGroupId = `split-${targetAccountId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const when = date || new Date().toISOString();
+  const ids = [];
+
+  for (const part of cleanParts) {
+    ids.push(await addTransaction({
+      accountId: targetAccountId,
+      categoryId: part.categoryId,
+      amount: part.amount,
+      note: part.note,
+      date: when,
+      merchant: String(merchant || '').trim(),
+      tags,
+      type,
+      splitGroupId,
+    }));
+  }
+
+  return ids;
+}
+
+/**
+ * Add many transactions at once, each with its own category.
+ *
+ * Accepts a plain array of rows. The legacy `{ categoryId, transactions }`
+ * shape — one category for the whole batch — is still honoured, since pasting
+ * a statement into one category remains a normal thing to do.
+ *
+ * Category and account totals are accumulated first and written once per
+ * category, so a 200-row paste is a handful of writes rather than 400.
+ */
+export async function addTransactionsBulk(input = {}, maybeAccountId = null) {
+  const isArray = Array.isArray(input);
+  const accountId = isArray ? maybeAccountId : input.accountId;
+  const targetAccountId = accountId != null ? Number(accountId) : await getDefaultAccountId();
+  if (!targetAccountId) return [];
+
+  const fallbackCategoryId = isArray ? null : Number(input.categoryId) || null;
+  const source = isArray ? input : (input.transactions || []);
+
+  const rows = source
     .map(tx => ({
       accountId: targetAccountId,
-      categoryId: targetCategoryId,
-      amount: roundMoney(tx.amount),
+      categoryId: Number(tx.categoryId ?? fallbackCategoryId),
+      amount: Math.abs(roundMoney(tx.amount)),
       note: String(tx.note || '').trim(),
+      merchant: String(tx.merchant || tx.note || '').trim(),
+      type: tx.type === TX_REFUND ? TX_REFUND : TX_EXPENSE,
       date: tx.date || new Date().toISOString(),
     }))
-    .filter(tx => tx.amount > 0);
+    .filter(tx => tx.amount > 0 && Number.isFinite(tx.categoryId) && tx.categoryId > 0);
 
   if (!rows.length) return [];
 
-  const totalAmount = roundMoney(rows.reduce((sum, tx) => sum + tx.amount, 0));
-  let ids = [];
+  const deltaByCategory = new Map();
+  let accountDelta = 0;
+  for (const row of rows) {
+    const signed = getSignedAmount(row);
+    deltaByCategory.set(row.categoryId, roundMoney((deltaByCategory.get(row.categoryId) || 0) + signed));
+    accountDelta = roundMoney(accountDelta + signed);
+  }
 
+  let ids = [];
   await db.transaction('rw', db.transactions, db.categories, db.accounts, async () => {
     ids = await db.transactions.bulkAdd(rows, { allKeys: true });
 
-    const cat = await db.categories.get(targetCategoryId);
-    if (cat) {
-      await db.categories.update(targetCategoryId, applyCategorySpendDelta(cat, totalAmount));
+    for (const [categoryId, delta] of deltaByCategory) {
+      const cat = await db.categories.get(categoryId);
+      if (cat) await db.categories.update(categoryId, applyCategorySpendDelta(cat, delta));
     }
 
     const account = await db.accounts.get(targetAccountId);
     if (account) {
       await db.accounts.update(targetAccountId, {
-        balance: roundMoney((account.balance || 0) - totalAmount),
+        balance: roundMoney((account.balance || 0) - accountDelta),
       });
     }
   });
@@ -473,9 +563,11 @@ export async function updateTransaction(id, data) {
   if (!existing) return 0;
 
   const nextCategoryId = Number(data.categoryId ?? existing.categoryId);
-  const nextAmount = Number(data.amount ?? existing.amount) || 0;
   const previousCategoryId = Number(existing.categoryId);
-  const previousAmount = Number(existing.amount) || 0;
+  // Signed, so switching an expense to a refund (or back) reverses the effect
+  // on both the spend counter and the account balance in one step.
+  const nextAmount = getSignedAmount({ ...existing, ...data });
+  const previousAmount = getSignedAmount(existing);
 
   await db.transaction('rw', db.transactions, db.categories, db.accounts, async () => {
     if (previousCategoryId === nextCategoryId) {
@@ -498,10 +590,12 @@ export async function updateTransaction(id, data) {
       }
     }
 
+    // `amount` is always stored positive; `type` carries the direction. Only
+    // the deltas above are signed.
     await db.transactions.update(id, {
       ...data,
       categoryId: nextCategoryId,
-      amount: nextAmount,
+      amount: Math.abs(roundMoney(data.amount ?? existing.amount)),
     });
 
     const accountId = Number(existing.accountId);
@@ -520,14 +614,15 @@ export async function deleteTransaction(id) {
   await db.transaction('rw', db.transactions, db.categories, db.accounts, async () => {
     const tx = await db.transactions.get(id);
     if (tx) {
+      const signed = getSignedAmount(tx);
       const cat = await db.categories.get(tx.categoryId);
       if (cat) {
-        await db.categories.update(tx.categoryId, applyCategorySpendDelta(cat, -tx.amount));
+        await db.categories.update(tx.categoryId, applyCategorySpendDelta(cat, -signed));
       }
       const account = await db.accounts.get(tx.accountId);
       if (account) {
         await db.accounts.update(tx.accountId, {
-          balance: roundMoney((account.balance || 0) + (Number(tx.amount) || 0)),
+          balance: roundMoney((account.balance || 0) + signed),
         });
       }
     }
@@ -808,6 +903,85 @@ export async function processDueSubscriptions(accountId = null, now = new Date()
   return created;
 }
 
+// ── Auto-categorisation rules ────────────────────────────────────────────────
+// A rule maps a text match on the note/merchant to a category, so recurring
+// spend at the same place stops needing a category picked by hand every time.
+// Lower `priority` wins; ties fall back to the more specific (longer) match.
+export async function getRules(accountId = null) {
+  const rows = accountId == null
+    ? await db.rules.toArray()
+    : await db.rules.where('accountId').equals(Number(accountId)).toArray();
+  return rows.sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0)
+    || String(b.match || '').length - String(a.match || '').length);
+}
+
+export async function addRule(rule, accountId = null) {
+  const count = await db.rules.count();
+  return db.rules.add({
+    ...withAccountId(rule, accountId ?? rule.accountId),
+    match: String(rule.match || '').trim(),
+    categoryId: Number(rule.categoryId),
+    priority: rule.priority ?? count,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export async function updateRule(id, data) {
+  const next = { ...data };
+  if (next.match != null) next.match = String(next.match).trim();
+  if (next.categoryId != null) next.categoryId = Number(next.categoryId);
+  return db.rules.update(id, next);
+}
+
+export async function deleteRule(id) {
+  return db.rules.delete(id);
+}
+
+// ── Expense templates ────────────────────────────────────────────────────────
+// A saved amount + category + note for spend that repeats at the same price —
+// a coffee, a bus fare — so logging it is one tap instead of a form.
+export async function getTemplates(accountId = null) {
+  const rows = accountId == null
+    ? await db.templates.toArray()
+    : await db.templates.where('accountId').equals(Number(accountId)).toArray();
+  return rows.sort((a, b) => (b.useCount || 0) - (a.useCount || 0)
+    || String(a.name || '').localeCompare(String(b.name || '')));
+}
+
+export async function addTemplate(template, accountId = null) {
+  return db.templates.add({
+    ...withAccountId(template, accountId ?? template.accountId),
+    name: String(template.name || '').trim(),
+    categoryId: Number(template.categoryId),
+    amount: roundMoney(template.amount),
+    note: String(template.note || '').trim(),
+    useCount: 0,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export async function deleteTemplate(id) {
+  return db.templates.delete(id);
+}
+
+/** Log a template as an expense and count the use, so the list self-sorts. */
+export async function logTemplate(templateId, accountId = null) {
+  const template = await db.templates.get(Number(templateId));
+  if (!template) return 0;
+
+  const id = await addTransaction({
+    accountId: accountId ?? template.accountId,
+    categoryId: template.categoryId,
+    amount: template.amount,
+    note: template.note || template.name,
+    merchant: template.note || template.name,
+    date: new Date().toISOString(),
+  });
+
+  await db.templates.update(template.id, { useCount: (template.useCount || 0) + 1 });
+  return id;
+}
+
 // ── Variable helpers ──────────────────────────────────────────────────────────
 export async function addVariable(variable, accountId = null) {
   return db.variables.add(withAccountId(variable, accountId ?? variable.accountId));
@@ -926,7 +1100,7 @@ export async function recalculateSpendCounters(accountId = null) {
 
   for (const cat of categories) {
     const since = cat.lastReset ? new Date(cat.lastReset) : null;
-    const actual = roundMoney(
+    const actual = Math.max(0, roundMoney(
       transactions
         .filter(tx => Number(tx.categoryId) === Number(cat.id))
         .filter(tx => {
@@ -934,8 +1108,8 @@ export async function recalculateSpendCounters(accountId = null) {
           const date = new Date(tx.date);
           return !Number.isNaN(date.getTime()) && date >= since;
         })
-        .reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0)
-    );
+        .reduce((sum, tx) => sum + getSignedAmount(tx), 0)
+    ));
 
     const stored = roundMoney(cat.spent || 0);
     const drift = roundMoney(actual - stored);
@@ -1019,6 +1193,9 @@ export async function clearAllData() {
     db.incomes,
     db.subscriptions,
     db.variables,
+    db.rules,
+    db.templates,
+    db.goals,
     async () => {
       await db.accountTransfers.clear();
       await db.incomeEvents.clear();
@@ -1031,12 +1208,15 @@ export async function clearAllData() {
       await db.incomes.clear();
       await db.subscriptions.clear();
       await db.variables.clear();
+      await db.rules.clear();
+      await db.templates.clear();
+      await db.goals.clear();
     }
   );
 }
 
 export async function exportData() {
-  const [accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, subscriptions, variables] = await Promise.all([
+  const [accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, subscriptions, variables, rules, templates, goals] = await Promise.all([
     db.accounts.toArray(),
     db.accountTransfers.toArray(),
     db.incomeEvents.toArray(),
@@ -1048,14 +1228,17 @@ export async function exportData() {
     db.incomes.toArray(),
     db.subscriptions.toArray(),
     db.variables.toArray(),
+    db.rules.toArray(),
+    db.templates.toArray(),
+    db.goals.toArray(),
   ]);
-  return { accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, subscriptions, variables, exportedAt: new Date().toISOString(), version: 7 };
+  return { accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, subscriptions, variables, rules, templates, goals, exportedAt: new Date().toISOString(), version: 8 };
 }
 
 // Lightweight snapshot for the "share URL" feature: high-level setup only,
 // no transaction/event logs, so it stays small enough to embed in a URL.
 export async function exportSnapshot() {
-  const [accounts, settings, categories, incomes, subscriptions, wishlist, wishlistCategories, variables] = await Promise.all([
+  const [accounts, settings, categories, incomes, subscriptions, wishlist, wishlistCategories, variables, rules, templates, goals] = await Promise.all([
     db.accounts.toArray(),
     db.settings.toArray(),
     db.categories.toArray(),
@@ -1064,8 +1247,11 @@ export async function exportSnapshot() {
     db.wishlist.toArray(),
     db.wishlistCategories.toArray(),
     db.variables.toArray(),
+    db.rules.toArray(),
+    db.templates.toArray(),
+    db.goals.toArray(),
   ]);
-  return { accounts, settings, categories, incomes, subscriptions, wishlist, wishlistCategories, variables, exportedAt: new Date().toISOString(), version: 7 };
+  return { accounts, settings, categories, incomes, subscriptions, wishlist, wishlistCategories, variables, rules, templates, goals, exportedAt: new Date().toISOString(), version: 8 };
 }
 
 // ── Chat Summary export: field picker support ───────────────────────────────
@@ -1074,7 +1260,8 @@ export async function exportSnapshot() {
 // only accurate source for "every field that exists" is the data itself —
 // this reads each table and unions the keys found across its rows.
 const EXPORT_TABLE_NAMES = ['categories', 'transactions', 'incomes', 'incomeEvents',
-  'subscriptions', 'wishlist', 'wishlistCategories', 'variables', 'accountTransfers'];
+  'subscriptions', 'wishlist', 'wishlistCategories', 'variables', 'accountTransfers',
+  'rules', 'templates', 'goals'];
 // Structural identifiers, always kept and never user-toggleable.
 const EXPORT_ALWAYS_INCLUDED_KEYS = new Set(['id', 'accountId']);
 // Pure linking/dedupe plumbing with no analytical meaning to a reader.
@@ -1240,7 +1427,7 @@ export async function exportChatSummary(selection) {
     return summary;
   });
 
-  const result = { generatedAt: new Date().toISOString(), version: 7, accounts: accountSummaries };
+  const result = { generatedAt: new Date().toISOString(), version: 8, accounts: accountSummaries };
   if (includeTable('accountTransfers')) result.accountTransfers = pickRows('accountTransfers', accountTransfers);
   return result;
 }
@@ -1272,6 +1459,9 @@ export async function importData(data, mode = 'replace') {
     await db.incomes.clear();
     await db.subscriptions.clear();
     await db.variables.clear();
+    await db.rules.clear();
+    await db.templates.clear();
+    await db.goals.clear();
   }
 
   const preserveIds = mode === 'replace';
@@ -1336,6 +1526,9 @@ export async function importData(data, mode = 'replace') {
     incomes: toArray(payload.incomes),
     subscriptions: toArray(payload.subscriptions),
     variables: toArray(payload.variables),
+    rules: toArray(payload.rules),
+    templates: toArray(payload.templates),
+    goals: toArray(payload.goals),
   };
 
   const toKey = (value) => String(value);
@@ -1440,6 +1633,9 @@ export async function importData(data, mode = 'replace') {
   setSummary('incomes', await addRowsSafely(db.incomes, accountRows(dataTables.incomes)));
   setSummary('subscriptions', await addRowsSafely(db.subscriptions, accountRows(dataTables.subscriptions)));
   setSummary('variables', await addRowsSafely(db.variables, accountRows(dataTables.variables)));
+  setSummary('rules', await addRowsSafely(db.rules, accountRows(dataTables.rules)));
+  setSummary('templates', await addRowsSafely(db.templates, accountRows(dataTables.templates)));
+  setSummary('goals', await addRowsSafely(db.goals, accountRows(dataTables.goals)));
 
   let incomeEventsImported = 0;
   let incomeEventsSkipped = 0;
@@ -1479,12 +1675,15 @@ export async function exportTransactionsCSV(accountId = null) {
     getCategories(accountId),
   ]);
   const catMap = Object.fromEntries(categories.map(c => [c.id, c.name]));
-  const rows = [['Date','Category','Amount','Note']];
+  const rows = [['Date','Category','Amount','Type','Tags','Note']];
   for (const tx of transactions) {
     rows.push([
       new Date(tx.date).toLocaleDateString('en-GB'),
       catMap[tx.categoryId] || 'Unknown',
-      tx.amount.toFixed(2),
+      // Signed, so a spreadsheet totalling this column matches the app.
+      getSignedAmount(tx).toFixed(2),
+      tx.type === TX_REFUND ? 'Refund' : 'Expense',
+      Array.isArray(tx.tags) ? tx.tags.join(' ') : '',
       tx.note || ''
     ]);
   }

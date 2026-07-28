@@ -45,6 +45,8 @@ src/
 │   ├── Variables.jsx
 │   └── Settings.jsx
 ├── components/
+│   ├── QuickAdd.jsx      # Floating "log an expense" button (mobile)
+│   ├── CommandPalette.jsx # ⌘K: jump to a view, run an action, find a transaction
 │   ├── modals/           # Modal dialogs, split by domain
 │   │   ├── index.js      #   barrel — import modals from here, never the files directly
 │   │   ├── shared.jsx    #   IncomeAllocationEditor, FormulaInput, ColourPicker, PALETTE…
@@ -115,6 +117,20 @@ Money in Finesse comes in two units, and adding them together is meaningless:
 
 `getUnallocatedIncomeTotal(incomes, categories)` computes free income per source
 rather than subtracting two mixed-unit totals — use it for any "spare money" pool.
+
+### Transaction direction — use `getSignedAmount`
+
+`transactions.amount` is **always stored positive**; `transactions.type`
+(`'expense'` | `'refund'`) carries the direction. A refund reduces its
+category's spend and credits the account.
+
+Anything that totals transactions must go through `getSignedAmount(tx)`, or
+refunds get counted as spend. This applies to filtered totals, monthly history,
+cumulative overspend, CSV export and counter rebuilds.
+
+Splits are N ordinary transactions sharing a `splitGroupId` — not a parent row
+with children — so every existing query, filter and reset handles them with no
+special-casing, and a single part can be edited or deleted on its own.
 
 ### Schema changes
 

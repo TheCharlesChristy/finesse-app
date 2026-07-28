@@ -2,7 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 
 import {
   db, getSettings, getCategories, getTransactions, getWishlistItems,
-  getWishlistCategories, getIncomeEvents, getSubscriptions,
+  getWishlistCategories, getIncomeEvents, getSubscriptions, getRules, getTemplates,
 } from '../db';
 
 /**
@@ -36,6 +36,8 @@ export function useFinesseData(activeAccountId) {
     () => (id ? db.incomes.where('accountId').equals(id).toArray() : []), [id]);
   const variables = useLiveQuery(
     () => (id ? db.variables.where('accountId').equals(id).toArray() : []), [id]);
+  const rules = useLiveQuery(() => (id ? getRules(id) : []), [id]);
+  const templates = useLiveQuery(() => (id ? getTemplates(id) : []), [id]);
 
   return {
     accountsQuery,
@@ -50,5 +52,7 @@ export function useFinesseData(activeAccountId) {
     subscriptions: subscriptions || [],
     incomes: incomes || [],
     variables: variables || [],
+    rules: rules || [],
+    templates: templates || [],
   };
 }
