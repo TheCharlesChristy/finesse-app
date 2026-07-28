@@ -1,4 +1,5 @@
 import Dexie from 'dexie';
+import { startOfDay } from 'date-fns';
 import { getNextRecurringDate, normalizeIncomeAllocations, roundMoney, getEffectiveAllowance,
   getCategorySpare, buildMonthlyHistory, projectedEndBalance, getUpcomingSubscriptionCost,
   getCategoryCycle, getNormalisedIncomeTotal, getSignedAmount, getRolloverForNextCycle,
@@ -1197,7 +1198,12 @@ export async function recalculateSpendCounters(accountId = null) {
   const report = [];
 
   for (const cat of categories) {
-    const since = cat.lastReset ? new Date(cat.lastReset) : null;
+    // Compared at day granularity: transactions are stored at local midnight
+    // (see dateOnlyToISO), while lastReset is a full timestamp. Comparing them
+    // directly would treat everything logged earlier on the reset day as
+    // belonging to the previous cycle, and wrongly zero the counter.
+    const rawReset = cat.lastReset ? new Date(cat.lastReset) : null;
+    const since = rawReset && !Number.isNaN(rawReset.getTime()) ? startOfDay(rawReset) : null;
     const actual = Math.max(0, roundMoney(
       transactions
         .filter(tx => Number(tx.categoryId) === Number(cat.id))

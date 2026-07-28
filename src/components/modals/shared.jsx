@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components -- this module deliberately shares helpers and constants alongside the components that use them */
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { Plus, Wand2, X } from 'lucide-react';
 import { IconButton, Field } from '../ui';
 import {
@@ -139,16 +139,11 @@ export function IncomeAllocationEditor({
     [allowance, cleanAllocations, incomes, categories, excludeCategoryId]
   );
 
-  useEffect(() => {
-    if (!availableIncomeOptions.length) {
-      setSourceToAdd('');
-      return;
-    }
-
-    if (!sourceToAdd || !availableIncomeOptions.some(income => String(income.id) === sourceToAdd)) {
-      setSourceToAdd(String(availableIncomeOptions[0].id));
-    }
-  }, [availableIncomeOptions, sourceToAdd]);
+  // Falls back to the first available option at render rather than being
+  // corrected by an effect — the selection is a pure function of what's left.
+  const effectiveSourceToAdd = availableIncomeOptions.some(income => String(income.id) === sourceToAdd)
+    ? sourceToAdd
+    : (availableIncomeOptions[0] ? String(availableIncomeOptions[0].id) : '');
 
   const setPercent = (incomeId, rawValue) => {
     const parsed = rawValue === '' ? 0 : Number(rawValue);
@@ -160,7 +155,7 @@ export function IncomeAllocationEditor({
   };
 
   const addSource = () => {
-    const incomeId = Number(sourceToAdd || availableIncomeOptions[0]?.id);
+    const incomeId = Number(effectiveSourceToAdd || availableIncomeOptions[0]?.id);
     if (!incomeId) return;
     const remaining = roundMoney(100 - validation.percentTotal);
     const percent = remaining > 0 ? Math.min(100, remaining) : 1;
@@ -297,7 +292,7 @@ export function IncomeAllocationEditor({
 
           {availableIncomeOptions.length > 0 && (
             <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center' }}>
-              <select className="glass-input" value={sourceToAdd} onChange={e => setSourceToAdd(e.target.value)}
+              <select className="glass-input" value={effectiveSourceToAdd} onChange={e => setSourceToAdd(e.target.value)}
                 aria-label="Funding source to add"
                 style={{ padding: '8px 10px', fontSize: 13 }}>
                 {availableIncomeOptions.map(income => {
@@ -356,7 +351,7 @@ export function getActiveToken(value) {
 // Formula input with inline autocomplete dropdown
 export function FormulaInput({ value, onChange, onKeyDown: externalKeyDown, placeholder, variables, categories, incomes }) {
   const [activeIdx, setActiveIdx] = useState(0);
-  const [showDropdown, setShowDropdown] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
   const inputRef = useRef(null);
 
   const token = useMemo(() => getActiveToken(value), [value]);
@@ -370,8 +365,10 @@ export function FormulaInput({ value, onChange, onKeyDown: externalKeyDown, plac
     return [];
   }, [token, variables, categories, incomes]);
 
-  useEffect(() => { setActiveIdx(0); }, [suggestions]);
-  useEffect(() => { setShowDropdown(token !== null && suggestions.length > 0); }, [token, suggestions.length]);
+  // Derived, not synced: the dropdown is open whenever there's a token with
+  // matches and the user hasn't explicitly dismissed it.
+  const showDropdown = !dismissed && token !== null && suggestions.length > 0;
+  const boundedIdx = Math.min(activeIdx, Math.max(0, suggestions.length - 1));
 
   const complete = (item) => {
     if (!token) return;
@@ -380,7 +377,7 @@ export function FormulaInput({ value, onChange, onKeyDown: externalKeyDown, plac
       : token.type === 'cat' ? item.name + ']'
       : item.name + '}';
     onChange(before + suffix);
-    setShowDropdown(false);
+    setDismissed(true);
     setTimeout(() => inputRef.current?.focus(), 0);
   };
 
@@ -389,9 +386,9 @@ export function FormulaInput({ value, onChange, onKeyDown: externalKeyDown, plac
       if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx(i => Math.min(i + 1, suggestions.length - 1)); return; }
       if (e.key === 'ArrowUp')   { e.preventDefault(); setActiveIdx(i => Math.max(i - 1, 0)); return; }
       if (e.key === 'Tab' || (e.key === 'Enter')) {
-        if (suggestions[activeIdx]) { e.preventDefault(); complete(suggestions[activeIdx]); return; }
+        if (suggestions[boundedIdx]) { e.preventDefault(); complete(suggestions[boundedIdx]); return; }
       }
-      if (e.key === 'Escape') { e.preventDefault(); setShowDropdown(false); return; }
+      if (e.key === 'Escape') { e.preventDefault(); setDismissed(true); return; }
     }
     externalKeyDown?.(e);
   };
@@ -407,7 +404,7 @@ export function FormulaInput({ value, onChange, onKeyDown: externalKeyDown, plac
         className="glass-input"
         placeholder={placeholder}
         value={value}
-        onChange={e => onChange(e.target.value)}
+        onChange={e => { onChange(e.target.value); setActiveIdx(0); setDismissed(false); }}
         onKeyDown={handleKeyDown}
         autoComplete="off"
       />
@@ -427,7 +424,7 @@ export function FormulaInput({ value, onChange, onKeyDown: externalKeyDown, plac
               onMouseEnter={() => setActiveIdx(idx)}
               style={{
                 padding: '9px 14px', cursor: 'pointer', fontSize: 13,
-                background: idx === activeIdx ? 'rgba(255,255,255,0.07)' : 'transparent',
+                background: idx === boundedIdx ? 'rgba(255,255,255,0.07)' : 'transparent',
                 display: 'flex', alignItems: 'center', gap: 8,
                 borderBottom: idx < suggestions.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
               }}

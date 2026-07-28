@@ -547,3 +547,31 @@ describe('goals', () => {
     expect((await getAccount(accountId)).balance).toBe(1000);
   });
 });
+
+describe('recalculateSpendCounters day boundaries', () => {
+  it('counts a transaction logged earlier on the reset day', async () => {
+    // dateOnlyToISO stores transactions at local midnight, while lastReset is a
+    // full timestamp. Comparing them directly wrongly excluded same-day spend.
+    const midday = new Date();
+    midday.setHours(12, 0, 0, 0);
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+
+    const catId = await makeCategory({ lastReset: midday.toISOString() });
+    await addTransaction({ accountId, categoryId: catId, amount: 50.75, date: midnight.toISOString() });
+
+    const report = await recalculateSpendCounters(accountId);
+
+    expect((await getCategory(catId)).spent).toBe(50.75);
+    expect(report.repaired).toBe(0);
+  });
+
+  it('still excludes spend from before the reset day', async () => {
+    const catId = await makeCategory({ lastReset: new Date('2026-07-15T09:00:00Z').toISOString() });
+    await addTransaction({ accountId, categoryId: catId, amount: 10, date: new Date('2026-07-14T23:00:00Z').toISOString() });
+    await addTransaction({ accountId, categoryId: catId, amount: 25, date: new Date('2026-07-16T09:00:00Z').toISOString() });
+
+    await recalculateSpendCounters(accountId);
+    expect((await getCategory(catId)).spent).toBe(25);
+  });
+});

@@ -11,7 +11,6 @@ function parseValue(value) {
 
 export default function DateInput({ value, onChange, label = 'Date', disabled = false }) {
   const [open, setOpen] = useState(false);
-  const [viewDate, setViewDate] = useState(() => parseValue(value));
   const [focusedDate, setFocusedDate] = useState(() => parseValue(value));
   const triggerRef = useRef(null);
   const popoverRef = useRef(null);
@@ -19,6 +18,11 @@ export default function DateInput({ value, onChange, label = 'Date', disabled = 
   const [position, setPosition] = useState({ top: 0, left: 0, width: 300 });
   const selectedDate = useMemo(() => parseValue(value), [value]);
   const labelId = useId();
+
+  // The month on screen is never independent state: open, it's wherever the
+  // keyboard cursor is; closed, it's wherever the selected date is. Deriving it
+  // removes the two effects that used to chase it, and the render they cost.
+  const viewDate = startOfMonth(open ? focusedDate : selectedDate);
 
   const updatePosition = () => {
     const rect = triggerRef.current?.getBoundingClientRect();
@@ -31,9 +35,7 @@ export default function DateInput({ value, onChange, label = 'Date', disabled = 
     setPosition({ top, left, width });
   };
 
-  useEffect(() => {
-    if (!open) setViewDate(selectedDate);
-  }, [selectedDate, open]);
+
 
   useEffect(() => {
     const handleClick = (event) => {
@@ -55,13 +57,14 @@ export default function DateInput({ value, onChange, label = 'Date', disabled = 
     };
   }, [open]);
 
-  // Keep month view in sync with the keyboard cursor and move DOM focus to it.
+  // Move DOM focus to the keyboard cursor. The month it lives in is derived
+  // below rather than written back into state, so this effect only touches the
+  // DOM — which is exactly what effects are for.
   useEffect(() => {
     if (!open) return;
-    if (!isSameMonth(focusedDate, viewDate)) setViewDate(startOfMonth(focusedDate));
     const el = gridRef.current?.querySelector(`[data-date="${format(focusedDate, 'yyyy-MM-dd')}"]`);
     el?.focus();
-  }, [open, focusedDate, viewDate]);
+  }, [open, focusedDate]);
 
   const days = useMemo(() => {
     const start = startOfWeek(startOfMonth(viewDate), { weekStartsOn: 1 });
@@ -72,7 +75,6 @@ export default function DateInput({ value, onChange, label = 'Date', disabled = 
   const openPicker = () => {
     updatePosition();
     setFocusedDate(selectedDate);
-    setViewDate(startOfMonth(selectedDate));
     setOpen(true);
   };
 
@@ -89,7 +91,6 @@ export default function DateInput({ value, onChange, label = 'Date', disabled = 
 
   const moveMonth = (amount) => {
     const shift = amount < 0 ? subMonths : addMonths;
-    setViewDate(date => shift(date, 1));
     setFocusedDate(date => shift(date, 1));
   };
 

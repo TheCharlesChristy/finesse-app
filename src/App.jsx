@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { CalendarDays, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
@@ -14,7 +14,8 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   topUpCategoryFromIncome, borrowBudgetBetweenCategories, resetCategoryTopUps,
   addSplitTransaction, addRule, updateRule, deleteRule,
   addTemplate, deleteTemplate, logTemplate,
-  addGoal, updateGoal, deleteGoal, contributeToGoal, autoContributeGoals } from './db';
+  addGoal, updateGoal, deleteGoal, contributeToGoal, autoContributeGoals,
+  recalculateSpendCounters } from './db';
 import { useFinesseData } from './hooks/useFinesseData';
 import { buildNudges, calcNextReset, evaluateFormula, filterDismissedNudges, fmt, getGoalCommitment, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
 
@@ -43,6 +44,36 @@ import CommandPalette from './components/CommandPalette';
 import NudgeCenter from './components/NudgeCenter';
 import { notifyNudges } from './notifications';
 
+// "g then <key>" navigation targets.
+const GOTO_KEYS = {
+  d: 'dashboard',
+  a: 'accounts',
+  t: 'transactions',
+  p: 'purchase',
+  c: 'calendar',
+  s: 'subscriptions',
+  f: 'forecasting',
+  g: 'goals',
+  w: 'wishlist',
+  v: 'variables',
+  x: 'settings',
+};
+
+const SHORTCUTS = [
+  ['A', 'Log an expense'],
+  ['B', 'Bulk add expenses'],
+  ['⌘K / Ctrl K', 'Command palette'],
+  ['/', 'Search transactions'],
+  ['G then D', 'Dashboard'],
+  ['G then T', 'Transactions'],
+  ['G then C', 'Calendar'],
+  ['G then F', 'Forecasting'],
+  ['G then G', 'Goals'],
+  ['G then X', 'Settings'],
+  ['Esc', 'Close a dialog'],
+  ['?', 'This list'],
+];
+
 const NAV = [
   { id: 'dashboard',   label: 'Dashboard',   Icon: LayoutDashboard },
   { id: 'accounts',    label: 'Accounts',    Icon: Wallet },
@@ -56,6 +87,19 @@ const NAV = [
   { id: 'variables',   label: 'Variables',     Icon: SlidersHorizontal },
   { id: 'settings',    label: 'Settings',     Icon: SettingsIcon },
 ];
+
+/** The `?action=` a home-screen shortcut launched us with, if any. */
+function readLaunchAction() {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search).get('action');
+}
+
+/** The snapshot embedded in a share link's hash, if any. */
+function readSharedSnapshot() {
+  if (typeof window === 'undefined') return null;
+  const match = window.location.hash.match(/snapshot=([^&]+)/);
+  return match ? decodeSnapshotFromUrl(match[1]) : null;
+}
 
 function getLatestDueIncomeReset(income, now = new Date()) {
   const freq = income.resetFrequency || (income.payDayOfMonth ? 'monthly' : null);
@@ -79,9 +123,17 @@ export default function App() {
   const { dialogEl, showConfirm, showAlert, showPrompt } = useDialog();
   const { toastEl, showToast } = useToast();
 
-  const [view, setView] = useState('dashboard');
-  const [modal, setModal] = useState(null);
-  const [pendingImport, setPendingImport] = useState(null);
+  // Boot-time URL handling happens in the state initialisers rather than in an
+  // effect: the URL is already known on the first render, so reading it there
+  // avoids a second render pass and the cascading-render lint rule that flags it.
+  const [view, setView] = useState(() => (
+    readLaunchAction() === 'purchase-check' ? 'purchase' : 'dashboard'
+  ));
+  const [pendingImport, setPendingImport] = useState(readSharedSnapshot);
+  const [modal, setModal] = useState(() => {
+    if (readSharedSnapshot()) return 'importMode';
+    return readLaunchAction() === 'log-expense' ? 'addTx' : null;
+  });
   const [chatSummarySchema, setChatSummarySchema] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [fastForwardIncomeId, setFastForwardIncomeId] = useState(null);
@@ -95,19 +147,20 @@ export default function App() {
   const [transactionDefaults, setTransactionDefaults] = useState(null);
   const [adjustCategoryId, setAdjustCategoryId] = useState(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const pendingGoto = useRef(null);
   const [detailCategoryId, setDetailCategoryId] = useState(null);
   const [editingGoal, setEditingGoal] = useState(null);
   const [savingForItem, setSavingForItem] = useState(null);
-  const [activeAccountId, setActiveAccountId] = useState(() => {
+  const [selectedAccountId, setActiveAccountId] = useState(() => {
     const stored = Number(localStorage.getItem('finesse.activeAccountId'));
     return Number.isFinite(stored) && stored > 0 ? stored : null;
   });
 
   const {
-    accountsQuery, accounts, accountTransfers, settings, categories, transactions,
+    accountsQuery, activeAccountId, accounts, accountTransfers, settings, categories, transactions,
     wishlistItems, wishlistCategories, incomeEvents, subscriptions, incomes, variables,
     rules, templates, goals,
-  } = useFinesseData(activeAccountId);
+  } = useFinesseData(selectedAccountId);
   const activeAccount = accounts.find(account => Number(account.id) === Number(activeAccountId)) || null;
 
   useEffect(() => {
@@ -116,36 +169,15 @@ export default function App() {
   }, [accountsQuery]);
 
   useEffect(() => {
-    if (!accounts.length) return;
-    const currentExists = accounts.some(account => Number(account.id) === Number(activeAccountId));
-    if (!activeAccountId || !currentExists) {
-      setActiveAccountId(accounts[0].id);
-    }
-  }, [accounts, activeAccountId]);
-
-  useEffect(() => {
     if (activeAccountId) localStorage.setItem('finesse.activeAccountId', String(activeAccountId));
   }, [activeAccountId]);
 
-  // ── Home-screen shortcut actions (one-time check on load) ───────────────
+  // The action and snapshot have been consumed into state above; scrub them
+  // from the URL so a refresh doesn't replay them.
   useEffect(() => {
-    const action = new URLSearchParams(window.location.search).get('action');
-    if (!action) return;
-    history.replaceState(null, '', window.location.pathname + window.location.hash);
-    if (action === 'log-expense') setModal('addTx');
-    if (action === 'purchase-check') setView('purchase');
-  }, []);
-
-  // ── Share-link import (one-time check on load) ──────────────────────────
-  useEffect(() => {
-    const hash = window.location.hash;
-    const match = hash.match(/snapshot=([^&]+)/);
-    if (!match) return;
-    const snapshot = decodeSnapshotFromUrl(match[1]);
-    history.replaceState(null, '', window.location.pathname + window.location.search);
-    if (!snapshot) return;
-    setPendingImport(snapshot);
-    setModal('importMode');
+    if (window.location.search || window.location.hash) {
+      history.replaceState(null, '', window.location.pathname);
+    }
   }, []);
 
   // Per-category auto-reset for legacy categories without income funding.
@@ -522,6 +554,15 @@ export default function App() {
     addTransactionsBulk(rows, activeAccountId)
   ), [activeAccountId]);
 
+  const handleDeleteWishlistItem = useCallback(async (id) => {
+    const item = wishlistItems.find(entry => Number(entry.id) === Number(id));
+    if (!item) return;
+    await deleteWishlistItem(id);
+    showToast(`Removed ${item.name}`, {
+      action: { label: 'Undo', onClick: () => addWishlistItem(item, activeAccountId) },
+    });
+  }, [wishlistItems, activeAccountId, showToast]);
+
   const handleEditWishlistItem = useCallback((item) => {
     setEditingWishlistItem(item);
     setModal('editWish');
@@ -567,14 +608,20 @@ export default function App() {
   }, [showConfirm]);
 
   // ── Transaction / category delete (confirmation owned here) ─────────────────
+  // Reversible deletes get an undo toast instead of a confirm dialog. A modal
+  // that interrupts every single delete is worse than one that never appears
+  // and an undo that always works — the transaction is restored with its
+  // original id, so it's a true restore rather than a lookalike copy.
   const handleDeleteTransaction = useCallback(async (tx) => {
     const cat = categories.find(c => c.id === tx.categoryId);
     const label = tx.note || cat?.name || 'Expense';
-    const ok = await showConfirm(`Delete "${label}"?`, {
-      title: 'Delete Transaction', confirmText: 'Delete', danger: true,
+
+    await deleteTransaction(tx.id);
+    showToast(`Deleted ${label}`, {
+      detail: fmt(tx.amount || 0),
+      action: { label: 'Undo', onClick: () => addTransaction(tx) },
     });
-    if (ok) deleteTransaction(tx.id);
-  }, [categories, showConfirm]);
+  }, [categories, showToast]);
 
   const handleDeleteCategory = useCallback(async (catId) => {
     const cat = categories.find(c => c.id === catId);
@@ -612,6 +659,37 @@ export default function App() {
   const handleSaveForItem = useCallback(async (goal) => {
     await addGoal(goal, activeAccountId);
     showToast(`Saving for ${goal.name}`, { detail: 'Added to Goals.' });
+  }, [activeAccountId, showToast]);
+
+  const handleRunWizard = useCallback(async ({ income, categories: packCategories }) => {
+    const incomeId = await addIncome(income, activeAccountId);
+
+    // Allocated 100% to the new income, so each category is properly funded and
+    // resets with it — the thing a new user would otherwise have to discover.
+    for (const category of packCategories) {
+      await addCategory({
+        name: category.name,
+        allowance: category.allowance,
+        color: category.color,
+        incomeAllocations: [{ incomeId: Number(incomeId), percent: 100 }],
+        allowanceFormula: null,
+        lastReset: new Date().toISOString(),
+      }, activeAccountId);
+    }
+
+    showToast('Budget ready', {
+      detail: packCategories.length
+        ? `${packCategories.length} categories funded from ${income.name}.`
+        : `${income.name} added.`,
+    });
+  }, [activeAccountId, showToast]);
+
+  const handleRecalculateCounters = useCallback(async () => {
+    const report = await recalculateSpendCounters(activeAccountId);
+    if (report.repaired > 0) {
+      showToast(`Repaired ${report.repaired} spend counter${report.repaired === 1 ? '' : 's'}`, { severity: 'warn' });
+    }
+    return report;
   }, [activeAccountId, showToast]);
 
   const handleAddRule = useCallback((rule) => addRule(rule, activeAccountId), [activeAccountId]);
@@ -663,15 +741,36 @@ export default function App() {
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
       if (modal) return;
 
-      if (e.key === 'a' || e.key === 'A') {
-        e.preventDefault();
-        setModal('addTx');
+      const key = e.key.toLowerCase();
+
+      // "g then <letter>" jumps to a view, the convention most keyboard-driven
+      // apps use. The pending "g" expires so a stray press doesn't linger.
+      if (pendingGoto.current) {
+        clearTimeout(pendingGoto.current.timer);
+        pendingGoto.current = null;
+        const target = GOTO_KEYS[key];
+        if (target) {
+          e.preventDefault();
+          navigate(target);
+          return;
+        }
       }
+
+      if (key === 'g') {
+        e.preventDefault();
+        pendingGoto.current = { timer: setTimeout(() => { pendingGoto.current = null; }, 1500) };
+        return;
+      }
+
+      if (key === 'a') { e.preventDefault(); setModal('addTx'); return; }
+      if (key === 'b') { e.preventDefault(); setModal('bulkAddTx'); return; }
+      if (key === '?') { e.preventDefault(); setModal('shortcuts'); return; }
+      if (key === '/') { e.preventDefault(); navigate('transactions'); }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [modal]);
+  }, [modal, navigate]);
 
   // ── Nudges ───────────────────────────────────────────────────────────────
   const nudges = useMemo(() => filterDismissedNudges(
@@ -711,6 +810,7 @@ export default function App() {
     { id: 'one-off-income', label: 'Add one-off income', keywords: 'gift refund bonus paid', run: () => setModal('addOneOffIncome') },
     { id: 'add-income', label: 'Add an income source', keywords: 'salary wage pay', run: () => setModal('addIncome') },
     { id: 'add-category', label: 'Add a budget category', keywords: 'budget allowance', run: () => setModal('addCategory') },
+    { id: 'shortcuts', label: 'Show keyboard shortcuts', keywords: 'help keys hotkeys', run: () => setModal('shortcuts') },
     { id: 'add-goal', label: 'Add a savings goal', keywords: 'save sinking fund debt', run: () => setModal('addGoal') },
     { id: 'add-subscription', label: 'Add a subscription', keywords: 'recurring bill netflix', run: () => setModal('addSubscription') },
     { id: 'adjust-budget', label: 'Adjust a budget', keywords: 'top up borrow move money', run: () => handleOpenAdjust(null) },
@@ -840,6 +940,7 @@ export default function App() {
               onDeleteTransaction={handleDeleteTransaction}
               onOpenCategory={(id) => { setDetailCategoryId(id); setView('categoryDetail'); }}
               onAdjust={handleOpenAdjust}
+              onRunWizard={handleRunWizard}
             />
           )}
           {view === 'categoryDetail' && (
@@ -925,7 +1026,7 @@ export default function App() {
               expenseCategories={categories} settings={settings} incomes={incomes}
               onAddItem={() => { setWishlistDefaultCatId(null); setModal('addWish'); }}
               onEditItem={handleEditWishlistItem}
-              onDeleteItem={deleteWishlistItem}
+              onDeleteItem={handleDeleteWishlistItem}
               onAddWishlistCat={(data) => addWishlistCategory(data, activeAccountId)}
               onEditWishlistCat={handleEditWishlistList}
               onDeleteWishlistCat={deleteWishlistCategory}
@@ -952,6 +1053,7 @@ export default function App() {
               rules={rules} onAddRule={handleAddRule} onUpdateRule={handleUpdateRule} onDeleteRule={handleDeleteRule}
               templates={templates} onAddTemplate={handleAddTemplate} onDeleteTemplate={handleDeleteTemplate}
               nudgeCount={nudges.length}
+              onRecalculate={handleRecalculateCounters}
               showConfirm={showConfirm} showAlert={showAlert} showPrompt={showPrompt} />
           )}
           </Suspense>)}
@@ -1081,6 +1183,23 @@ export default function App() {
       {modal === 'exportChatSummaryOptions' && chatSummarySchema && (
         <ExportChatSummaryOptionsModal schema={chatSummarySchema} onConfirm={handleExportChatSummary}
           onClose={() => setModal(null)} />
+      )}
+      {modal === 'shortcuts' && (
+        <Modal title="Keyboard shortcuts" onClose={() => setModal(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {SHORTCUTS.map(([keys, description]) => (
+              <div key={keys} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', borderRadius: 9, background: 'rgba(255,255,255,0.04)' }}>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{description}</span>
+                <kbd style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+                  {keys}
+                </kbd>
+              </div>
+            ))}
+          </div>
+          <div className="modal-actions" style={{ display: 'flex', marginTop: 18 }}>
+            <button className="btn-primary" onClick={() => setModal(null)} style={{ flex: 1 }}>Got it</button>
+          </div>
+        </Modal>
       )}
       {modal === 'addGoal' && (
         <AddGoalModal incomes={incomes} onAdd={handleAddGoal} onClose={() => setModal(null)} />

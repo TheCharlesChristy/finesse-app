@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ArrowLeftRight, Check, Pencil, Plus, Trash2, Wallet, X } from 'lucide-react';
 import { fmt } from '../utils';
 import { CardTitle, IconButton } from '../components/ui';
@@ -23,7 +23,10 @@ export default function Accounts({
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState('');
   const [editBalance, setEditBalance] = useState('');
-  const [fromId, setFromId] = useState(activeAccountId || '');
+  // Deliberately starts empty and falls back to the active account at render:
+  // syncing it in an effect meant a wasted render and a stale value whenever
+  // the active account changed.
+  const [fromId, setFromId] = useState('');
   const [toId, setToId] = useState('');
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
@@ -45,9 +48,7 @@ export default function Accounts({
     .sort((a, b) => new Date(b.date) - new Date(a.date))
     .slice(0, 8);
 
-  useEffect(() => {
-    if (activeAccountId && !fromId) setFromId(activeAccountId);
-  }, [activeAccountId, fromId]);
+  const effectiveFromId = fromId || activeAccountId || '';
 
   const startEdit = (account) => {
     setEditingId(account.id);
@@ -78,10 +79,10 @@ export default function Accounts({
 
   const handleTransfer = async () => {
     const transferAmount = parseFloat(amount) || 0;
-    if (!fromId || !toId || Number(fromId) === Number(toId) || transferAmount <= 0) return;
+    if (!effectiveFromId || !toId || Number(effectiveFromId) === Number(toId) || transferAmount <= 0) return;
 
     await onTransfer({
-      fromAccountId: Number(fromId),
+      fromAccountId: Number(effectiveFromId),
       toAccountId: Number(toId),
       amount: transferAmount,
       note,
@@ -212,7 +213,7 @@ export default function Accounts({
         <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
           <div>
             <label htmlFor="transfer-from" className="field-label">From</label>
-            <select id="transfer-from" className="glass-input" value={fromId || ''} onChange={e => setFromId(e.target.value)}>
+            <select id="transfer-from" className="glass-input" value={effectiveFromId} onChange={e => setFromId(e.target.value)}>
               <option value="">Select account</option>
               {accounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
             </select>
@@ -236,7 +237,7 @@ export default function Accounts({
             onKeyDown={e => e.key === 'Enter' && handleTransfer()}
             style={{ flex: '1 1 220px' }} />
           <button className="btn-primary mobile-full" onClick={handleTransfer}
-            disabled={!fromId || !toId || Number(fromId) === Number(toId) || (parseFloat(amount) || 0) <= 0}
+            disabled={!effectiveFromId || !toId || Number(effectiveFromId) === Number(toId) || (parseFloat(amount) || 0) <= 0}
             style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
             <ArrowLeftRight size={14} /> Transfer
           </button>

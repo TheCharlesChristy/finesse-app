@@ -23,6 +23,7 @@ import {
 } from '../utils';
 import { format } from 'date-fns';
 import { CardTitle, IconButton } from '../components/ui';
+import Wizard from '../components/Wizard';
 
 const INCOME_PERIOD_LABEL = { week: 'Weekly', month: 'Monthly', year: 'Yearly' };
 
@@ -45,12 +46,13 @@ export default function Dashboard({
   onIncomeHoldToggle, onIncomeFastForward,
   onEditIncome, onDeleteIncome,
   onEditCategory, onDeleteCategory,
-  onEditTransaction, onDeleteTransaction, onOpenCategory,
+  onEditTransaction, onDeleteTransaction, onOpenCategory, onRunWizard,
   onAdjust,
 }) {
   const [showAllIncomes, setShowAllIncomes] = useState(false);
   const [showAllCategories, setShowAllCategories] = useState(false);
   const [incomePeriod, setIncomePeriod] = useState('month');
+  const [wizardDismissed, setWizardDismissed] = useState(false);
 
   // Derived totals.
   //
@@ -113,7 +115,10 @@ export default function Dashboard({
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
       {/* ── First-run onboarding ── */}
-      {isNewUser && (
+      {isNewUser && onRunWizard && !wizardDismissed && (
+        <Wizard onComplete={onRunWizard} onSkip={() => setWizardDismissed(true)} />
+      )}
+      {isNewUser && (!onRunWizard || wizardDismissed) && (
         <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px', borderColor: 'rgba(79,255,176,0.28)', background: 'rgba(79,255,176,0.05)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
             <Sparkles size={18} color="var(--accent-mint)" aria-hidden="true" />

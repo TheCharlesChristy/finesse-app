@@ -1083,3 +1083,17 @@ html[data-theme="light"] .sidebar-overlay {
   border-bottom: 1px solid rgba(255,255,255,0.04);
 }
 .nudge-item:last-child { border-bottom: none; }
+
+/* ── Reduced motion ─────────────────────────────────────────────────────────
+   Respect the OS setting rather than animating regardless. Transitions that
+   only communicate state (progress bars, hovers) are safe to drop entirely. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

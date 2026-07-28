@@ -64,6 +64,12 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
 
   useEffect(() => {
     if (allocTouched) return;
+  // Deliberate: allocations are derived from the allowance, but for a paced
+  // category the allowance itself depends on the cycle length of the incomes
+  // those allocations point at. That circle can't be resolved during a single
+  // render, so this settles it after one — which is what the rule flags.
+  // Converges because it only writes while the user hasn't touched the split.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
     setIncomeAllocations(makeAutoIncomeAllocations(allowanceValue, incomes, categories));
   }, [allocTouched, allowanceValue, incomes, categories]);
 
@@ -265,6 +271,12 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
 
   useEffect(() => {
     if (allocTouched) return;
+  // Deliberate: allocations are derived from the allowance, but for a paced
+  // category the allowance itself depends on the cycle length of the incomes
+  // those allocations point at. That circle can't be resolved during a single
+  // render, so this settles it after one — which is what the rule flags.
+  // Converges because it only writes while the user hasn't touched the split.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
     setIncomeAllocations(makeAutoIncomeAllocations(allowanceValue, incomes, categories, category.id));
   }, [allocTouched, allowanceValue, incomes, categories, category.id]);
 

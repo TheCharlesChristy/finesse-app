@@ -45,15 +45,20 @@ page.on('console', m => {
 await page.goto(BASE, { waitUntil: 'networkidle' });
 
 await page.getByText('Welcome to Finesse').waitFor({ timeout: 15000 });
-step('first-run onboarding renders');
+step('first-run wizard renders');
 
-await page.getByRole('button', { name: 'Add your first income' }).click();
-await page.getByRole('dialog').waitFor();
-await page.getByLabel('Name').fill('Salary');
-await page.getByLabel('Amount (£)').fill('2000');
-await page.getByRole('button', { name: 'Add Income', exact: true }).click();
-await page.getByRole('dialog').waitFor({ state: 'detached' });
-step('income added');
+// The wizard creates the income; categories are added by hand afterwards so the
+// rest of the walkthrough works against known figures.
+await page.getByLabel("What do you call it?").fill('Salary');
+await page.getByLabel(/How much/).fill('2000');
+await page.getByRole('button', { name: 'Continue' }).click();
+await page.getByRole('radio', { name: /I will set my own up/ }).click();
+await page.getByRole('button', { name: 'Start budgeting' }).click();
+await page.waitForTimeout(700);
+
+const afterWizard = await page.locator('body').innerText();
+if (!afterWizard.includes('Salary')) errors.push('wizard did not create the income');
+step('wizard creates the income');
 
 await page.getByRole('button', { name: '+ Category' }).click();
 await page.getByRole('dialog').waitFor();
@@ -307,6 +312,56 @@ const fc = await page.locator('body').innerText();
 if (!/Cash Flow/i.test(fc)) errors.push('cash-flow forecast missing');
 if (!/(goes negative|stay in the black)/i.test(fc)) errors.push('cash-flow verdict missing');
 step('cash-flow forecast renders with a verdict');
+
+// ── Polish ───────────────────────────────────────────────────────────────
+
+// Undo has to actually restore, or it's just a nicer-looking delete.
+await page.getByRole('button', { name: 'Transactions', exact: true }).click();
+await page.waitForTimeout(500);
+const txRow = page.getByRole('button', { name: /^Edit From calendar/ });
+if (await txRow.count() === 0) errors.push('test transaction missing before delete');
+
+await page.getByRole('button', { name: /^Delete From calendar/ }).first().click();
+await page.waitForTimeout(500);
+if (await txRow.count() !== 0) errors.push('delete did not remove the transaction');
+if (!/Deleted From calendar/.test(await page.locator('body').innerText())) {
+  errors.push('no undo toast after delete');
+}
+
+await page.getByRole('button', { name: 'Undo' }).click();
+await page.waitForTimeout(700);
+if (await txRow.count() === 0) errors.push('undo did not restore the transaction');
+step('delete shows an undo toast that actually restores');
+
+// Keyboard shortcuts sheet.
+await page.keyboard.press('?');
+await page.getByRole('dialog').waitFor({ timeout: 5000 });
+const shortcutText = await page.getByRole('dialog').innerText();
+if (!/Command palette/.test(shortcutText)) errors.push('shortcut help sheet missing entries');
+await page.getByRole('button', { name: 'Got it' }).click();
+await page.waitForTimeout(300);
+step('shortcut help sheet opens with "?"');
+
+// "g then t" navigation.
+await page.keyboard.press('g');
+await page.keyboard.press('c');
+await page.waitForTimeout(400);
+if (!(await page.locator('h1').innerText()).includes('Calendar')) {
+  errors.push('"g then c" did not navigate to the Calendar');
+}
+step('"g then <key>" navigation works');
+
+// Integrity check reports honestly on a healthy database.
+await page.getByRole('button', { name: 'Settings', exact: true }).click();
+await page.waitForTimeout(400);
+await page.getByRole('button', { name: /Recalculate Spend Counters/ }).click();
+await page.waitForTimeout(700);
+const integrity = await page.locator('body').innerText();
+if (!/counters match the transaction log/.test(integrity)) {
+  const detail = integrity.split('\n').filter(line => /Repaired|counters|Checked/.test(line)).join(' | ');
+  errors.push(`integrity check did not report a clean result: ${detail}`);
+}
+step('integrity check verifies counters against the log');
 
 await browser.close();
 

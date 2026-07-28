@@ -25,6 +25,7 @@ export default function Settings({
   onAddTemplate,
   onDeleteTemplate,
   nudgeCount = 0,
+  onRecalculate,
   showConfirm,
   showAlert,
   showPrompt,
@@ -35,6 +36,18 @@ export default function Settings({
   const [templateAmount, setTemplateAmount] = useState('');
   const [templateCategoryId, setTemplateCategoryId] = useState('');
   const [permission, setPermission] = useState(() => notificationPermission());
+  const [integrityStatus, setIntegrityStatus] = useState(null);
+  const [isRecalculating, setIsRecalculating] = useState(false);
+
+  const handleRecalculate = async () => {
+    if (!onRecalculate) return;
+    setIsRecalculating(true);
+    try {
+      setIntegrityStatus(await onRecalculate());
+    } finally {
+      setIsRecalculating(false);
+    }
+  };
 
   const notificationsOn = Boolean(settings?.notificationsEnabled) && permission === 'granted';
 
@@ -466,6 +479,30 @@ export default function Settings({
         </div>
         <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10 }}>
           Share Link carries your accounts, categories, incomes, subscriptions and wishlist to a new device — it excludes transaction history. Chat Summary lets you pick exactly which data and fields to include before generating a JSON export with computed spending insights, meant for sharing with a financial advisor or an AI assistant for analysis.
+        </div>
+
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 18, paddingTop: 18 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Data Integrity</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
+            Each category&rsquo;s spend is a running counter rather than a fresh
+            sum of its transactions — fast, but it can drift if a write is
+            interrupted. This rebuilds every counter from the transaction log,
+            which is the real record.
+          </div>
+          <button className="btn-secondary" onClick={handleRecalculate} disabled={isRecalculating}
+            style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <RefreshCcw size={14} /> {isRecalculating ? 'Checking…' : 'Recalculate Spend Counters'}
+          </button>
+          {integrityStatus && (
+            <div style={{ color: integrityStatus.repaired > 0 ? 'var(--warn)' : 'var(--good)', fontSize: 12, marginTop: 10, lineHeight: 1.6 }}>
+              {integrityStatus.repaired > 0
+                ? `Repaired ${integrityStatus.repaired} of ${integrityStatus.checked}: ${integrityStatus.categories
+                    .filter(row => Math.abs(row.drift) >= 0.01)
+                    .map(row => `${row.name} ${fmt(row.stored)} → ${fmt(row.actual)}`)
+                    .join(', ')}`
+                : `Checked ${integrityStatus.checked} categor${integrityStatus.checked === 1 ? 'y' : 'ies'} — all counters match the transaction log.`}
+            </div>
+          )}
         </div>
 
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 18, paddingTop: 18 }}>

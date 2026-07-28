@@ -244,8 +244,12 @@ must keep it in step with the transaction log — `db.test.js` covers those
 invariants and new mutations belong there too. `recalculateSpendCounters()`
 rebuilds the counters from the log if they ever drift.
 
-The repo has 10 pre-existing ESLint errors (mostly `setState` inside effects).
-Don't add new ones; fixing the existing set is tracked separately.
+`npm run lint` is clean — keep it that way. `setState` inside an effect is the
+error you're most likely to hit; the fix is almost always to derive the value
+during render instead. The two allocation effects in `modals/category.jsx` are
+the one justified exception (the allowance and its funding split depend on each
+other, so the circle can't close in a single render) and carry a comment saying
+so.
 
 ---
 
