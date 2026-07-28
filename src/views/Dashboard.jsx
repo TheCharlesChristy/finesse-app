@@ -24,6 +24,8 @@ import {
 import { format } from 'date-fns';
 import { CardTitle, IconButton } from '../components/ui';
 
+const INCOME_PERIOD_LABEL = { week: 'Weekly', month: 'Monthly', year: 'Yearly' };
+
 const FREQ_LABEL = {
   weekly: 'Weekly',
   fortnightly: 'Fortnightly',
@@ -38,7 +40,7 @@ function ordinal(n) {
 }
 
 export default function Dashboard({
-  categories, settings, transactions, incomes = [], subscriptions = [],
+  categories, settings, transactions, incomes = [], subscriptions = [], goalCommitment = 0,
   onAddTx, onAddCategory, onAddIncome, onAddOneOffIncome, onAddSubscription,
   onIncomeHoldToggle, onIncomeFastForward,
   onEditIncome, onDeleteIncome,
@@ -48,6 +50,7 @@ export default function Dashboard({
 }) {
   const [showAllIncomes, setShowAllIncomes] = useState(false);
   const [showAllCategories, setShowAllCategories] = useState(false);
+  const [incomePeriod, setIncomePeriod] = useState('month');
 
   // Derived totals.
   //
@@ -58,10 +61,10 @@ export default function Dashboard({
   //                  monthly salary have to be converted before being added.
   const mixedFrequencies = hasMixedIncomeFrequencies(incomes);
   const monthlyIncome = incomes.length > 0
-    ? getNormalisedIncomeTotal(incomes, 'month')
+    ? getNormalisedIncomeTotal(incomes, incomePeriod)
     : (settings?.income || 0);
   const monthlyAllocated = incomes.length > 0
-    ? getNormalisedAllowanceTotal(categories, incomes, 'month')
+    ? getNormalisedAllowanceTotal(categories, incomes, incomePeriod)
     : categories.reduce((s, c) => s + (c.allowance || 0), 0);
   const allocatedPct = monthlyIncome > 0 ? (monthlyAllocated / monthlyIncome) * 100 : 0;
 
@@ -82,8 +85,8 @@ export default function Dashboard({
   const overAllocatedIncomes = incomes.filter(income => (incomeUsage[String(income.id)] || 0) > (income.amount || 0) + 0.005);
 
   const safeToSpend = useMemo(
-    () => getSafeToSpend({ categories, incomes, subscriptions, settings }),
-    [categories, incomes, subscriptions, settings],
+    () => getSafeToSpend({ categories, incomes, subscriptions, settings, goalCommitment }),
+    [categories, incomes, subscriptions, settings, goalCommitment],
   );
 
   const comparison = useMemo(
@@ -182,7 +185,26 @@ export default function Dashboard({
       <div className="glass dashboard-summary-card">
         <div className="dashboard-summary-grid">
           <div>
-            <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 700, marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Monthly Income</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 5, flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                {INCOME_PERIOD_LABEL[incomePeriod]} Income
+              </span>
+              <div role="group" aria-label="Income period" style={{ display: 'flex', gap: 4 }}>
+                {['week', 'month', 'year'].map(period => (
+                  <button key={period} type="button" aria-pressed={incomePeriod === period}
+                    onClick={() => setIncomePeriod(period)}
+                    style={{
+                      padding: '2px 8px', fontSize: 10, borderRadius: 7, cursor: 'pointer',
+                      fontFamily: 'DM Sans, sans-serif', textTransform: 'capitalize',
+                      border: '1px solid ' + (incomePeriod === period ? 'rgba(79,255,176,0.4)' : 'transparent'),
+                      background: incomePeriod === period ? 'rgba(79,255,176,0.12)' : 'rgba(255,255,255,0.05)',
+                      color: incomePeriod === period ? 'var(--accent-mint)' : 'var(--text-muted)',
+                    }}>
+                    {period}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="font-display dashboard-summary-value" style={{ color: 'var(--accent-mint)' }}>{fmt(monthlyIncome)}</div>
             <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
               {fmt(monthlyAllocated)} allocated · {fmt(roundMoney(monthlyIncome - monthlyAllocated))} unallocated
@@ -209,9 +231,9 @@ export default function Dashboard({
             <div>
               <div style={{ display: 'flex', height: 6, borderRadius: 99, overflow: 'hidden', background: 'rgba(255,255,255,0.06)', gap: 1 }}>
                 {categories.filter(c => (c.allowance || 0) > 0).map(cat => {
-                  const monthlyShare = getNormalisedCategoryAllowance(cat, incomes, 'month');
+                  const monthlyShare = getNormalisedCategoryAllowance(cat, incomes, incomePeriod);
                   return (
-                    <div key={cat.id} title={`${cat.name}: ${fmt(monthlyShare)}/month`}
+                    <div key={cat.id} title={`${cat.name}: ${fmt(monthlyShare)}/${incomePeriod}`}
                       style={{ width: `${Math.min(100, (monthlyShare / monthlyIncome) * 100)}%`, background: cat.color || 'var(--accent-blue)', height: '100%', minWidth: 2 }} />
                   );
                 })}
@@ -448,6 +470,16 @@ export default function Dashboard({
                                 padding: '1px 6px', borderRadius: 10,
                               }}>
                                 +{fmt(boost)} added
+                              </span>
+                            )}
+                            {roundMoney(cat.rolloverBalance || 0) !== 0 && (
+                              <span title="Carried over from previous cycles" style={{
+                                fontSize: 10,
+                                color: (cat.rolloverBalance || 0) > 0 ? 'var(--accent-blue)' : 'var(--danger)',
+                                background: (cat.rolloverBalance || 0) > 0 ? 'rgba(93,184,255,0.12)' : 'rgba(255,107,138,0.1)',
+                                padding: '1px 6px', borderRadius: 10,
+                              }}>
+                                {(cat.rolloverBalance || 0) > 0 ? '+' : '−'}{fmt(Math.abs(cat.rolloverBalance))} rolled over
                               </span>
                             )}
                             {boost < 0 && (

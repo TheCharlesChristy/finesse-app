@@ -22,6 +22,10 @@ import {
   addTemplate,
   getTemplates,
   logTemplate,
+  addGoal,
+  getGoals,
+  contributeToGoal,
+  autoContributeGoals,
 } from '../db';
 
 const getCategory = (id) => db.categories.get(id);
@@ -413,5 +417,133 @@ describe('rules and templates', () => {
     await logTemplate(commonId, accountId);
 
     expect((await getTemplates(accountId)).map(t => t.name)).toEqual(['Common', 'Rare']);
+  });
+});
+
+describe('category rollover', () => {
+  it('carries unspent budget into the next cycle when enabled', async () => {
+    const catId = await makeCategory({ allowance: 300, rolloverEnabled: true });
+    await addTransaction({ accountId, categoryId: catId, amount: 100 });
+
+    await resetCategoriesForIncome(1, new Date().toISOString(), accountId);
+
+    const cat = await getCategory(catId);
+    expect(cat.spent).toBe(0);
+    expect(cat.rolloverBalance).toBe(200);
+  });
+
+  it('accumulates across several cycles', async () => {
+    const catId = await makeCategory({ allowance: 100, rolloverEnabled: true });
+
+    await resetCategoriesForIncome(1, new Date().toISOString(), accountId);
+    expect((await getCategory(catId)).rolloverBalance).toBe(100);
+
+    await resetCategoriesForIncome(1, new Date().toISOString(), accountId);
+    expect((await getCategory(catId)).rolloverBalance).toBe(200);
+  });
+
+  it('does nothing unless the category opts in', async () => {
+    const catId = await makeCategory({ allowance: 300 });
+    await addTransaction({ accountId, categoryId: catId, amount: 100 });
+
+    await resetCategoriesForIncome(1, new Date().toISOString(), accountId);
+    expect((await getCategory(catId)).rolloverBalance).toBe(0);
+  });
+
+  it('drops overspend by default, but carries it when asked', async () => {
+    const forgiving = await makeCategory({ allowance: 100, rolloverEnabled: true });
+    const strict = await makeCategory({ allowance: 100, rolloverEnabled: true, rolloverCarryOverspend: true });
+    await addTransaction({ accountId, categoryId: forgiving, amount: 150 });
+    await addTransaction({ accountId, categoryId: strict, amount: 150 });
+
+    await resetBudget(accountId);
+
+    expect((await getCategory(forgiving)).rolloverBalance).toBe(0);
+    expect((await getCategory(strict)).rolloverBalance).toBe(-50);
+  });
+
+  it('does not convert an unspent top-up into permanent budget', async () => {
+    const catId = await makeCategory({ allowance: 100, rolloverEnabled: true });
+    await topUpCategoryFromIncome(catId, 50);
+
+    await resetBudget(accountId);
+
+    const cat = await getCategory(catId);
+    expect(cat.rolloverBalance).toBe(100); // the allowance, not 150
+    expect(cat.temporaryBoost).toBe(0);
+  });
+
+  it('leaves rollover alone on a partial reset', async () => {
+    const catId = await makeCategory({
+      allowance: 200,
+      rolloverEnabled: true,
+      incomeAllocations: [{ incomeId: 1, percent: 50 }, { incomeId: 2, percent: 50 }],
+    });
+    await addTransaction({ accountId, categoryId: catId, amount: 60 });
+
+    await resetCategoriesForIncome(1, new Date().toISOString(), accountId);
+    expect((await getCategory(catId)).rolloverBalance ?? 0).toBe(0); // cycle not finished
+
+    await resetCategoriesForIncome(2, new Date().toISOString(), accountId);
+    expect((await getCategory(catId)).rolloverBalance).toBe(140);
+  });
+});
+
+describe('goals', () => {
+  it('caps a contribution at the target and never goes negative', async () => {
+    const goalId = await addGoal({ name: 'Laptop', target: 100, perCycleContribution: 25 }, accountId);
+
+    expect(await contributeToGoal(goalId, 40)).toBe(40);
+    expect(await contributeToGoal(goalId, 500)).toBe(100);   // capped at target
+    expect(await contributeToGoal(goalId, -250)).toBe(0);    // floored at zero
+  });
+
+  it('takes the per-cycle contribution from linked goals when income lands', async () => {
+    const linked = await addGoal({ name: 'Holiday', target: 1000, perCycleContribution: 100, incomeId: 1 }, accountId);
+    const other = await addGoal({ name: 'Car', target: 500, perCycleContribution: 50, incomeId: 2 }, accountId);
+
+    const count = await autoContributeGoals(1, accountId, '2026-07-25T00:00:00.000Z');
+
+    expect(count).toBe(1);
+    expect((await db.goals.get(linked)).saved).toBe(100);
+    expect((await db.goals.get(other)).saved).toBe(0);
+  });
+
+  it('does not contribute twice for the same pay date', async () => {
+    const goalId = await addGoal({ name: 'Holiday', target: 1000, perCycleContribution: 100, incomeId: 1 }, accountId);
+    const at = '2026-07-25T00:00:00.000Z';
+
+    await autoContributeGoals(1, accountId, at);
+    await autoContributeGoals(1, accountId, at); // live queries can re-fire this
+
+    expect((await db.goals.get(goalId)).saved).toBe(100);
+
+    await autoContributeGoals(1, accountId, '2026-08-25T00:00:00.000Z');
+    expect((await db.goals.get(goalId)).saved).toBe(200);
+  });
+
+  it('stops contributing once the target is reached', async () => {
+    const goalId = await addGoal({ name: 'Small', target: 120, perCycleContribution: 100, incomeId: 1 }, accountId);
+
+    await autoContributeGoals(1, accountId, '2026-07-25T00:00:00.000Z');
+    await autoContributeGoals(1, accountId, '2026-08-25T00:00:00.000Z');
+    await autoContributeGoals(1, accountId, '2026-09-25T00:00:00.000Z');
+
+    expect((await db.goals.get(goalId)).saved).toBe(120);
+  });
+
+  it('sorts unfinished goals by target date and sinks completed ones', async () => {
+    await addGoal({ name: 'Done', target: 10, saved: 10 }, accountId);
+    await addGoal({ name: 'Later', target: 100, targetDate: '2027-01-01' }, accountId);
+    await addGoal({ name: 'Sooner', target: 100, targetDate: '2026-09-01' }, accountId);
+
+    expect((await getGoals(accountId)).map(g => g.name)).toEqual(['Sooner', 'Later', 'Done']);
+  });
+
+  it('does not touch the account balance — a goal is an earmark, not a transfer', async () => {
+    const goalId = await addGoal({ name: 'Laptop', target: 100 }, accountId);
+    await contributeToGoal(goalId, 60);
+
+    expect((await getAccount(accountId)).balance).toBe(1000);
   });
 });

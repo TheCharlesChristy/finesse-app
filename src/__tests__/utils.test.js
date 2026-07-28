@@ -8,6 +8,11 @@ import {
   getCumulativeOverspend,
   getDailyBurnRate,
   getEffectiveAllowance,
+  getGoalCommitment,
+  getGoalEta,
+  getGoalProgress,
+  getRolloverForNextCycle,
+  isGoalOffTrack,
   getIncomeCycleAverageDays,
   getNormalisedAllowanceTotal,
   getNormalisedCategoryAllowance,
@@ -628,5 +633,105 @@ describe('insight', () => {
       { id: 5, categoryId: 1, amount: 200, date: day(-5), type: 'refund' },
     ]);
     expect(withRefund.has(5)).toBe(false);
+  });
+});
+
+describe('goals', () => {
+  it('reports progress, and treats reaching the target as complete', () => {
+    expect(getGoalProgress({ target: 200, saved: 50 }))
+      .toMatchObject({ pct: 25, remaining: 150, complete: false });
+    expect(getGoalProgress({ target: 200, saved: 200 }).complete).toBe(true);
+    expect(getGoalProgress({ target: 0, saved: 0 })).toMatchObject({ pct: 0, complete: false });
+  });
+
+  it('estimates completion from the contribution rate and pay cycle', () => {
+    const incomes = [makeIncome({ id: 10, resetFrequency: 'monthly' })];
+    const eta = getGoalEta({ target: 1000, saved: 200, perCycleContribution: 100, incomeId: 10 }, incomes);
+
+    expect(eta.cycles).toBe(8);
+    expect(eta.date).toBeInstanceOf(Date);
+  });
+
+  it('says "no end date" rather than infinity when nothing is being contributed', () => {
+    expect(getGoalEta({ target: 100, saved: 0, perCycleContribution: 0 }, []))
+      .toMatchObject({ cycles: null, date: null });
+  });
+
+  it('flags a goal that will miss its target date', () => {
+    const incomes = [makeIncome({ id: 10, resetFrequency: 'monthly' })];
+    const soon = iso(addDays(new Date(), 30));
+    const distant = iso(addDays(new Date(), 3650));
+
+    // £900 to go at £100/month can't be done in a month.
+    expect(isGoalOffTrack({ target: 1000, saved: 100, perCycleContribution: 100, incomeId: 10, targetDate: soon }, incomes)).toBe(true);
+    expect(isGoalOffTrack({ target: 1000, saved: 100, perCycleContribution: 100, incomeId: 10, targetDate: distant }, incomes)).toBe(false);
+    // A deadline with no contribution is off track by definition.
+    expect(isGoalOffTrack({ target: 1000, saved: 0, perCycleContribution: 0, targetDate: soon }, incomes)).toBe(true);
+    // No deadline means it can't be late.
+    expect(isGoalOffTrack({ target: 1000, saved: 0, perCycleContribution: 0 }, incomes)).toBe(false);
+    // Finished goals are never off track.
+    expect(isGoalOffTrack({ target: 100, saved: 100, targetDate: soon }, incomes)).toBe(false);
+  });
+
+  it('counts only contributions still pending this cycle', () => {
+    const incomes = [makeIncome({ id: 10, resetFrequency: 'monthly', daysAgo: 3 })];
+    const pending = { target: 1000, saved: 0, perCycleContribution: 100, incomeId: 10 };
+
+    expect(getGoalCommitment([pending], incomes)).toBe(100);
+
+    // Already taken this cycle — charging for it again would understate what's free.
+    const taken = { ...pending, lastAutoContributeAt: iso(addDays(new Date(), -1)) };
+    expect(getGoalCommitment([taken], incomes)).toBe(0);
+  });
+
+  it('never commits more than the goal still needs, and skips finished goals', () => {
+    const incomes = [makeIncome({ id: 10 })];
+    expect(getGoalCommitment([{ target: 100, saved: 80, perCycleContribution: 100, incomeId: 10 }], incomes)).toBe(20);
+    expect(getGoalCommitment([{ target: 100, saved: 100, perCycleContribution: 100, incomeId: 10 }], incomes)).toBe(0);
+  });
+
+  it('reduces safe-to-spend by pending savings', () => {
+    const incomes = [makeIncome({ id: 10, amount: 1000, resetFrequency: 'monthly', daysAgo: 0 })];
+    const categories = [makeCategory({ id: 1, allowance: 400, spent: 0, incomeId: 10, daysAgo: 0 })];
+    const goals = [{ target: 1000, saved: 0, perCycleContribution: 100, incomeId: 10 }];
+
+    const commitment = getGoalCommitment(goals, incomes);
+    const result = getSafeToSpend({ categories, incomes, goalCommitment: commitment });
+
+    expect(commitment).toBe(100);
+    expect(result.toReset).toBe(300);
+    expect(result.committedGoals).toBe(100);
+  });
+});
+
+describe('rollover', () => {
+  it('adds carried budget to what is spendable', () => {
+    expect(getEffectiveAllowance({ allowance: 100, rolloverBalance: 40 })).toBe(140);
+    expect(getEffectiveAllowance({ allowance: 100, rolloverBalance: 40, temporaryBoost: 10 })).toBe(150);
+  });
+
+  it('carries the unspent remainder, ignoring temporary top-ups', () => {
+    expect(getRolloverForNextCycle({ rolloverEnabled: true, allowance: 100, spent: 30 })).toBe(70);
+    // The £50 boost is a one-cycle grant and must not become permanent budget.
+    expect(getRolloverForNextCycle({ rolloverEnabled: true, allowance: 100, spent: 30, temporaryBoost: 50 })).toBe(70);
+  });
+
+  it('compounds an existing carried balance', () => {
+    expect(getRolloverForNextCycle({ rolloverEnabled: true, allowance: 100, rolloverBalance: 50, spent: 20 })).toBe(130);
+  });
+
+  it('drops overspend unless carrying it was requested', () => {
+    expect(getRolloverForNextCycle({ rolloverEnabled: true, allowance: 100, spent: 150 })).toBe(0);
+    expect(getRolloverForNextCycle({ rolloverEnabled: true, allowance: 100, spent: 150, rolloverCarryOverspend: true })).toBe(-50);
+  });
+
+  it('accounts for spend already cleared by a partial reset', () => {
+    // £200 allowance, £60 spent across the cycle, £30 of it already cleared by
+    // an earlier income's reset — the true remainder is £140, not £170.
+    expect(getRolloverForNextCycle({ rolloverEnabled: true, allowance: 200, spent: 30 }, 30)).toBe(140);
+  });
+
+  it('does nothing when the category has not opted in', () => {
+    expect(getRolloverForNextCycle({ allowance: 100, spent: 10 })).toBe(0);
   });
 });

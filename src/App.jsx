@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
-import { CalendarDays, CreditCard, LayoutDashboard, ListOrdered, Menu, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
+import { CalendarDays, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
   getSettings, saveSettings, addCategory, updateCategory, deleteCategory,
@@ -13,9 +13,10 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   addVariable, updateVariable, deleteVariable,
   topUpCategoryFromIncome, borrowBudgetBetweenCategories, resetCategoryTopUps,
   addSplitTransaction, addRule, updateRule, deleteRule,
-  addTemplate, deleteTemplate, logTemplate } from './db';
+  addTemplate, deleteTemplate, logTemplate,
+  addGoal, updateGoal, deleteGoal, contributeToGoal, autoContributeGoals } from './db';
 import { useFinesseData } from './hooks/useFinesseData';
-import { calcNextReset, evaluateFormula, fmt, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
+import { calcNextReset, evaluateFormula, fmt, getGoalCommitment, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
 
 const Dashboard     = lazy(() => import('./views/Dashboard'));
 const Transactions  = lazy(() => import('./views/Transactions'));
@@ -28,10 +29,12 @@ const Subscriptions = lazy(() => import('./views/Subscriptions'));
 const SettingsView  = lazy(() => import('./views/Settings'));
 const Variables     = lazy(() => import('./views/Variables'));
 const CategoryDetail = lazy(() => import('./views/CategoryDetail'));
+const Goals         = lazy(() => import('./views/Goals'));
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
-  AdjustBudgetModal, ExportChatSummaryOptionsModal } from './components/modals';
+  AdjustBudgetModal, ExportChatSummaryOptionsModal,
+  AddGoalModal, SaveForItemModal } from './components/modals';
 import { Modal } from './components/ui';
 import { useDialog } from './components/useDialog';
 import { useToast } from './components/Toast';
@@ -46,6 +49,7 @@ const NAV = [
   { id: 'calendar',    label: 'Calendar',     Icon: CalendarDays },
   { id: 'subscriptions', label: 'Subscriptions', Icon: CreditCard },
   { id: 'forecasting', label: 'Forecasting',  Icon: TrendingUp },
+  { id: 'goals',       label: 'Goals',         Icon: PiggyBank },
   { id: 'wishlist',    label: 'Wishlist',      Icon: ShoppingBag },
   { id: 'variables',   label: 'Variables',     Icon: SlidersHorizontal },
   { id: 'settings',    label: 'Settings',     Icon: SettingsIcon },
@@ -90,6 +94,8 @@ export default function App() {
   const [adjustCategoryId, setAdjustCategoryId] = useState(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [detailCategoryId, setDetailCategoryId] = useState(null);
+  const [editingGoal, setEditingGoal] = useState(null);
+  const [savingForItem, setSavingForItem] = useState(null);
   const [activeAccountId, setActiveAccountId] = useState(() => {
     const stored = Number(localStorage.getItem('finesse.activeAccountId'));
     return Number.isFinite(stored) && stored > 0 ? stored : null;
@@ -98,7 +104,7 @@ export default function App() {
   const {
     accountsQuery, accounts, accountTransfers, settings, categories, transactions,
     wishlistItems, wishlistCategories, incomeEvents, subscriptions, incomes, variables,
-    rules, templates,
+    rules, templates, goals,
   } = useFinesseData(activeAccountId);
   const activeAccount = accounts.find(account => Number(account.id) === Number(activeAccountId)) || null;
 
@@ -206,6 +212,8 @@ export default function App() {
           type: 'recurring',
         });
         await resetCategoriesForIncome(income.id, resetAt, activeAccountId);
+        // After the reset, so a cycle's savings come out of the fresh budget.
+        await autoContributeGoals(income.id, activeAccountId, resetAt);
         await updateIncome(income.id, { lastPaid: resetAt, holdActive: false });
         if (!latestReset || due > latestReset) latestReset = due;
       }
@@ -413,6 +421,7 @@ export default function App() {
     });
     await updateIncome(id, { lastPaid: isoDate, holdActive: false });
     await resetCategoriesForIncome(id, isoDate, activeAccountId);
+    await autoContributeGoals(id, activeAccountId, isoDate);
     // Keep settings.lastReset current so forecasting burn rates stay accurate
     const current = await getSettings(activeAccountId);
     if (current) await saveSettings({ ...current, lastReset: isoDate }, activeAccountId);
@@ -572,6 +581,24 @@ export default function App() {
     addSplitTransaction({ ...data, accountId: activeAccountId })
   ), [activeAccountId]);
 
+  // ── Goal handlers ────────────────────────────────────────────────────────
+  const handleAddGoal = useCallback((goal) => addGoal(goal, activeAccountId), [activeAccountId]);
+  const handleEditGoal = useCallback((goal) => { setEditingGoal(goal); setModal('editGoal'); }, []);
+  const handleContributeToGoal = useCallback((goalId, amount) => contributeToGoal(goalId, amount), []);
+
+  const handleDeleteGoal = useCallback(async (goal) => {
+    const ok = await showConfirm(
+      `Delete "${goal.name}"? Money set aside for it goes back to being ordinary spendable budget.`,
+      { title: 'Delete Goal', confirmText: 'Delete', danger: true },
+    );
+    if (ok) await deleteGoal(goal.id);
+  }, [showConfirm]);
+
+  const handleSaveForItem = useCallback(async (goal) => {
+    await addGoal(goal, activeAccountId);
+    showToast(`Saving for ${goal.name}`, { detail: 'Added to Goals.' });
+  }, [activeAccountId, showToast]);
+
   const handleAddRule = useCallback((rule) => addRule(rule, activeAccountId), [activeAccountId]);
   const handleUpdateRule = useCallback((id, data) => updateRule(id, data), []);
   const handleDeleteRule = useCallback((id) => deleteRule(id), []);
@@ -633,6 +660,7 @@ export default function App() {
     { id: 'one-off-income', label: 'Add one-off income', keywords: 'gift refund bonus paid', run: () => setModal('addOneOffIncome') },
     { id: 'add-income', label: 'Add an income source', keywords: 'salary wage pay', run: () => setModal('addIncome') },
     { id: 'add-category', label: 'Add a budget category', keywords: 'budget allowance', run: () => setModal('addCategory') },
+    { id: 'add-goal', label: 'Add a savings goal', keywords: 'save sinking fund debt', run: () => setModal('addGoal') },
     { id: 'add-subscription', label: 'Add a subscription', keywords: 'recurring bill netflix', run: () => setModal('addSubscription') },
     { id: 'adjust-budget', label: 'Adjust a budget', keywords: 'top up borrow move money', run: () => handleOpenAdjust(null) },
     ...NAV.map(item => ({
@@ -744,6 +772,7 @@ export default function App() {
               incomes={incomes}
               subscriptions={subscriptions}
               variables={variables}
+              goalCommitment={getGoalCommitment(goals, incomes, settings)}
               onAddTx={() => setModal('addTx')}
               onAddCategory={() => setModal('addCategory')}
               onAddIncome={() => setModal('addIncome')}
@@ -773,6 +802,16 @@ export default function App() {
               onAdjust={handleOpenAdjust}
               onEditTransaction={handleEditTransaction}
               onDeleteTransaction={handleDeleteTransaction}
+            />
+          )}
+          {view === 'goals' && (
+            <Goals
+              goals={goals}
+              incomes={incomes}
+              onAddGoal={() => setModal('addGoal')}
+              onEditGoal={handleEditGoal}
+              onDeleteGoal={handleDeleteGoal}
+              onContribute={handleContributeToGoal}
             />
           )}
           {view === 'accounts' && (
@@ -835,6 +874,8 @@ export default function App() {
               onEditWishlistCat={handleEditWishlistList}
               onDeleteWishlistCat={deleteWishlistCategory}
               onAddItemToFolder={(catId) => { setWishlistDefaultCatId(catId); setModal('addWish'); }}
+              goals={goals}
+              onSaveForItem={(item) => { setSavingForItem(item); setModal('saveForItem'); }}
               showConfirm={showConfirm} />
           )}
           {view === 'variables' && (
@@ -983,6 +1024,25 @@ export default function App() {
       {modal === 'exportChatSummaryOptions' && chatSummarySchema && (
         <ExportChatSummaryOptionsModal schema={chatSummarySchema} onConfirm={handleExportChatSummary}
           onClose={() => setModal(null)} />
+      )}
+      {modal === 'addGoal' && (
+        <AddGoalModal incomes={incomes} onAdd={handleAddGoal} onClose={() => setModal(null)} />
+      )}
+      {modal === 'editGoal' && editingGoal && (
+        <AddGoalModal
+          goal={editingGoal}
+          incomes={incomes}
+          onSave={(id, data) => { updateGoal(id, data); setModal(null); setEditingGoal(null); }}
+          onClose={() => { setModal(null); setEditingGoal(null); }}
+        />
+      )}
+      {modal === 'saveForItem' && savingForItem && (
+        <SaveForItemModal
+          item={savingForItem}
+          incomes={incomes}
+          onConfirm={handleSaveForItem}
+          onClose={() => { setModal(null); setSavingForItem(null); }}
+        />
       )}
       {modal === 'adjust' && categories.length > 0 && (
         <AdjustBudgetModal

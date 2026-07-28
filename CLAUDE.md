@@ -132,6 +132,26 @@ Splits are N ordinary transactions sharing a `splitGroupId` — not a parent row
 with children — so every existing query, filter and reset handles them with no
 special-casing, and a single part can be edited or deleted on its own.
 
+### Goals are earmarks, not transfers
+
+Contributing to a goal doesn't move money between accounts — it marks some of
+what you already have as spoken for. That stops goals double-counting against
+transactions, and leaves `account.balance` as the single truth about how much
+money exists. `autoContributeGoals` is idempotent per pay date, because the
+reset path can fire more than once as live queries settle.
+
+### Rollover
+
+Opt-in per category. At a *full* reset the unspent remainder becomes
+`rolloverBalance`, which `getEffectiveAllowance` adds to what's spendable.
+Three fields, three behaviours at reset: `allowance` untouched,
+`temporaryBoost` cleared, `rolloverBalance` created.
+
+A category funded by several incomes resets piecemeal, so by the final reset
+`spent` only holds the remainder. `cycleClearedSpend` accumulates what earlier
+partial resets wiped, and `getRolloverForNextCycle` adds it back — without it,
+rollover over-credits multi-income categories.
+
 ### Schema changes
 
 If you change the Dexie schema, increment the version number and add a new `db.version(N).stores({...})` call. Do not modify the existing `version(1)` call. See DEV_GUIDE.md for the migration pattern.

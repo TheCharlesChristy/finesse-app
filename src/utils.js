@@ -106,12 +106,46 @@ function toValidDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-// Effective allowance = base allowance + any temporary top-up funded from
-// unallocated income for the current cycle. The boost is cleared on reset, so
-// it only affects "how much can I still spend right now", not the recurring
-// base allowance used for income allocation, formulas, or pacing.
+// Effective allowance = base allowance
+//   + any temporary top-up funded from unallocated income for this cycle
+//   + anything rolled over from previous cycles.
+//
+// The three are kept as separate fields because they behave differently at
+// reset: `temporaryBoost` is cleared, `rolloverBalance` is *created*, and
+// `allowance` is untouched. None of them affect the recurring base allowance
+// used for income allocation, formulas, or pacing.
 export function getEffectiveAllowance(category) {
-  return roundMoney((Number(category?.allowance) || 0) + (Number(category?.temporaryBoost) || 0));
+  return roundMoney(
+    (Number(category?.allowance) || 0)
+    + (Number(category?.temporaryBoost) || 0)
+    + (Number(category?.rolloverBalance) || 0)
+  );
+}
+
+/**
+ * What an opt-in rollover category carries into its next cycle.
+ *
+ * Deliberately excludes `temporaryBoost`: a top-up is borrowed or granted for
+ * one cycle, so leaving it unspent should release it rather than convert it
+ * into permanent budget.
+ *
+ * Overspend only carries when the user asked for it. Silently starting the next
+ * cycle in the red is a nasty surprise, but for people who want a true running
+ * balance it's the honest behaviour.
+ */
+export function getRolloverForNextCycle(category, clearedThisCycle = 0) {
+  if (!category?.rolloverEnabled) return 0;
+
+  const base = roundMoney((Number(category.allowance) || 0) + (Number(category.rolloverBalance) || 0));
+  // A category funded by several incomes has its counter cleared piecemeal, one
+  // income at a time, so by the final reset `spent` only holds the remainder.
+  // `clearedThisCycle` restores the rest, or rollover would over-credit by
+  // everything the earlier partial resets already wiped.
+  const spentThisCycle = roundMoney((Number(category.spent) || 0) + (Number(clearedThisCycle) || 0));
+  const leftover = roundMoney(base - spentThisCycle);
+
+  if (leftover >= 0) return leftover;
+  return category.rolloverCarryOverspend ? leftover : 0;
 }
 
 // Spare budget a category can lend or that's still safe to spend: effective
@@ -862,6 +896,95 @@ export function projectedEndBalance(categories = [], settings, incomes = [], per
   const totalProjected = Object.values(burnRates).reduce((sum, rate) => sum + rate, 0) * periodDays;
 
   return roundMoney(income - totalProjected);
+}
+
+// ── Goals ────────────────────────────────────────────────────────────────────
+
+export function getGoalProgress(goal) {
+  const target = Math.abs(roundMoney(goal?.target));
+  const saved = Math.max(0, roundMoney(goal?.saved));
+  const remaining = Math.max(0, roundMoney(target - saved));
+
+  return {
+    target,
+    saved,
+    remaining,
+    pct: target > 0 ? Math.min(100, (saved / target) * 100) : 0,
+    complete: target > 0 && saved >= target - 0.005,
+  };
+}
+
+/**
+ * When a goal finishes at its current contribution rate.
+ *
+ * Returns nulls rather than Infinity when there's no contribution set — "no
+ * end date" is the honest answer, and it lets the UI say so.
+ */
+export function getGoalEta(goal, incomes = [], now = new Date()) {
+  const { remaining, complete } = getGoalProgress(goal);
+  if (complete) return { cycles: 0, date: null, complete: true };
+
+  const perCycle = roundMoney(goal?.perCycleContribution);
+  if (!(perCycle > 0)) return { cycles: null, date: null, complete: false };
+
+  const income = incomes.find(item => Number(item.id) === Number(goal?.incomeId));
+  const cycleDays = getIncomeCycleAverageDays(income ? getIncomeFrequency(income) : 'monthly');
+  const cycles = Math.ceil(remaining / perCycle);
+
+  return {
+    cycles,
+    date: addDays(startOfDay(now), Math.round(cycles * cycleDays)),
+    complete: false,
+    perCycle,
+  };
+}
+
+/** True when a goal will miss its target date at the current rate. */
+export function isGoalOffTrack(goal, incomes = [], now = new Date()) {
+  if (!goal?.targetDate) return false;
+  const target = toValidDate(goal.targetDate);
+  if (!target) return false;
+
+  const { complete } = getGoalProgress(goal);
+  if (complete) return false;
+
+  const eta = getGoalEta(goal, incomes, now);
+  if (!eta.date) return true; // a deadline with no contribution is off track by definition
+  return eta.date > startOfDay(target);
+}
+
+/**
+ * Savings still to be set aside this cycle, for deduction from safe-to-spend.
+ *
+ * Only counts goals that haven't yet had this cycle's contribution taken —
+ * money already moved into a goal has left the spendable pool once, and
+ * charging for it twice would understate what's actually free.
+ */
+export function getGoalCommitment(goals = [], incomes = [], settings = null, now = new Date()) {
+  let total = 0;
+
+  for (const goal of goals) {
+    const perCycle = roundMoney(goal?.perCycleContribution);
+    if (!(perCycle > 0)) continue;
+
+    const { remaining, complete } = getGoalProgress(goal);
+    if (complete) continue;
+
+    const income = incomes.find(item => Number(item.id) === Number(goal.incomeId));
+    if (income) {
+      // Already taken for this cycle? Then it's no longer pending.
+      const cycle = getCategoryCycle(
+        { incomeAllocations: [{ incomeId: Number(goal.incomeId), percent: 100 }] },
+        incomes, settings, now,
+      );
+      const lastTaken = toValidDate(goal.lastAutoContributeAt);
+      if (lastTaken && lastTaken >= cycle.start) continue;
+    }
+
+    total = roundMoney(total + Math.min(perCycle, remaining));
+  }
+
+  return total;
 }
 
 // ── Insight ──────────────────────────────────────────────────────────────────

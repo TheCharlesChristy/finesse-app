@@ -1,7 +1,8 @@
 import Dexie from 'dexie';
 import { getNextRecurringDate, normalizeIncomeAllocations, roundMoney, getEffectiveAllowance,
   getCategorySpare, buildMonthlyHistory, projectedEndBalance, getUpcomingSubscriptionCost,
-  getCategoryCycle, getNormalisedIncomeTotal, getSignedAmount, TX_EXPENSE, TX_REFUND,
+  getCategoryCycle, getNormalisedIncomeTotal, getSignedAmount, getRolloverForNextCycle,
+  TX_EXPENSE, TX_REFUND,
   wishlistAffordability } from './utils';
 
 export const db = new Dexie('FinanceApp');
@@ -982,6 +983,103 @@ export async function logTemplate(templateId, accountId = null) {
   return id;
 }
 
+// ── Savings goals & debts ────────────────────────────────────────────────────
+// A goal is an *earmark*, not a transfer: contributing to it doesn't move money
+// between accounts, it just marks some of what you already have as spoken for.
+// That keeps goals from double-counting against transactions, and means the
+// account balance stays the single truth about how much money exists.
+//
+// Debts are the same shape with `kind: 'debt'` — `target` is what you owed at
+// the start and `saved` is how much of it you've cleared.
+export const GOAL_SAVING = 'saving';
+export const GOAL_DEBT = 'debt';
+
+export async function getGoals(accountId = null) {
+  const rows = accountId == null
+    ? await db.goals.toArray()
+    : await db.goals.where('accountId').equals(Number(accountId)).toArray();
+  return rows.sort((a, b) => {
+    const aDone = (a.saved || 0) >= (a.target || 0);
+    const bDone = (b.saved || 0) >= (b.target || 0);
+    if (aDone !== bDone) return aDone ? 1 : -1; // finished goals sink
+    return new Date(a.targetDate || '9999') - new Date(b.targetDate || '9999');
+  });
+}
+
+export async function addGoal(goal, accountId = null) {
+  return db.goals.add({
+    ...withAccountId(goal, accountId ?? goal.accountId),
+    name: String(goal.name || '').trim(),
+    kind: goal.kind === GOAL_DEBT ? GOAL_DEBT : GOAL_SAVING,
+    target: Math.abs(roundMoney(goal.target)),
+    saved: Math.max(0, roundMoney(goal.saved || 0)),
+    targetDate: goal.targetDate || null,
+    perCycleContribution: Math.max(0, roundMoney(goal.perCycleContribution || 0)),
+    incomeId: goal.incomeId != null ? Number(goal.incomeId) : null,
+    wishlistItemId: goal.wishlistItemId != null ? Number(goal.wishlistItemId) : null,
+    color: goal.color || ACCOUNT_COLORS[0],
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export async function updateGoal(id, data) {
+  const next = { ...data };
+  if (next.target != null) next.target = Math.abs(roundMoney(next.target));
+  if (next.saved != null) next.saved = roundMoney(next.saved);
+  if (next.perCycleContribution != null) next.perCycleContribution = Math.max(0, roundMoney(next.perCycleContribution));
+  if (next.incomeId != null) next.incomeId = Number(next.incomeId);
+  return db.goals.update(id, next);
+}
+
+export async function deleteGoal(id) {
+  return db.goals.delete(id);
+}
+
+/** Move money into a goal (or, with a negative amount, back out of it). */
+export async function contributeToGoal(goalId, amount) {
+  const goal = await db.goals.get(Number(goalId));
+  if (!goal) return 0;
+
+  const delta = roundMoney(amount);
+  // Never past the target, never below zero: a goal can't be more than done.
+  const saved = Math.min(
+    Math.abs(roundMoney(goal.target)),
+    Math.max(0, roundMoney((goal.saved || 0) + delta)),
+  );
+
+  await db.goals.update(goal.id, { saved, lastContributedAt: new Date().toISOString() });
+  return saved;
+}
+
+/**
+ * Take each linked goal's per-cycle contribution when its income lands.
+ *
+ * Idempotent per pay date: `lastAutoContributeAt` stops a re-run on the same
+ * income event from contributing twice, which matters because the reset path
+ * can fire more than once as live queries settle.
+ */
+export async function autoContributeGoals(incomeId, accountId = null, at = new Date().toISOString()) {
+  const targetAccountId = accountId != null ? Number(accountId) : await getDefaultAccountId();
+  if (!targetAccountId) return 0;
+
+  const goals = (await db.goals.where('accountId').equals(targetAccountId).toArray())
+    .filter(goal => Number(goal.incomeId) === Number(incomeId) && (goal.perCycleContribution || 0) > 0);
+
+  let contributed = 0;
+  for (const goal of goals) {
+    if (goal.lastAutoContributeAt === at) continue;
+
+    const target = Math.abs(roundMoney(goal.target));
+    const saved = Math.min(target, Math.max(0, roundMoney((goal.saved || 0) + goal.perCycleContribution)));
+    if (saved === goal.saved) continue;
+
+    await db.goals.update(goal.id, { saved, lastAutoContributeAt: at, lastContributedAt: at });
+    contributed += 1;
+  }
+
+  return contributed;
+}
+
 // ── Variable helpers ──────────────────────────────────────────────────────────
 export async function addVariable(variable, accountId = null) {
   return db.variables.add(withAccountId(variable, accountId ?? variable.accountId));
@@ -1138,12 +1236,30 @@ export async function resetBudget(accountId = null) {
     ? await db.categories.toArray()
     : await db.categories.where('accountId').equals(Number(accountId)).toArray();
   for (const cat of cats) {
-    await db.categories.update(cat.id, { spent: 0, spentByIncome: {}, temporaryBoost: 0, boostSources: [], lastReset: now });
+    await db.categories.update(cat.id, {
+      spent: 0,
+      spentByIncome: {},
+      temporaryBoost: 0,
+      boostSources: [],
+      rolloverBalance: getRolloverForNextCycle(cat, cat.cycleClearedSpend),
+      cycleClearedSpend: 0,
+      lastReset: now,
+    });
   }
 }
 
 export async function resetCategory(id) {
-  await db.categories.update(id, { spent: 0, spentByIncome: {}, temporaryBoost: 0, boostSources: [], lastReset: new Date().toISOString() });
+  const cat = await db.categories.get(id);
+  if (!cat) return;
+  await db.categories.update(id, {
+    spent: 0,
+    spentByIncome: {},
+    temporaryBoost: 0,
+    boostSources: [],
+    rolloverBalance: getRolloverForNextCycle(cat, cat.cycleClearedSpend),
+    cycleClearedSpend: 0,
+    lastReset: new Date().toISOString(),
+  });
 }
 
 export async function resetCategoriesForIncome(incomeId, resetAt = new Date().toISOString(), accountId = null) {
@@ -1166,11 +1282,27 @@ export async function resetCategoriesForIncome(incomeId, resetAt = new Date().to
       const nextSpent = Math.max(0, roundMoney(currentSpent - resetAmount));
       const nextIncomeResetAt = { ...(cat.incomeResetAt || {}), [key]: resetAt };
 
+      const alreadyCleared = roundMoney(cat.cycleClearedSpend || 0);
+
       await db.categories.update(cat.id, {
         spent: nextSpent,
         spentByIncome: nextSpent === 0 ? {} : nextBuckets,
         incomeResetAt: nextIncomeResetAt,
-        ...(nextSpent === 0 ? { lastReset: resetAt, temporaryBoost: 0, boostSources: [] } : {}),
+        // Rollover is settled only when the category fully resets — a partial
+        // reset (one of several funding incomes) hasn't finished its cycle.
+        // Until then, track what's been cleared so the final reset can still
+        // see the whole cycle's spend.
+        ...(nextSpent === 0
+          ? {
+              lastReset: resetAt,
+              temporaryBoost: 0,
+              boostSources: [],
+              rolloverBalance: getRolloverForNextCycle(cat, alreadyCleared),
+              cycleClearedSpend: 0,
+            }
+          : {
+              cycleClearedSpend: roundMoney(alreadyCleared + resetAmount),
+            }),
       });
       resetCount += 1;
     }

@@ -79,13 +79,13 @@ for (const expected of ['£2,000.00', '£400.00 allocated', '£1,600.00 unalloca
 step('dashboard totals reconcile (2000 income − 400 allocated, 374.50 left of 400)');
 
 for (const name of ['Accounts', 'Transactions', 'Can I Purchase It', 'Calendar', 'Subscriptions',
-                    'Forecasting', 'Wishlist', 'Variables', 'Settings', 'Dashboard']) {
+                    'Forecasting', 'Goals', 'Wishlist', 'Variables', 'Settings', 'Dashboard']) {
   await page.getByRole('button', { name, exact: true }).click();
   await page.waitForTimeout(350);
   const heading = await page.locator('h1').innerText();
   if (!heading.includes(name)) errors.push(`view "${name}" did not render (h1 was "${heading}")`);
 }
-step('all 10 views render');
+step('all 11 views render');
 
 await page.getByRole('button', { name: 'Adjust Groceries' }).click();
 await page.getByRole('dialog').waitFor();
@@ -204,6 +204,42 @@ for (const expected of ['Account Balance', 'Where Your Money Goes']) {
   if (!forecast.includes(expected)) errors.push(`forecasting missing: ${expected}`);
 }
 step('balance history and merchant breakdown render');
+
+// ── Money concepts ───────────────────────────────────────────────────────
+
+await page.getByRole('button', { name: 'Goals', exact: true }).click();
+await page.waitForTimeout(400);
+await page.getByRole('button', { name: 'Add your first goal' }).click();
+await page.getByRole('dialog').waitFor();
+await page.getByLabel('Name').fill('Holiday');
+await page.getByLabel('Target amount (£)').fill('1200');
+await page.getByLabel('Set aside automatically (£)').fill('100');
+await page.getByRole('button', { name: 'Add Goal', exact: true }).click();
+await page.getByRole('dialog').waitFor({ state: 'detached' });
+await page.waitForTimeout(400);
+
+const goalsText = await page.locator('body').innerText();
+if (!goalsText.includes('Holiday')) errors.push('goal was not created');
+if (!goalsText.includes('£1,200.00')) errors.push('goal target not shown');
+step('savings goal created with an automatic contribution');
+
+// Contributing is an earmark: progress moves, the account balance does not.
+await page.getByLabel('Amount to move for Holiday').fill('300');
+await page.getByRole('button', { name: 'Add', exact: true }).click();
+await page.waitForTimeout(400);
+const contributed = await page.locator('body').innerText();
+if (!contributed.includes('£300.00')) errors.push('goal contribution not recorded');
+if (!/25%/.test(contributed)) errors.push('goal progress percentage wrong');
+step('contribution recorded as an earmark');
+
+// Pending savings are held back from safe-to-spend.
+await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+await page.waitForTimeout(500);
+const dashWithGoal = await page.locator('body').innerText();
+if (!/savings/i.test(dashWithGoal)) {
+  errors.push('safe-to-spend does not show the pending savings commitment');
+}
+step('pending savings held back from safe-to-spend');
 
 await browser.close();
 

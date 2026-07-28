@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Pencil, Trash2, Check, Clock, ChevronDown, ChevronRight, ExternalLink, Plus, ShoppingBag, X } from 'lucide-react';
+import { Pencil, Trash2, Check, Clock, ChevronDown, ChevronRight, ExternalLink, PiggyBank, Plus, ShoppingBag, X } from 'lucide-react';
 import { fmt, wishlistAffordability } from '../utils';
 import { CardTitle, IconButton } from '../components/ui';
 
@@ -33,8 +33,9 @@ function AffordabilityBadge({ aff }) {
   return null;
 }
 
-function ItemRow({ item, expenseCategories, settings, incomes = [], onEdit, onDelete }) {
+function ItemRow({ item, expenseCategories, settings, incomes = [], goals = [], onEdit, onDelete, onSaveForItem }) {
   const aff = wishlistAffordability(item, expenseCategories, settings, incomes);
+  const linkedGoal = goals.find(goal => Number(goal.wishlistItemId) === Number(item.id));
   const assignedCats = (item.categoryIds || []).map(id => expenseCategories.find(c => c.id === id)).filter(Boolean);
 
   return (
@@ -71,7 +72,23 @@ function ItemRow({ item, expenseCategories, settings, incomes = [], onEdit, onDe
         )}
       </div>
       <span className="font-display" style={{ fontSize: 15, letterSpacing: '-0.02em', flexShrink: 0 }}>{fmt(item.price || 0)}</span>
-      <AffordabilityBadge aff={aff} />
+      {linkedGoal ? (
+        <span title={`${fmt(linkedGoal.saved || 0)} saved of ${fmt(linkedGoal.target || 0)}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, flexShrink: 0,
+            color: 'var(--accent-mint)', background: 'rgba(79,255,176,0.1)', padding: '2px 8px', borderRadius: 20 }}>
+          <PiggyBank size={10} /> {fmt(linkedGoal.saved || 0)}
+        </span>
+      ) : (
+        <AffordabilityBadge aff={aff} />
+      )}
+      {/* The wishlist can only say *when* something becomes affordable. A goal
+          actually sets the money aside for it. */}
+      {onSaveForItem && !linkedGoal && (
+        <IconButton onClick={() => onSaveForItem(item)} label={`Save for ${item.name}`} size={27}
+          style={{ opacity: 0.58, flexShrink: 0 }}>
+          <PiggyBank size={12} />
+        </IconButton>
+      )}
       <IconButton onClick={() => onEdit(item)} label={`Edit ${item.name}`} size={27} style={{ opacity: 0.58, flexShrink: 0 }}>
         <Pencil size={12} />
       </IconButton>
@@ -82,7 +99,7 @@ function ItemRow({ item, expenseCategories, settings, incomes = [], onEdit, onDe
   );
 }
 
-function ListSection({ node, depth, allItems, expenseCategories, settings, incomes = [], onEditItem, onDeleteItem, onAddToList, onEditList, onDeleteList, onAddList, totalListCount, expanded, onToggle }) {
+function ListSection({ node, depth, allItems, expenseCategories, settings, incomes = [], goals = [], onSaveForItem, onEditItem, onDeleteItem, onAddToList, onEditList, onDeleteList, onAddList, totalListCount, expanded, onToggle }) {
   const [showSubInput, setShowSubInput] = useState(false);
   const [subName, setSubName] = useState('');
 
@@ -154,6 +171,7 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, incom
       {node.children.map(child => (
         <ListSection key={child.id} node={child} depth={depth + 1}
           allItems={allItems} expenseCategories={expenseCategories} settings={settings} incomes={incomes}
+          goals={goals} onSaveForItem={onSaveForItem}
           onEditItem={onEditItem} onDeleteItem={onDeleteItem} onAddToList={onAddToList}
           onEditList={onEditList} onDeleteList={onDeleteList}
           onAddList={onAddList} totalListCount={totalListCount}
@@ -180,7 +198,7 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, incom
       {directItems.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: node.children.length > 0 || showSubInput ? 6 : 0 }}>
           {directItems.map(item => (
-            <ItemRow key={item.id} item={item} expenseCategories={expenseCategories} settings={settings} incomes={incomes} onEdit={onEditItem} onDelete={onDeleteItem} />
+            <ItemRow key={item.id} item={item} expenseCategories={expenseCategories} settings={settings} incomes={incomes} goals={goals} onSaveForItem={onSaveForItem} onEdit={onEditItem} onDelete={onDeleteItem} />
           ))}
         </div>
       )}
@@ -213,7 +231,7 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, incom
   );
 }
 
-export default function Wishlist({ items, wishlistCategories, expenseCategories, settings, incomes = [], onAddItem, onEditItem, onDeleteItem, onAddWishlistCat, onEditWishlistCat, onDeleteWishlistCat, onAddItemToFolder, showConfirm }) {
+export default function Wishlist({ items, wishlistCategories, expenseCategories, settings, incomes = [], goals = [], onSaveForItem, onAddItem, onEditItem, onDeleteItem, onAddWishlistCat, onEditWishlistCat, onDeleteWishlistCat, onAddItemToFolder, showConfirm }) {
   const [expanded, setExpanded] = useState(() => new Set([...wishlistCategories.map(c => c.id), 'uncategorized']));
   const [showNewList, setShowNewList] = useState(false);
   const [newListName, setNewListName] = useState('');
@@ -308,6 +326,7 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
       {tree.map(node => (
         <ListSection key={node.id} node={node} depth={0}
           allItems={items} expenseCategories={expenseCategories} settings={settings} incomes={incomes}
+          goals={goals} onSaveForItem={onSaveForItem}
           onEditItem={onEditItem} onDeleteItem={onDeleteItem} onAddToList={onAddItemToFolder}
           onEditList={onEditWishlistCat} onDeleteList={handleDeleteList} onAddList={onAddWishlistCat}
           totalListCount={wishlistCategories.length}
@@ -329,7 +348,7 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
           {expanded.has('uncategorized') && (
             <div style={{ padding: '8px 14px 12px', display: 'flex', flexDirection: 'column', gap: 5 }}>
               {uncategorizedItems.map(item => (
-                <ItemRow key={item.id} item={item} expenseCategories={expenseCategories} settings={settings} incomes={incomes} onEdit={onEditItem} onDelete={onDeleteItem} />
+                <ItemRow key={item.id} item={item} expenseCategories={expenseCategories} settings={settings} incomes={incomes} goals={goals} onSaveForItem={onSaveForItem} onEdit={onEditItem} onDelete={onDeleteItem} />
               ))}
             </div>
           )}

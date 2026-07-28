@@ -31,6 +31,8 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
   const [pacedAllowanceInterval, setPacedAllowanceInterval] = useState('1');
   const [pacedAllowanceUnit, setPacedAllowanceUnit] = useState('day');
   const [color, setColor] = useState(PALETTE[0]);
+  const [rolloverEnabled, setRolloverEnabled] = useState(false);
+  const [rolloverCarryOverspend, setRolloverCarryOverspend] = useState(false);
   const [incomeAllocations, setIncomeAllocations] = useState(() => makeAutoIncomeAllocations(0, incomes, categories));
   const [allocTouched, setAllocTouched] = useState(false);
 
@@ -96,6 +98,9 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
       resetFrequency: null,
       payDayOfMonth: null,
       lastReset: new Date().toISOString(),
+      rolloverEnabled,
+      rolloverCarryOverspend,
+      rolloverBalance: 0,
       color,
     });
     onClose();
@@ -176,6 +181,27 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
             categories={categories}
             onAutoAllocate={handleAutoAllocate}
           />
+          {/* Rollover — opt-in, because most people want a clean slate each
+              cycle and would be confused by a budget that quietly grows. */}
+          <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: '12px 14px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13, cursor: 'pointer' }}>
+              <input type="checkbox" checked={rolloverEnabled} onChange={e => setRolloverEnabled(e.target.checked)} />
+              Roll unspent budget into next cycle
+            </label>
+            {rolloverEnabled && (
+              <>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer', marginTop: 10, paddingLeft: 2 }}>
+                  <input type="checkbox" checked={rolloverCarryOverspend} onChange={e => setRolloverCarryOverspend(e.target.checked)} />
+                  Also carry overspend forward as a debt
+                </label>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.6 }}>
+                  Whatever is left when this category resets is added to the next
+                  cycle&rsquo;s budget. Temporary top-ups are not carried — they
+                  belong to one cycle only.
+                </div>
+              </>
+            )}
+          </div>
           <ColourPicker color={color} onChange={setColor} />
           <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
@@ -202,6 +228,8 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
   const [pacedAllowanceInterval, setPacedAllowanceInterval] = useState(String(category.pacedAllowanceInterval || 1));
   const [pacedAllowanceUnit, setPacedAllowanceUnit] = useState(category.pacedAllowanceUnit || 'day');
   const [color, setColor] = useState(category.color || PALETTE[0]);
+  const [rolloverEnabled, setRolloverEnabled] = useState(Boolean(category.rolloverEnabled));
+  const [rolloverCarryOverspend, setRolloverCarryOverspend] = useState(Boolean(category.rolloverCarryOverspend));
   const [incomeAllocations, setIncomeAllocations] = useState(() => (
     category.incomeAllocations?.length
       ? normalizeIncomeAllocations(category.incomeAllocations)
@@ -270,6 +298,11 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
       dailyAllowanceAmount: null,
       resetFrequency: null,
       payDayOfMonth: null,
+      rolloverEnabled,
+      rolloverCarryOverspend,
+      // Turning rollover off clears any balance it had built up, rather than
+      // leaving invisible budget attached to the category.
+      ...(rolloverEnabled ? {} : { rolloverBalance: 0 }),
       color,
     });
     onClose();
@@ -348,6 +381,27 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
             excludeCategoryId={category.id}
             onAutoAllocate={handleAutoAllocate}
           />
+          {/* Rollover — opt-in, because most people want a clean slate each
+              cycle and would be confused by a budget that quietly grows. */}
+          <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: '12px 14px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13, cursor: 'pointer' }}>
+              <input type="checkbox" checked={rolloverEnabled} onChange={e => setRolloverEnabled(e.target.checked)} />
+              Roll unspent budget into next cycle
+            </label>
+            {rolloverEnabled && (
+              <>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer', marginTop: 10, paddingLeft: 2 }}>
+                  <input type="checkbox" checked={rolloverCarryOverspend} onChange={e => setRolloverCarryOverspend(e.target.checked)} />
+                  Also carry overspend forward as a debt
+                </label>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.6 }}>
+                  Whatever is left when this category resets is added to the next
+                  cycle&rsquo;s budget. Temporary top-ups are not carried — they
+                  belong to one cycle only.
+                </div>
+              </>
+            )}
+          </div>
           <ColourPicker color={color} onChange={setColor} />
           <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
             <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
