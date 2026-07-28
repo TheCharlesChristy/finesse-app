@@ -795,13 +795,23 @@ export default function App() {
   useEffect(() => {
     if (!settings?.notificationsEnabled || nudges.length === 0) return undefined;
 
-    const deliver = () => {
-      if (document.visibilityState === 'visible') notifyNudges(nudges, { enabled: true });
+    const deliver = async () => {
+      if (document.visibilityState !== 'visible') return;
+      const result = notifyNudges(nudges, {
+        enabled: true,
+        alreadyNotified: settings?.notifiedNudges || [],
+      });
+      // Only written when something was actually sent, so this doesn't churn
+      // the settings row on every visibility change.
+      if (!result) return;
+      const current = await getSettings(activeAccountId);
+      await saveSettings({ ...(current || {}), notifiedNudges: result.notifiedIds }, activeAccountId);
     };
+
     deliver();
     document.addEventListener('visibilitychange', deliver);
     return () => document.removeEventListener('visibilitychange', deliver);
-  }, [nudges, settings?.notificationsEnabled]);
+  }, [nudges, settings?.notificationsEnabled, settings?.notifiedNudges, activeAccountId]);
 
   const paletteCommands = useMemo(() => [
     { id: 'log-expense', label: 'Log an expense', keywords: 'add spend transaction new', run: () => setModal('addTx') },

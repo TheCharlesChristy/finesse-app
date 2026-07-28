@@ -291,8 +291,11 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
               <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 {date}
               </span>
+              {/* Formatted directly rather than as an absolute value with a
+                  flipped sign, so a net-refund day reads the same way as the
+                  filtered total above it. */}
               <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>
-                {dayTotal < 0 ? '+' : ''}{fmt(Math.abs(dayTotal))}
+                {fmt(dayTotal)}
               </span>
             </div>
             <div className="glass" style={{ borderRadius: 16, overflow: 'hidden' }}>

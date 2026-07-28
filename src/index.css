@@ -101,6 +101,7 @@ body {
 .glass-input:focus-visible,
 .category-select-option:focus-visible,
 .date-picker-day:focus-visible,
+.finance-calendar-day:focus-visible,
 .color-swatch:focus-visible,
 .toggle-chip:focus-visible {
   outline: 2px solid rgba(93,184,255,0.7);

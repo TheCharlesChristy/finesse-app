@@ -42,11 +42,18 @@ src/
 ├── index.css             # Design system: CSS variables, glass classes, base styles
 │
 ├── views/
-│   ├── Dashboard.jsx     # Overview: income summary, category bars, recent transactions
-│   ├── Transactions.jsx  # Full expense log with search and filter
-│   ├── Forecasting.jsx   # Charts: projected spend, monthly history, burn rates
+│   ├── Dashboard.jsx     # Safe-to-spend, income summary, category bars, recent transactions
+│   ├── CategoryDetail.jsx # One category: cycle stats, merchants, its transactions
+│   ├── Accounts.jsx      # Multiple accounts, transfers, income events
+│   ├── Transactions.jsx  # Full expense log with search, filters and tags
+│   ├── PurchaseCheck.jsx # "Can I Purchase It" — live affordability check
+│   ├── Calendar.jsx      # Paydays, subscriptions and logged spend by day
+│   ├── Subscriptions.jsx # Recurring expenses and management links
+│   ├── Forecasting.jsx   # Cash flow, balance history, projections, burn rates
+│   ├── Goals.jsx         # Savings pots and debts
 │   ├── Wishlist.jsx      # Wishlist items with affordability tracking
-│   └── Settings.jsx      # Income config, category management, data export/import
+│   ├── Variables.jsx     # Named values for allowance formulas
+│   └── Settings.jsx      # Theme, reminders, rules, data export/import, integrity
 │
 ├── hooks/
 │   └── useFinesseData.js # Every useLiveQuery call, called once by App.jsx
@@ -58,9 +65,9 @@ src/
 └── __tests__/            # Vitest suites for utils.js and db.js
 ```
 
-> The views list above is abbreviated. The app currently has ten: Dashboard,
-> Accounts, Transactions, PurchaseCheck, Calendar, Subscriptions, Forecasting,
-> Wishlist, Variables and Settings.
+> Eleven of these appear in the `NAV` sidebar. `CategoryDetail` is the
+> exception — it's reached by tapping a category on the Dashboard rather than
+> from the nav.
 
 ---
 

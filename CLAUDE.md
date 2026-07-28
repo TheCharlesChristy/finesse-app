@@ -35,18 +35,22 @@ src/
 │   └── useFinesseData.js # Every useLiveQuery call, in one place. Called only by App.jsx
 ├── views/                # One file per page/tab, lazy-loaded from App.jsx
 │   ├── Dashboard.jsx
+│   ├── CategoryDetail.jsx    # not in NAV — opened by tapping a category
 │   ├── Accounts.jsx
 │   ├── Transactions.jsx
 │   ├── PurchaseCheck.jsx     # "Can I Purchase It"
 │   ├── Calendar.jsx
 │   ├── Subscriptions.jsx
 │   ├── Forecasting.jsx
+│   ├── Goals.jsx             # savings pots and debts
 │   ├── Wishlist.jsx
 │   ├── Variables.jsx
 │   └── Settings.jsx
 ├── components/
 │   ├── QuickAdd.jsx      # Floating "log an expense" button (mobile)
 │   ├── CommandPalette.jsx # ⌘K: jump to a view, run an action, find a transaction
+│   ├── NudgeCenter.jsx   # Bell: what needs attention, from buildNudges()
+│   ├── Wizard.jsx        # Guided first run — income, then a starter category pack
 │   ├── modals/           # Modal dialogs, split by domain
 │   │   ├── index.js      #   barrel — import modals from here, never the files directly
 │   │   ├── shared.jsx    #   IncomeAllocationEditor, FormulaInput, ColourPicker, PALETTE…
@@ -257,7 +261,11 @@ so.
 
 - **Don't add a backend.** Data stays in IndexedDB.
 - **Don't add React Router.** Navigation is a single `view` state string in `App.jsx`.
-- **Don't use localStorage.** Dexie/IndexedDB is the only storage layer.
+- **Don't put app data in localStorage.** Dexie/IndexedDB is the storage layer
+  for everything the user owns — including UI state that should survive an
+  export/import, such as dismissed nudges. The single exception is
+  `finesse.activeAccountId`, which records which account was last open and is
+  meaningless on another device.
 - **Don't add global state management** (Redux, Zustand, Context). `useLiveQuery` in `App.jsx` + prop drilling is sufficient and explicit.
 - **Don't install a component library** (shadcn, MUI, etc.). The glass design system is hand-rolled and should stay that way.
 - **Don't rename `db.js` or `utils.js`** — they're imported widely.

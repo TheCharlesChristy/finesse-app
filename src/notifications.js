@@ -11,7 +11,6 @@
  * never on load, where an unprompted permission dialog is just noise.
  */
 
-const STORAGE_KEY = 'finesse.notifiedNudges';
 const MAX_REMEMBERED = 200;
 
 export function notificationsSupported() {
@@ -34,67 +33,48 @@ export async function requestNotificationPermission() {
   }
 }
 
-// Which nudges have already been sent. This is presentation bookkeeping, not
-// finance data, so localStorage is the right home for it — IndexedDB is
-// reserved for the things that matter.
-function loadNotified() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveNotified(ids) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(ids.slice(-MAX_REMEMBERED)));
-  } catch {
-    // Storage can be full or blocked; failing to remember just risks a repeat.
-  }
-}
-
 /**
  * Notify about nudges not yet sent.
  *
+ * Which ids have already been sent is passed in and handed back rather than
+ * stored here: it lives in `settings.notifiedNudges` alongside
+ * `dismissedNudges`, so all nudge state sits in IndexedDB with everything else
+ * and this module stays free of storage concerns.
+ *
  * Only `danger` and `warn` are worth interrupting for — an OS notification for
  * "you have unbudgeted income" would train the user to ignore all of them.
- * Returns how many were sent.
+ *
+ * Returns `{ sent, notifiedIds }`, or null when nothing was sent, so the caller
+ * only writes to the database when there's something to record.
  */
-export function notifyNudges(nudges = [], { enabled = false } = {}) {
-  if (!enabled || notificationPermission() !== 'granted') return 0;
+export function notifyNudges(nudges = [], { enabled = false, alreadyNotified = [] } = {}) {
+  if (!enabled || notificationPermission() !== 'granted') return null;
 
-  const alreadySent = new Set(loadNotified());
+  const sentSet = new Set(alreadyNotified);
   const worthSending = nudges.filter(
-    nudge => nudge.severity !== 'info' && !alreadySent.has(nudge.id),
+    nudge => nudge.severity !== 'info' && !sentSet.has(nudge.id),
   );
-  if (worthSending.length === 0) return 0;
-
-  const sentIds = [...alreadySent];
+  if (worthSending.length === 0) return null;
 
   // One combined notification rather than a burst: five separate banners for
   // five overdue subscriptions is a reason to turn notifications off.
-  if (worthSending.length === 1) {
-    const [nudge] = worthSending;
-    try {
+  try {
+    if (worthSending.length === 1) {
+      const [nudge] = worthSending;
       new Notification(nudge.title, { body: nudge.body, tag: nudge.id, icon: 'icons/icon-192.png' });
-    } catch {
-      return 0;
-    }
-  } else {
-    try {
+    } else {
       new Notification(`${worthSending.length} things need a look`, {
         body: worthSending.slice(0, 3).map(nudge => nudge.title).join('\n'),
         tag: 'finesse-digest',
         icon: 'icons/icon-192.png',
       });
-    } catch {
-      return 0;
     }
+  } catch {
+    return null;
   }
 
-  for (const nudge of worthSending) sentIds.push(nudge.id);
-  saveNotified(sentIds);
-  return worthSending.length;
+  return {
+    sent: worthSending.length,
+    notifiedIds: [...alreadyNotified, ...worthSending.map(nudge => nudge.id)].slice(-MAX_REMEMBERED),
+  };
 }
