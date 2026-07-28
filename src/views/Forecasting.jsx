@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
 import {
-  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ReferenceLine,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend
 } from 'recharts';
+import { AlertTriangle, Check } from 'lucide-react';
 import { differenceInDays, format, startOfDay } from 'date-fns';
 import {
   fmt,
@@ -13,6 +14,12 @@ import {
   projectedEndBalance,
   calcNextReset,
   getCategoryIncomeAllocationAmount,
+  getNormalisedAllowanceTotal,
+  getNormalisedCategoryAllowance,
+  getNormalisedIncomeTotal,
+  getMerchantBreakdown,
+  buildBalanceHistory,
+  buildCashFlowForecast,
   normalizeIncomeAllocations,
 } from '../utils';
 import { CardTitle } from '../components/ui';
@@ -79,10 +86,21 @@ const PieTooltip = ({ active, payload }) => {
   );
 };
 
-export default function Forecasting({ categories, settings, transactions, incomes = [] }) {
+export default function Forecasting({ categories, settings, transactions, incomes = [], incomeEvents = [], transfers = [], subscriptions = [], account = null }) {
   const monthlyHistory = useMemo(() => buildMonthlyHistory(transactions, categories), [transactions, categories]);
-  const projectedSpend = useMemo(() => getProjectedSpend(categories, settings), [categories, settings]);
-  const dailyBurnRate  = useMemo(() => getDailyBurnRate(categories, settings), [categories, settings]);
+  const merchantSpend = useMemo(() => getMerchantBreakdown(transactions, { limit: 8 }), [transactions]);
+  const cashFlow = useMemo(
+    () => (account
+      ? buildCashFlowForecast({ account, categories, incomes, subscriptions, settings, days: 45 })
+      : null),
+    [account, categories, incomes, subscriptions, settings],
+  );
+  const balanceHistory = useMemo(
+    () => (account ? buildBalanceHistory(account, { transactions, incomeEvents, transfers, days: 60 }) : []),
+    [account, transactions, incomeEvents, transfers],
+  );
+  const projectedSpend = useMemo(() => getProjectedSpend(categories, settings, incomes), [categories, settings, incomes]);
+  const dailyBurnRate  = useMemo(() => getDailyBurnRate(categories, settings, incomes), [categories, settings, incomes]);
   const legacyDays     = daysUntilReset(settings);
   const projBalance    = projectedEndBalance(categories, settings, incomes);
 
@@ -99,7 +117,12 @@ export default function Forecasting({ categories, settings, transactions, income
   ), [incomes, categories]);
   const nextIncomeReset = incomeResetSchedule.find(entry => !entry.held && entry.next);
 
-  const totalIncome     = incomes.length > 0 ? incomes.reduce((s, i) => s + (i.amount || 0), 0) : (settings?.income || 0);
+  // Normalised so a mix of weekly and monthly incomes compares correctly
+  // against the allowances they fund.
+  const totalIncome     = incomes.length > 0 ? getNormalisedIncomeTotal(incomes, 'month') : (settings?.income || 0);
+  const normalisedAllocated = incomes.length > 0
+    ? getNormalisedAllowanceTotal(categories, incomes, 'month')
+    : categories.reduce((s, c) => s + (c.allowance || 0), 0);
   const totalAllowances = categories.reduce((s, c) => s + (c.allowance || 0), 0);
   const totalSpent      = categories.reduce((s, c) => s + (c.spent || 0), 0);
   const spentPct        = totalAllowances > 0 ? (totalSpent / totalAllowances) * 100 : 0;
@@ -111,10 +134,15 @@ export default function Forecasting({ categories, settings, transactions, income
     { name: 'Remaining', value: Math.max(0, totalAllowances - totalSpent),    color: 'rgba(255,255,255,0.08)' },
   ];
 
-  // Pie 2: per-category allowance allocation
+  // Pie 2: per-category allowance allocation, normalised to a monthly rate so
+  // categories funded by different pay frequencies are comparable.
   const allocationData = categories
     .filter(c => (c.allowance || 0) > 0)
-    .map((c, i) => ({ name: c.name, value: c.allowance || 0, color: c.color || COLORS[i % COLORS.length] }));
+    .map((c, i) => ({
+      name: c.name,
+      value: incomes.length > 0 ? getNormalisedCategoryAllowance(c, incomes, 'month') : (c.allowance || 0),
+      color: c.color || COLORS[i % COLORS.length],
+    }));
 
   // Projected vs allowance bar chart data
   const projVsAllowance = categories.map((cat, i) => ({
@@ -288,7 +316,7 @@ export default function Forecasting({ categories, settings, transactions, income
                 </div>
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
                   {allocationData.map(entry => {
-                    const pct = totalAllowances > 0 ? ((entry.value / totalAllowances) * 100).toFixed(0) : 0;
+                    const pct = normalisedAllocated > 0 ? ((entry.value / normalisedAllocated) * 100).toFixed(0) : 0;
                     return (
                       <div key={entry.name} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12 }}>
                         <div style={{ width: 8, height: 8, borderRadius: '50%', background: entry.color, flexShrink: 0 }} />
@@ -313,9 +341,9 @@ export default function Forecasting({ categories, settings, transactions, income
                     ))}
                   </div>
                   <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 5 }}>
-                    {totalAllowances > totalIncome
-                      ? <span style={{ color: 'var(--danger)' }}>⚠ {((totalAllowances / totalIncome) * 100).toFixed(0)}% — over-allocated</span>
-                      : `${((totalAllowances / totalIncome) * 100).toFixed(0)}% of income allocated to categories`}
+                    {normalisedAllocated > totalIncome
+                      ? <span style={{ color: 'var(--danger)' }}>⚠ {((normalisedAllocated / totalIncome) * 100).toFixed(0)}% — over-allocated</span>
+                      : `${((normalisedAllocated / totalIncome) * 100).toFixed(0)}% of income allocated to categories`}
                   </div>
                 </div>
               )}
@@ -397,6 +425,124 @@ export default function Forecasting({ categories, settings, transactions, income
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: d.color, width: 60, textAlign: 'right', flexShrink: 0 }}>
                   {fmt(d['Daily Rate'])}/d
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Cash-flow forecast ──
+           Category budgets answer "can I afford this out of Groceries?". This
+           answers the different, more urgent question: will the money actually
+           be there when the direct debit comes out? */}
+      {cashFlow && cashFlow.series.length > 1 && (
+        <div className="glass mobile-card-pad" style={{
+          borderRadius: 18,
+          padding: '22px 24px',
+          borderColor: cashFlow.firstNegative ? 'rgba(255,107,138,0.3)' : undefined,
+          background: cashFlow.firstNegative ? 'rgba(255,107,138,0.04)' : undefined,
+        }}>
+          <CardTitle as="h2" style={{ marginBottom: 6 }}>Cash Flow</CardTitle>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>
+            Next 45 days, combining scheduled income, subscriptions and your current burn rate
+          </div>
+
+          {cashFlow.firstNegative ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 10, background: 'rgba(255,107,138,0.1)', color: 'var(--danger)', fontSize: 13 }}>
+              <AlertTriangle size={15} aria-hidden="true" />
+              <span>
+                On current trends your balance goes negative on{' '}
+                <strong>{format(cashFlow.firstNegative, 'd MMM')}</strong>.
+              </span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 10, background: 'rgba(79,255,176,0.08)', color: 'var(--good)', fontSize: 13 }}>
+              <Check size={15} aria-hidden="true" />
+              <span>
+                You stay in the black. Lowest point is{' '}
+                <strong>{fmt(cashFlow.lowest.balance)}</strong>
+                {cashFlow.lowest.date ? ` on ${format(cashFlow.lowest.date, 'd MMM')}` : ''}.
+              </span>
+            </div>
+          )}
+
+          <div className="mobile-chart-scroll">
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={cashFlow.series}>
+                <defs>
+                  <linearGradient id="grad-cashflow" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} stopOpacity={0.35} />
+                    <stop offset="95%" stopColor={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" interval={Math.max(0, Math.floor(cashFlow.series.length / 6) - 1)} />
+                <YAxis tickFormatter={v => `£${Math.round(v)}`} />
+                <Tooltip content={<GlassTooltip />} />
+                <ReferenceLine y={0} stroke="rgba(255,107,138,0.5)" strokeDasharray="4 4" />
+                <Area type="monotone" dataKey="balance" name="Projected balance"
+                  stroke={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} strokeWidth={2}
+                  fill="url(#grad-cashflow)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* ── Balance history ──
+           Categories say how the budget is doing; this says whether the account
+           behind it is actually growing or shrinking. */}
+      {balanceHistory.length > 1 && (
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+          <CardTitle as="h2" style={{ marginBottom: 6 }}>Account Balance</CardTitle>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>
+            Last 60 days, reconstructed from your transactions, income and transfers
+          </div>
+          <div className="mobile-chart-scroll">
+            <ResponsiveContainer width="100%" height={200}>
+              <AreaChart data={balanceHistory}>
+                <defs>
+                  <linearGradient id="grad-balance" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#4fffb0" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="#4fffb0" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" interval={Math.max(0, Math.floor(balanceHistory.length / 6) - 1)} />
+                <YAxis tickFormatter={v => `£${Math.round(v)}`} />
+                <Tooltip content={<GlassTooltip />} />
+                <Area type="monotone" dataKey="balance" name="Balance"
+                  stroke="#4fffb0" strokeWidth={2} fill="url(#grad-balance)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* ── Merchants ──
+           Categories tell you the kind of spending; merchants tell you what you
+           actually bought, which is usually the more actionable of the two. */}
+      {merchantSpend.length > 0 && (
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+          <CardTitle as="h2" style={{ marginBottom: 6 }}>Where Your Money Goes</CardTitle>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>Top merchants across all time</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {merchantSpend.map((entry, i) => (
+              <div key={entry.label} className="mobile-row-stack" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 120, fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {entry.label}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div className="progress-track">
+                    <div className="progress-fill" style={{
+                      width: `${Math.min(100, (entry.total / merchantSpend[0].total) * 100)}%`,
+                      background: COLORS[i % COLORS.length],
+                    }} />
+                  </div>
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: COLORS[i % COLORS.length], width: 78, textAlign: 'right', flexShrink: 0 }}>
+                  {fmt(entry.total)}
                 </div>
               </div>
             ))}

@@ -101,6 +101,7 @@ body {
 .glass-input:focus-visible,
 .category-select-option:focus-visible,
 .date-picker-day:focus-visible,
+.finance-calendar-day:focus-visible,
 .color-swatch:focus-visible,
 .toggle-chip:focus-visible {
   outline: 2px solid rgba(93,184,255,0.7);
@@ -370,6 +371,11 @@ body {
 }
 
 .finance-calendar-day {
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  width: 100%;
   min-height: 94px;
   border-radius: 12px;
   padding: 8px;
@@ -382,6 +388,11 @@ body {
   opacity: 0.42;
 }
 
+.finance-calendar-day:hover { border-color: var(--glass-border-strong); }
+.finance-calendar-day.selected {
+  border-color: rgba(79,255,176,0.5);
+  background: rgba(79,255,176,0.08);
+}
 .finance-calendar-day.today {
   border-color: rgba(93,184,255,0.4);
   background: rgba(93,184,255,0.08);
@@ -403,6 +414,11 @@ body {
   background: rgba(79,255,176,0.1);
 }
 
+.finance-calendar-event.expense,
+.finance-calendar-event.refund {
+  background: rgba(255,255,255,0.05);
+  color: var(--text-muted);
+}
 .finance-calendar-event.subscription {
   background: rgba(251,191,112,0.1);
 }
@@ -410,7 +426,7 @@ body {
 .bulk-expense-header,
 .bulk-expense-row {
   display: grid;
-  grid-template-columns: 104px minmax(160px, 1fr) 154px 34px;
+  grid-template-columns: 100px minmax(140px, 1fr) minmax(130px, 170px) 150px 34px;
   gap: 8px;
   align-items: center;
 }
@@ -433,6 +449,11 @@ body {
   }
 
   .finance-calendar-day {
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  width: 100%;
     min-height: 72px;
     padding: 6px;
   }
@@ -459,6 +480,7 @@ body {
   }
 
   .bulk-expense-note,
+  .bulk-expense-category,
   .bulk-expense-date {
     grid-column: 1 / -1;
   }
@@ -559,6 +581,154 @@ body {
   max-height: 90vh;
   overflow-y: auto;
   padding: 28px;
+}
+
+/* ── Quick add (floating action button) ─────────────────────────────────── */
+.quick-add {
+  position: fixed;
+  right: calc(18px + env(safe-area-inset-right, 0px));
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.quick-add-templates {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.quick-add-template {
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  color: var(--text-secondary);
+  background: rgba(18, 26, 48, 0.94);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+}
+.quick-add-template:hover { color: var(--text-primary); border-color: var(--glass-border-strong); }
+.quick-add-button {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #06121f;
+  background: linear-gradient(135deg, var(--accent-mint), var(--accent-blue));
+  border: none;
+  box-shadow: 0 10px 30px rgba(79,255,176,0.28), 0 2px 6px rgba(0,0,0,0.3);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.quick-add-button:hover { transform: translateY(-2px); box-shadow: 0 14px 36px rgba(79,255,176,0.34); }
+.quick-add-button:active { transform: translateY(0); }
+/* Desktop has the keyboard shortcut and inline buttons; the FAB would just
+   cover content. */
+@media (min-width: 768px) {
+  .quick-add { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .quick-add-button { transition: none; }
+  .quick-add-button:hover { transform: none; }
+}
+
+/* ── Command palette ────────────────────────────────────────────────────── */
+.command-palette {
+  width: 100%;
+  max-width: 560px;
+  background: rgba(18, 26, 48, 0.97);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: 16px;
+  box-shadow: 0 40px 80px rgba(0,0,0,0.5);
+  overflow: hidden;
+}
+.command-palette-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+.command-palette-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-family: 'DM Sans', sans-serif;
+}
+.command-palette-input::placeholder { color: var(--text-muted); }
+.command-palette-kbd {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  flex-shrink: 0;
+}
+.command-palette-results { max-height: 52vh; overflow-y: auto; }
+.command-palette-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 16px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  font-family: 'DM Sans', sans-serif;
+  color: var(--text-primary);
+}
+.command-palette-item:hover { background: rgba(255,255,255,0.07); }
+
+/* ── Toasts ─────────────────────────────────────────────────────────────── */
+.toast-stack {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(440px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(18, 26, 48, 0.96);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid var(--glass-border-strong);
+  box-shadow: 0 16px 40px rgba(0,0,0,0.45);
+  animation: toastIn 0.22s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
 }
 
 .status-good { background: rgba(79,255,176,0.15); border: 1px solid rgba(79,255,176,0.3); color: var(--good); }
@@ -846,4 +1016,85 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb {
 
 html[data-theme="light"] .sidebar-overlay {
   background: rgba(100, 130, 180, 0.4);
+}
+
+/* ── Safe to spend ──────────────────────────────────────────────────────── */
+.safe-to-spend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 22px 26px;
+  border-color: rgba(79,255,176,0.24);
+  background: linear-gradient(135deg, rgba(79,255,176,0.07), rgba(93,184,255,0.04));
+}
+.safe-to-spend-main { min-width: 0; }
+.safe-to-spend-reserved {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.05);
+  flex-shrink: 0;
+}
+
+/* ── Cycle comparison ───────────────────────────────────────────────────── */
+.cycle-compare-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.04);
+}
+@media (max-width: 620px) {
+  .safe-to-spend { padding: 18px 18px; }
+  .cycle-compare-row { grid-template-columns: 1fr auto; }
+}
+
+/* ── Nudge centre ───────────────────────────────────────────────────────── */
+.nudge-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 45;
+  width: min(360px, calc(100vw - 32px));
+  border-radius: 14px;
+  background: rgba(18, 26, 48, 0.97);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid var(--glass-border-strong);
+  box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+  overflow: hidden;
+}
+.nudge-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+.nudge-panel-list { max-height: 60vh; overflow-y: auto; }
+.nudge-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.nudge-item:last-child { border-bottom: none; }
+
+/* ── Reduced motion ─────────────────────────────────────────────────────────
+   Respect the OS setting rather than animating regardless. Transitions that
+   only communicate state (progress bars, hovers) are safe to drop entirely. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

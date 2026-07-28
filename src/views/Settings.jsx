@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
-import { Download, Upload, FileText, RefreshCcw, Trash2, Sun, Moon, Monitor, Link2, FileJson } from 'lucide-react';
+import { Bell, Download, Upload, FileText, RefreshCcw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap } from 'lucide-react';
+import { fmt } from '../utils';
+import { notificationPermission, notificationsSupported, requestNotificationPermission } from '../notifications';
 import CategorySelect from '../components/CategorySelect';
-import { CardTitle } from '../components/ui';
+import { CardTitle, IconButton } from '../components/ui';
 
 export default function Settings({
   onExport,
@@ -16,10 +18,72 @@ export default function Settings({
   onResetIncome,
   onSaveSettings,
   onFullReset,
+  rules = [],
+  onAddRule,
+  onDeleteRule,
+  templates = [],
+  onAddTemplate,
+  onDeleteTemplate,
+  nudgeCount = 0,
+  onRecalculate,
   showConfirm,
   showAlert,
   showPrompt,
 }) {
+  const [ruleMatch, setRuleMatch] = useState('');
+  const [ruleCategoryId, setRuleCategoryId] = useState('');
+  const [templateName, setTemplateName] = useState('');
+  const [templateAmount, setTemplateAmount] = useState('');
+  const [templateCategoryId, setTemplateCategoryId] = useState('');
+  const [permission, setPermission] = useState(() => notificationPermission());
+  const [integrityStatus, setIntegrityStatus] = useState(null);
+  const [isRecalculating, setIsRecalculating] = useState(false);
+
+  const handleRecalculate = async () => {
+    if (!onRecalculate) return;
+    setIsRecalculating(true);
+    try {
+      setIntegrityStatus(await onRecalculate());
+    } finally {
+      setIsRecalculating(false);
+    }
+  };
+
+  const notificationsOn = Boolean(settings?.notificationsEnabled) && permission === 'granted';
+
+  const handleToggleNotifications = async () => {
+    if (notificationsOn) {
+      onSaveSettings?.({ ...(settings || {}), notificationsEnabled: false });
+      return;
+    }
+    // Requested from a click, never on load: iOS only grants from a gesture,
+    // and an unprompted permission dialog is just noise.
+    const result = await requestNotificationPermission();
+    setPermission(result);
+    if (result === 'granted') {
+      onSaveSettings?.({ ...(settings || {}), notificationsEnabled: true });
+    }
+  };
+
+  const categoryName = (id) => categories.find(c => Number(c.id) === Number(id))?.name || 'Missing category';
+
+  const handleAddRule = () => {
+    const match = ruleMatch.trim();
+    const categoryId = ruleCategoryId || categories[0]?.id;
+    if (!match || !categoryId) return;
+    onAddRule?.({ match, categoryId: Number(categoryId) });
+    setRuleMatch('');
+  };
+
+  const handleAddTemplate = () => {
+    const name = templateName.trim();
+    const amount = parseFloat(templateAmount);
+    const categoryId = templateCategoryId || categories[0]?.id;
+    if (!name || !(amount > 0) || !categoryId) return;
+    onAddTemplate?.({ name, amount, categoryId: Number(categoryId), note: name });
+    setTemplateName('');
+    setTemplateAmount('');
+  };
   const [resetIncomeId, setResetIncomeId] = useState('');
   const [resetStatus, setResetStatus] = useState('');
   const [fullResetStatus, setFullResetStatus] = useState('');
@@ -217,6 +281,169 @@ export default function Settings({
         )}
       </div>
 
+      {/* Reminders */}
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+          <Bell size={16} color="var(--accent-blue)" aria-hidden="true" />
+          <CardTitle as="h2">Reminders</CardTitle>
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>
+          Finesse always collects what needs your attention — due subscriptions,
+          over-budget categories, goals slipping, a stale backup — under the bell
+          at the top of the page.
+          {nudgeCount > 0
+            ? ` There ${nudgeCount === 1 ? 'is 1 item' : `are ${nudgeCount} items`} there now.`
+            : ' Nothing is outstanding right now.'}
+        </div>
+
+        {!notificationsSupported() ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            This browser doesn&rsquo;t support notifications, so the bell is the only channel.
+          </div>
+        ) : (
+          <>
+            <button className={notificationsOn ? 'btn-primary' : 'btn-secondary'}
+              onClick={handleToggleNotifications}
+              disabled={permission === 'denied'}
+              style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Bell size={14} /> {notificationsOn ? 'Notifications on' : 'Also notify me'}
+            </button>
+            <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10, lineHeight: 1.6 }}>
+              {permission === 'denied'
+                ? 'Notifications are blocked for this site in your browser settings.'
+                : 'Finesse has no server, so notifications appear when you open the app or return to it — they can\u2019t wake your phone. On iPhone this needs the app added to your home screen.'}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Auto-categorisation rules */}
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+          <Wand2 size={16} color="var(--accent-mint)" aria-hidden="true" />
+          <CardTitle as="h2">Auto-Categorise</CardTitle>
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>
+          When a note contains your text, that category gets picked automatically.
+          Rules beat the app&rsquo;s own guesses from your history.
+        </div>
+
+        {categories.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            Add categories on the Dashboard first.
+          </div>
+        ) : (
+          <>
+            {rules.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+                {rules.map(rule => (
+                  <div key={rule.id} className="mobile-list-row" style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '10px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: 10,
+                  }}>
+                    <span className="mobile-list-main" style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
+                      Note contains <strong>&ldquo;{rule.match}&rdquo;</strong> &rarr; {categoryName(rule.categoryId)}
+                    </span>
+                    <IconButton onClick={() => onDeleteRule?.(rule.id)} size={28} style={{ opacity: 0.55 }}
+                      label={`Delete rule for ${rule.match}`}>
+                      <Trash2 size={12} />
+                    </IconButton>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mobile-row-stack" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ flex: '2 1 160px' }}>
+                <label htmlFor="rule-match" className="field-label">If the note contains</label>
+                <input id="rule-match" className="glass-input" placeholder="e.g. Tesco" value={ruleMatch}
+                  onChange={e => setRuleMatch(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddRule()} />
+              </div>
+              <div style={{ flex: '2 1 160px' }}>
+                <div className="field-label">Use category</div>
+                <CategorySelect categories={categories}
+                  value={String(ruleCategoryId || categories[0]?.id || '')}
+                  onChange={setRuleCategoryId} aria-label="Rule category" />
+              </div>
+              <button className="btn-primary mobile-full" onClick={handleAddRule} disabled={!ruleMatch.trim()}
+                style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Plus size={14} /> Add Rule
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Expense templates */}
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+          <Zap size={16} color="var(--accent-warm)" aria-hidden="true" />
+          <CardTitle as="h2">Quick Expenses</CardTitle>
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>
+          Spending that repeats at the same price. Your three most-used appear
+          above the add button on mobile, and all of them in the command palette.
+        </div>
+
+        {categories.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            Add categories on the Dashboard first.
+          </div>
+        ) : (
+          <>
+            {templates.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+                {templates.map(template => (
+                  <div key={template.id} className="mobile-list-row" style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '10px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: 10,
+                  }}>
+                    <span className="mobile-list-main" style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600 }}>
+                      {template.name}
+                    </span>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      {categoryName(template.categoryId)} · {fmt(template.amount)}
+                      {template.useCount > 0 ? ` · ${template.useCount}×` : ''}
+                    </span>
+                    <IconButton onClick={() => onDeleteTemplate?.(template.id)} size={28} style={{ opacity: 0.55 }}
+                      label={`Delete quick expense ${template.name}`}>
+                      <Trash2 size={12} />
+                    </IconButton>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mobile-row-stack" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ flex: '2 1 140px' }}>
+                <label htmlFor="template-name" className="field-label">Name</label>
+                <input id="template-name" className="glass-input" placeholder="e.g. Coffee" value={templateName}
+                  onChange={e => setTemplateName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddTemplate()} />
+              </div>
+              <div style={{ flex: '1 1 100px' }}>
+                <label htmlFor="template-amount" className="field-label">Amount (£)</label>
+                <input id="template-amount" className="glass-input" type="number" min="0" step="0.01" placeholder="3.20"
+                  value={templateAmount} onChange={e => setTemplateAmount(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddTemplate()} />
+              </div>
+              <div style={{ flex: '2 1 150px' }}>
+                <div className="field-label">Category</div>
+                <CategorySelect categories={categories}
+                  value={String(templateCategoryId || categories[0]?.id || '')}
+                  onChange={setTemplateCategoryId} aria-label="Quick expense category" />
+              </div>
+              <button className="btn-primary mobile-full" onClick={handleAddTemplate}
+                disabled={!templateName.trim() || !(parseFloat(templateAmount) > 0)}
+                style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Plus size={14} /> Add
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
       {/* Data management */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
         <CardTitle as="h2" style={{ marginBottom: 8 }}>Data &amp; Sync</CardTitle>
@@ -235,7 +462,10 @@ export default function Settings({
             <input type="file" accept=".json" onChange={handleFileImport} style={{ display: 'none' }} />
           </label>
         </div>
-        <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10 }}>
+        <div style={{ color: settings?.lastBackupAt ? 'var(--text-muted)' : 'var(--warn)', fontSize: 11, marginTop: 10 }}>
+          {settings?.lastBackupAt
+            ? `Last backup ${new Date(settings.lastBackupAt).toLocaleDateString('en-GB')}. `
+            : 'You have never exported a backup. Your data exists only in this browser. '}
           Import will ask whether to replace or merge existing data.
         </div>
 
@@ -249,6 +479,30 @@ export default function Settings({
         </div>
         <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10 }}>
           Share Link carries your accounts, categories, incomes, subscriptions and wishlist to a new device — it excludes transaction history. Chat Summary lets you pick exactly which data and fields to include before generating a JSON export with computed spending insights, meant for sharing with a financial advisor or an AI assistant for analysis.
+        </div>
+
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 18, paddingTop: 18 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Data Integrity</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
+            Each category&rsquo;s spend is a running counter rather than a fresh
+            sum of its transactions — fast, but it can drift if a write is
+            interrupted. This rebuilds every counter from the transaction log,
+            which is the real record.
+          </div>
+          <button className="btn-secondary" onClick={handleRecalculate} disabled={isRecalculating}
+            style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <RefreshCcw size={14} /> {isRecalculating ? 'Checking…' : 'Recalculate Spend Counters'}
+          </button>
+          {integrityStatus && (
+            <div style={{ color: integrityStatus.repaired > 0 ? 'var(--warn)' : 'var(--good)', fontSize: 12, marginTop: 10, lineHeight: 1.6 }}>
+              {integrityStatus.repaired > 0
+                ? `Repaired ${integrityStatus.repaired} of ${integrityStatus.checked}: ${integrityStatus.categories
+                    .filter(row => Math.abs(row.drift) >= 0.01)
+                    .map(row => `${row.name} ${fmt(row.stored)} → ${fmt(row.actual)}`)
+                    .join(', ')}`
+                : `Checked ${integrityStatus.checked} categor${integrityStatus.checked === 1 ? 'y' : 'ies'} — all counters match the transaction log.`}
+            </div>
+          )}
         </div>
 
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 18, paddingTop: 18 }}>

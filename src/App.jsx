@@ -1,20 +1,23 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
-import { CalendarDays, CreditCard, LayoutDashboard, ListOrdered, Menu, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
+import { CalendarDays, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
-  getSettings, saveSettings, getCategories, addCategory, updateCategory, deleteCategory,
-  getTransactions, addTransaction, addTransactionsBulk, updateTransaction, deleteTransaction,
-  getWishlistItems, addWishlistItem, updateWishlistItem, deleteWishlistItem,
-  getWishlistCategories,
+  getSettings, saveSettings, addCategory, updateCategory, deleteCategory,
+  addTransaction, addTransactionsBulk, updateTransaction, deleteTransaction,
+  addWishlistItem, updateWishlistItem, deleteWishlistItem,
   addWishlistCategory, updateWishlistCategory, deleteWishlistCategory, exportData, importData,
   exportSnapshot, exportChatSummary, getExportableSchema,
   exportTransactionsCSV, clearAllData, resetBudget, resetCategory, resetCategoriesForIncome,
-  addIncome, updateIncome, deleteIncome, getIncomeEvents, recordIncomeReceived, deleteIncomeEvent,
-  getSubscriptions, addSubscription, updateSubscription, deleteSubscription, processDueSubscriptions,
+  addIncome, updateIncome, deleteIncome, recordIncomeReceived, deleteIncomeEvent,
+  addSubscription, updateSubscription, deleteSubscription, processDueSubscriptions,
   addVariable, updateVariable, deleteVariable,
-  topUpCategoryFromIncome, borrowBudgetBetweenCategories, resetCategoryTopUps } from './db';
-import { calcNextReset, evaluateFormula, fmt, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
+  topUpCategoryFromIncome, borrowBudgetBetweenCategories, resetCategoryTopUps,
+  addSplitTransaction, addRule, updateRule, deleteRule,
+  addTemplate, deleteTemplate, logTemplate,
+  addGoal, updateGoal, deleteGoal, contributeToGoal, autoContributeGoals,
+  recalculateSpendCounters } from './db';
+import { useFinesseData } from './hooks/useFinesseData';
+import { buildNudges, calcNextReset, evaluateFormula, filterDismissedNudges, fmt, getGoalCommitment, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
 
 const Dashboard     = lazy(() => import('./views/Dashboard'));
 const Transactions  = lazy(() => import('./views/Transactions'));
@@ -26,12 +29,50 @@ const Calendar      = lazy(() => import('./views/Calendar'));
 const Subscriptions = lazy(() => import('./views/Subscriptions'));
 const SettingsView  = lazy(() => import('./views/Settings'));
 const Variables     = lazy(() => import('./views/Variables'));
+const CategoryDetail = lazy(() => import('./views/CategoryDetail'));
+const Goals         = lazy(() => import('./views/Goals'));
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
-  AdjustBudgetModal, ExportChatSummaryOptionsModal } from './components/Modals';
+  AdjustBudgetModal, ExportChatSummaryOptionsModal,
+  AddGoalModal, SaveForItemModal } from './components/modals';
 import { Modal } from './components/ui';
 import { useDialog } from './components/useDialog';
+import { useToast } from './components/Toast';
+import QuickAdd from './components/QuickAdd';
+import CommandPalette from './components/CommandPalette';
+import NudgeCenter from './components/NudgeCenter';
+import { notifyNudges } from './notifications';
+
+// "g then <key>" navigation targets.
+const GOTO_KEYS = {
+  d: 'dashboard',
+  a: 'accounts',
+  t: 'transactions',
+  p: 'purchase',
+  c: 'calendar',
+  s: 'subscriptions',
+  f: 'forecasting',
+  g: 'goals',
+  w: 'wishlist',
+  v: 'variables',
+  x: 'settings',
+};
+
+const SHORTCUTS = [
+  ['A', 'Log an expense'],
+  ['B', 'Bulk add expenses'],
+  ['⌘K / Ctrl K', 'Command palette'],
+  ['/', 'Search transactions'],
+  ['G then D', 'Dashboard'],
+  ['G then T', 'Transactions'],
+  ['G then C', 'Calendar'],
+  ['G then F', 'Forecasting'],
+  ['G then G', 'Goals'],
+  ['G then X', 'Settings'],
+  ['Esc', 'Close a dialog'],
+  ['?', 'This list'],
+];
 
 const NAV = [
   { id: 'dashboard',   label: 'Dashboard',   Icon: LayoutDashboard },
@@ -41,10 +82,24 @@ const NAV = [
   { id: 'calendar',    label: 'Calendar',     Icon: CalendarDays },
   { id: 'subscriptions', label: 'Subscriptions', Icon: CreditCard },
   { id: 'forecasting', label: 'Forecasting',  Icon: TrendingUp },
+  { id: 'goals',       label: 'Goals',         Icon: PiggyBank },
   { id: 'wishlist',    label: 'Wishlist',      Icon: ShoppingBag },
   { id: 'variables',   label: 'Variables',     Icon: SlidersHorizontal },
   { id: 'settings',    label: 'Settings',     Icon: SettingsIcon },
 ];
+
+/** The `?action=` a home-screen shortcut launched us with, if any. */
+function readLaunchAction() {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search).get('action');
+}
+
+/** The snapshot embedded in a share link's hash, if any. */
+function readSharedSnapshot() {
+  if (typeof window === 'undefined') return null;
+  const match = window.location.hash.match(/snapshot=([^&]+)/);
+  return match ? decodeSnapshotFromUrl(match[1]) : null;
+}
 
 function getLatestDueIncomeReset(income, now = new Date()) {
   const freq = income.resetFrequency || (income.payDayOfMonth ? 'monthly' : null);
@@ -66,10 +121,19 @@ function getLatestDueIncomeReset(income, now = new Date()) {
 
 export default function App() {
   const { dialogEl, showConfirm, showAlert, showPrompt } = useDialog();
+  const { toastEl, showToast } = useToast();
 
-  const [view, setView] = useState('dashboard');
-  const [modal, setModal] = useState(null);
-  const [pendingImport, setPendingImport] = useState(null);
+  // Boot-time URL handling happens in the state initialisers rather than in an
+  // effect: the URL is already known on the first render, so reading it there
+  // avoids a second render pass and the cascading-render lint rule that flags it.
+  const [view, setView] = useState(() => (
+    readLaunchAction() === 'purchase-check' ? 'purchase' : 'dashboard'
+  ));
+  const [pendingImport, setPendingImport] = useState(readSharedSnapshot);
+  const [modal, setModal] = useState(() => {
+    if (readSharedSnapshot()) return 'importMode';
+    return readLaunchAction() === 'log-expense' ? 'addTx' : null;
+  });
   const [chatSummarySchema, setChatSummarySchema] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [fastForwardIncomeId, setFastForwardIncomeId] = useState(null);
@@ -82,13 +146,21 @@ export default function App() {
   const [wishlistDefaultCatId, setWishlistDefaultCatId] = useState(null);
   const [transactionDefaults, setTransactionDefaults] = useState(null);
   const [adjustCategoryId, setAdjustCategoryId] = useState(null);
-  const [activeAccountId, setActiveAccountId] = useState(() => {
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const pendingGoto = useRef(null);
+  const [detailCategoryId, setDetailCategoryId] = useState(null);
+  const [editingGoal, setEditingGoal] = useState(null);
+  const [savingForItem, setSavingForItem] = useState(null);
+  const [selectedAccountId, setActiveAccountId] = useState(() => {
     const stored = Number(localStorage.getItem('finesse.activeAccountId'));
     return Number.isFinite(stored) && stored > 0 ? stored : null;
   });
 
-  const accountsQuery = useLiveQuery(() => db.accounts.toArray(), []);
-  const accounts = accountsQuery || [];
+  const {
+    accountsQuery, activeAccountId, accounts, accountTransfers, settings, categories, transactions,
+    wishlistItems, wishlistCategories, incomeEvents, subscriptions, incomes, variables,
+    rules, templates, goals,
+  } = useFinesseData(selectedAccountId);
   const activeAccount = accounts.find(account => Number(account.id) === Number(activeAccountId)) || null;
 
   useEffect(() => {
@@ -97,39 +169,16 @@ export default function App() {
   }, [accountsQuery]);
 
   useEffect(() => {
-    if (!accounts.length) return;
-    const currentExists = accounts.some(account => Number(account.id) === Number(activeAccountId));
-    if (!activeAccountId || !currentExists) {
-      setActiveAccountId(accounts[0].id);
-    }
-  }, [accounts, activeAccountId]);
-
-  useEffect(() => {
     if (activeAccountId) localStorage.setItem('finesse.activeAccountId', String(activeAccountId));
   }, [activeAccountId]);
 
-  // ── Share-link import (one-time check on load) ──────────────────────────
+  // The action and snapshot have been consumed into state above; scrub them
+  // from the URL so a refresh doesn't replay them.
   useEffect(() => {
-    const hash = window.location.hash;
-    const match = hash.match(/snapshot=([^&]+)/);
-    if (!match) return;
-    const snapshot = decodeSnapshotFromUrl(match[1]);
-    history.replaceState(null, '', window.location.pathname + window.location.search);
-    if (!snapshot) return;
-    setPendingImport(snapshot);
-    setModal('importMode');
+    if (window.location.search || window.location.hash) {
+      history.replaceState(null, '', window.location.pathname);
+    }
   }, []);
-
-  const settings  = useLiveQuery(() => activeAccountId ? getSettings(activeAccountId) : null, [activeAccountId]);
-  const categories = useLiveQuery(() => activeAccountId ? getCategories(activeAccountId) : [], [activeAccountId]) || [];
-  const transactions = useLiveQuery(() => activeAccountId ? getTransactions(activeAccountId) : [], [activeAccountId]) || [];
-  const wishlistItems = useLiveQuery(() => activeAccountId ? getWishlistItems(activeAccountId) : [], [activeAccountId]) || [];
-  const wishlistCategories = useLiveQuery(() => activeAccountId ? getWishlistCategories(activeAccountId) : [], [activeAccountId]) || [];
-  const accountTransfers = useLiveQuery(() => db.accountTransfers.toArray(), []) || [];
-  const incomeEvents = useLiveQuery(() => activeAccountId ? getIncomeEvents(activeAccountId) : [], [activeAccountId]) || [];
-  const incomes   = useLiveQuery(() => activeAccountId ? db.incomes.where('accountId').equals(Number(activeAccountId)).toArray() : [], [activeAccountId]) || [];
-  const subscriptions = useLiveQuery(() => activeAccountId ? getSubscriptions(activeAccountId) : [], [activeAccountId]) || [];
-  const variables = useLiveQuery(() => activeAccountId ? db.variables.where('accountId').equals(Number(activeAccountId)).toArray() : [], [activeAccountId]) || [];
 
   // Per-category auto-reset for legacy categories without income funding.
   useEffect(() => {
@@ -167,13 +216,23 @@ export default function App() {
     })();
   }, [categories, incomes]);
 
-  // Subscriptions are logged automatically when their due date arrives.
+  // Subscriptions are logged automatically when their due date arrives. Say so:
+  // money leaving a budget without the user doing anything should never be
+  // silent, or a subscription charge looks like a discrepancy.
   useEffect(() => {
     if (!activeAccountId || !subscriptions.length) return;
-    processDueSubscriptions(activeAccountId).catch(error => {
-      console.error('Failed to process due subscriptions', error);
-    });
-  }, [activeAccountId, subscriptions]);
+    processDueSubscriptions(activeAccountId)
+      .then(created => {
+        if (created > 0) {
+          showToast(`Logged ${created} due subscription${created === 1 ? '' : 's'}`, {
+            detail: 'Charged automatically to their categories.',
+          });
+        }
+      })
+      .catch(error => {
+        console.error('Failed to process due subscriptions', error);
+      });
+  }, [activeAccountId, subscriptions, showToast]);
 
   // Income auto-reset: funded categories reset when their associated income resets.
   useEffect(() => {
@@ -196,6 +255,8 @@ export default function App() {
           type: 'recurring',
         });
         await resetCategoriesForIncome(income.id, resetAt, activeAccountId);
+        // After the reset, so a cycle's savings come out of the fresh budget.
+        await autoContributeGoals(income.id, activeAccountId, resetAt);
         await updateIncome(income.id, { lastPaid: resetAt, holdActive: false });
         if (!latestReset || due > latestReset) latestReset = due;
       }
@@ -243,7 +304,11 @@ export default function App() {
     a.download = `finance-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
-  }, []);
+
+    // Remember it, so "no backup for N days" can be honest about N.
+    const current = await getSettings(activeAccountId);
+    await saveSettings({ ...(current || {}), lastBackupAt: new Date().toISOString() }, activeAccountId);
+  }, [activeAccountId]);
 
   const handleExportCSV = useCallback(async () => {
     const csv = await exportTransactionsCSV(activeAccountId);
@@ -403,6 +468,7 @@ export default function App() {
     });
     await updateIncome(id, { lastPaid: isoDate, holdActive: false });
     await resetCategoriesForIncome(id, isoDate, activeAccountId);
+    await autoContributeGoals(id, activeAccountId, isoDate);
     // Keep settings.lastReset current so forecasting burn rates stay accurate
     const current = await getSettings(activeAccountId);
     if (current) await saveSettings({ ...current, lastReset: isoDate }, activeAccountId);
@@ -484,9 +550,18 @@ export default function App() {
     setModal('editTx');
   }, []);
 
-  const handleBulkAddExpenses = useCallback((data) => (
-    addTransactionsBulk({ ...data, accountId: activeAccountId })
+  const handleBulkAddExpenses = useCallback((rows) => (
+    addTransactionsBulk(rows, activeAccountId)
   ), [activeAccountId]);
+
+  const handleDeleteWishlistItem = useCallback(async (id) => {
+    const item = wishlistItems.find(entry => Number(entry.id) === Number(id));
+    if (!item) return;
+    await deleteWishlistItem(id);
+    showToast(`Removed ${item.name}`, {
+      action: { label: 'Undo', onClick: () => addWishlistItem(item, activeAccountId) },
+    });
+  }, [wishlistItems, activeAccountId, showToast]);
 
   const handleEditWishlistItem = useCallback((item) => {
     setEditingWishlistItem(item);
@@ -533,14 +608,20 @@ export default function App() {
   }, [showConfirm]);
 
   // ── Transaction / category delete (confirmation owned here) ─────────────────
+  // Reversible deletes get an undo toast instead of a confirm dialog. A modal
+  // that interrupts every single delete is worse than one that never appears
+  // and an undo that always works — the transaction is restored with its
+  // original id, so it's a true restore rather than a lookalike copy.
   const handleDeleteTransaction = useCallback(async (tx) => {
     const cat = categories.find(c => c.id === tx.categoryId);
     const label = tx.note || cat?.name || 'Expense';
-    const ok = await showConfirm(`Delete "${label}"?`, {
-      title: 'Delete Transaction', confirmText: 'Delete', danger: true,
+
+    await deleteTransaction(tx.id);
+    showToast(`Deleted ${label}`, {
+      detail: fmt(tx.amount || 0),
+      action: { label: 'Undo', onClick: () => addTransaction(tx) },
     });
-    if (ok) deleteTransaction(tx.id);
-  }, [categories, showConfirm]);
+  }, [categories, showToast]);
 
   const handleDeleteCategory = useCallback(async (catId) => {
     const cat = categories.find(c => c.id === catId);
@@ -555,7 +636,209 @@ export default function App() {
   const handleUpdateVariable = useCallback((id, d) => updateVariable(id, d), []);
   const handleDeleteVariable = useCallback(id   => deleteVariable(id), []);
 
-  const navigate = (id) => { setView(id); setSidebarOpen(false); };
+  const navigate = useCallback((id) => { setView(id); setSidebarOpen(false); }, []);
+
+  // ── Fast capture handlers ────────────────────────────────────────────────
+  const handleAddSplit = useCallback((data) => (
+    addSplitTransaction({ ...data, accountId: activeAccountId })
+  ), [activeAccountId]);
+
+  // ── Goal handlers ────────────────────────────────────────────────────────
+  const handleAddGoal = useCallback((goal) => addGoal(goal, activeAccountId), [activeAccountId]);
+  const handleEditGoal = useCallback((goal) => { setEditingGoal(goal); setModal('editGoal'); }, []);
+  const handleContributeToGoal = useCallback((goalId, amount) => contributeToGoal(goalId, amount), []);
+
+  const handleDeleteGoal = useCallback(async (goal) => {
+    const ok = await showConfirm(
+      `Delete "${goal.name}"? Money set aside for it goes back to being ordinary spendable budget.`,
+      { title: 'Delete Goal', confirmText: 'Delete', danger: true },
+    );
+    if (ok) await deleteGoal(goal.id);
+  }, [showConfirm]);
+
+  const handleSaveForItem = useCallback(async (goal) => {
+    await addGoal(goal, activeAccountId);
+    showToast(`Saving for ${goal.name}`, { detail: 'Added to Goals.' });
+  }, [activeAccountId, showToast]);
+
+  const handleRunWizard = useCallback(async ({ income, categories: packCategories }) => {
+    const incomeId = await addIncome(income, activeAccountId);
+
+    // Allocated 100% to the new income, so each category is properly funded and
+    // resets with it — the thing a new user would otherwise have to discover.
+    for (const category of packCategories) {
+      await addCategory({
+        name: category.name,
+        allowance: category.allowance,
+        color: category.color,
+        incomeAllocations: [{ incomeId: Number(incomeId), percent: 100 }],
+        allowanceFormula: null,
+        lastReset: new Date().toISOString(),
+      }, activeAccountId);
+    }
+
+    showToast('Budget ready', {
+      detail: packCategories.length
+        ? `${packCategories.length} categories funded from ${income.name}.`
+        : `${income.name} added.`,
+    });
+  }, [activeAccountId, showToast]);
+
+  const handleRecalculateCounters = useCallback(async () => {
+    const report = await recalculateSpendCounters(activeAccountId);
+    if (report.repaired > 0) {
+      showToast(`Repaired ${report.repaired} spend counter${report.repaired === 1 ? '' : 's'}`, { severity: 'warn' });
+    }
+    return report;
+  }, [activeAccountId, showToast]);
+
+  const handleAddRule = useCallback((rule) => addRule(rule, activeAccountId), [activeAccountId]);
+  const handleUpdateRule = useCallback((id, data) => updateRule(id, data), []);
+  const handleDeleteRule = useCallback((id) => deleteRule(id), []);
+  const handleAddTemplate = useCallback((template) => addTemplate(template, activeAccountId), [activeAccountId]);
+  const handleDeleteTemplate = useCallback((id) => deleteTemplate(id), []);
+
+  const handleLogTemplate = useCallback(async (templateId) => {
+    const template = templates.find(item => Number(item.id) === Number(templateId));
+    await logTemplate(templateId, activeAccountId);
+    if (template) {
+      showToast(`Logged ${template.name}`, { detail: fmt(template.amount) });
+    }
+  }, [templates, activeAccountId, showToast]);
+
+  const handleAddExpenseOnDate = useCallback((date) => {
+    setTransactionDefaults({ date: date instanceof Date ? date.toISOString() : date });
+    setModal('addTx');
+  }, []);
+
+  const handleRepeatTransaction = useCallback((tx) => {
+    // Prefill rather than log outright: the amount is usually right but not
+    // always, and a silent duplicate is hard to notice and easy to resent.
+    setTransactionDefaults({
+      categoryId: tx.categoryId,
+      amount: tx.amount,
+      note: tx.note,
+      tags: tx.tags || [],
+    });
+    setModal('addTx');
+  }, []);
+
+  // ── Keyboard shortcuts ───────────────────────────────────────────────────
+  useEffect(() => {
+    const isTyping = (target) => (
+      target instanceof HTMLElement
+      && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+    );
+
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen(open => !open);
+        return;
+      }
+      // Single-letter shortcuts must never fire while the user is typing, or
+      // "a" becomes unusable in every text field in the app.
+      if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
+      if (modal) return;
+
+      const key = e.key.toLowerCase();
+
+      // "g then <letter>" jumps to a view, the convention most keyboard-driven
+      // apps use. The pending "g" expires so a stray press doesn't linger.
+      if (pendingGoto.current) {
+        clearTimeout(pendingGoto.current.timer);
+        pendingGoto.current = null;
+        const target = GOTO_KEYS[key];
+        if (target) {
+          e.preventDefault();
+          navigate(target);
+          return;
+        }
+      }
+
+      if (key === 'g') {
+        e.preventDefault();
+        pendingGoto.current = { timer: setTimeout(() => { pendingGoto.current = null; }, 1500) };
+        return;
+      }
+
+      if (key === 'a') { e.preventDefault(); setModal('addTx'); return; }
+      if (key === 'b') { e.preventDefault(); setModal('bulkAddTx'); return; }
+      if (key === '?') { e.preventDefault(); setModal('shortcuts'); return; }
+      if (key === '/') { e.preventDefault(); navigate('transactions'); }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [modal, navigate]);
+
+  // ── Nudges ───────────────────────────────────────────────────────────────
+  const nudges = useMemo(() => filterDismissedNudges(
+    buildNudges({ categories, incomes, subscriptions, goals, transactions, settings }),
+    settings?.dismissedNudges,
+  ), [categories, incomes, subscriptions, goals, transactions, settings]);
+
+  const handleDismissNudge = useCallback(async (nudge) => {
+    const current = await getSettings(activeAccountId);
+    await saveSettings({
+      ...(current || {}),
+      dismissedNudges: { ...(current?.dismissedNudges || {}), [nudge.id]: new Date().toISOString() },
+    }, activeAccountId);
+  }, [activeAccountId]);
+
+  const handleNudgeNavigate = useCallback((nudge) => {
+    if (nudge.view) navigate(nudge.view);
+  }, [navigate]);
+
+  // OS notifications can't wake the app up without a backend, so they fire when
+  // it opens or regains focus. The in-app centre remains the primary channel.
+  useEffect(() => {
+    if (!settings?.notificationsEnabled || nudges.length === 0) return undefined;
+
+    const deliver = async () => {
+      if (document.visibilityState !== 'visible') return;
+      const result = notifyNudges(nudges, {
+        enabled: true,
+        alreadyNotified: settings?.notifiedNudges || [],
+      });
+      // Only written when something was actually sent, so this doesn't churn
+      // the settings row on every visibility change.
+      if (!result) return;
+      const current = await getSettings(activeAccountId);
+      await saveSettings({ ...(current || {}), notifiedNudges: result.notifiedIds }, activeAccountId);
+    };
+
+    deliver();
+    document.addEventListener('visibilitychange', deliver);
+    return () => document.removeEventListener('visibilitychange', deliver);
+  }, [nudges, settings?.notificationsEnabled, settings?.notifiedNudges, activeAccountId]);
+
+  const paletteCommands = useMemo(() => [
+    { id: 'log-expense', label: 'Log an expense', keywords: 'add spend transaction new', run: () => setModal('addTx') },
+    { id: 'log-refund', label: 'Log a refund', keywords: 'return money back credit', run: () => setModal('addTx') },
+    { id: 'bulk-add', label: 'Bulk add expenses', keywords: 'many multiple paste import', run: () => setModal('bulkAddTx') },
+    { id: 'one-off-income', label: 'Add one-off income', keywords: 'gift refund bonus paid', run: () => setModal('addOneOffIncome') },
+    { id: 'add-income', label: 'Add an income source', keywords: 'salary wage pay', run: () => setModal('addIncome') },
+    { id: 'add-category', label: 'Add a budget category', keywords: 'budget allowance', run: () => setModal('addCategory') },
+    { id: 'shortcuts', label: 'Show keyboard shortcuts', keywords: 'help keys hotkeys', run: () => setModal('shortcuts') },
+    { id: 'add-goal', label: 'Add a savings goal', keywords: 'save sinking fund debt', run: () => setModal('addGoal') },
+    { id: 'add-subscription', label: 'Add a subscription', keywords: 'recurring bill netflix', run: () => setModal('addSubscription') },
+    { id: 'adjust-budget', label: 'Adjust a budget', keywords: 'top up borrow move money', run: () => handleOpenAdjust(null) },
+    ...NAV.map(item => ({
+      id: `go-${item.id}`,
+      label: `Go to ${item.label}`,
+      keywords: `view navigate ${item.label}`,
+      Icon: item.Icon,
+      run: () => navigate(item.id),
+    })),
+    ...templates.map(template => ({
+      id: `template-${template.id}`,
+      label: `Log ${template.name}`,
+      hint: fmt(template.amount),
+      keywords: 'template quick repeat',
+      run: () => handleLogTemplate(template.id),
+    })),
+  ], [navigate, templates, handleLogTemplate, handleOpenAdjust]);
 
   return (
     <div style={{ minHeight: '100vh', position: 'relative' }}>
@@ -625,9 +908,12 @@ export default function App() {
               borderRadius: 10, width: 38, height: 38, cursor: 'pointer', color: 'white',
               display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
             }}><Menu size={18} aria-hidden="true" /></button>
-            <h1 className="font-display" style={{ fontSize: 20, fontWeight: 400, margin: 0 }}>
-              {NAV.find(n => n.id === view)?.label}
+            <h1 className="font-display" style={{ fontSize: 20, fontWeight: 400, margin: 0, flex: 1, minWidth: 0 }}>
+              {view === 'categoryDetail'
+                ? (categories.find(c => Number(c.id) === Number(detailCategoryId))?.name || 'Category')
+                : NAV.find(n => n.id === view)?.label}
             </h1>
+            <NudgeCenter nudges={nudges} onDismiss={handleDismissNudge} onNavigate={handleNudgeNavigate} />
           </div>
 
           {!accountsQuery ? (
@@ -648,6 +934,7 @@ export default function App() {
               incomes={incomes}
               subscriptions={subscriptions}
               variables={variables}
+              goalCommitment={getGoalCommitment(goals, incomes, settings)}
               onAddTx={() => setModal('addTx')}
               onAddCategory={() => setModal('addCategory')}
               onAddIncome={() => setModal('addIncome')}
@@ -659,7 +946,35 @@ export default function App() {
               onDeleteIncome={handleDeleteIncome}
               onEditCategory={handleEditCategory}
               onDeleteCategory={handleDeleteCategory}
+              onEditTransaction={handleEditTransaction}
+              onDeleteTransaction={handleDeleteTransaction}
+              onOpenCategory={(id) => { setDetailCategoryId(id); setView('categoryDetail'); }}
               onAdjust={handleOpenAdjust}
+              onRunWizard={handleRunWizard}
+            />
+          )}
+          {view === 'categoryDetail' && (
+            <CategoryDetail
+              category={categories.find(c => Number(c.id) === Number(detailCategoryId)) || null}
+              transactions={transactions}
+              subscriptions={subscriptions}
+              incomes={incomes}
+              settings={settings}
+              onBack={() => { setView('dashboard'); setDetailCategoryId(null); }}
+              onEdit={handleEditCategory}
+              onAdjust={handleOpenAdjust}
+              onEditTransaction={handleEditTransaction}
+              onDeleteTransaction={handleDeleteTransaction}
+            />
+          )}
+          {view === 'goals' && (
+            <Goals
+              goals={goals}
+              incomes={incomes}
+              onAddGoal={() => setModal('addGoal')}
+              onEditGoal={handleEditGoal}
+              onDeleteGoal={handleDeleteGoal}
+              onContribute={handleContributeToGoal}
             />
           )}
           {view === 'accounts' && (
@@ -680,11 +995,14 @@ export default function App() {
           {view === 'transactions' && (
             <Transactions transactions={transactions} categories={categories}
               onDelete={handleDeleteTransaction} onEdit={handleEditTransaction} onAdd={() => setModal('addTx')}
+              onRepeat={handleRepeatTransaction}
               onBulkAdd={() => setModal('bulkAddTx')}
               onAddSubscription={() => setModal('addSubscription')} />
           )}
           {view === 'forecasting' && (
-            <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes} />
+            <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes}
+              incomeEvents={incomeEvents} transfers={accountTransfers} subscriptions={subscriptions}
+              account={activeAccount} />
           )}
           {view === 'purchase' && (
             <PurchaseCheck categories={categories} onLogPurchase={handleLogPurchase} />
@@ -694,10 +1012,13 @@ export default function App() {
               categories={categories}
               incomes={incomes}
               subscriptions={subscriptions}
+              transactions={transactions}
               onAddSubscription={() => setModal('addSubscription')}
               onEditSubscription={handleEditSubscription}
               onDeleteSubscription={handleDeleteSubscription}
               onToggleSubscription={handleToggleSubscription}
+              onAddExpenseOn={handleAddExpenseOnDate}
+              onEditTransaction={handleEditTransaction}
             />
           )}
           {view === 'subscriptions' && (
@@ -712,14 +1033,16 @@ export default function App() {
           )}
           {view === 'wishlist' && (
             <Wishlist items={wishlistItems} wishlistCategories={wishlistCategories}
-              expenseCategories={categories} settings={settings}
+              expenseCategories={categories} settings={settings} incomes={incomes}
               onAddItem={() => { setWishlistDefaultCatId(null); setModal('addWish'); }}
               onEditItem={handleEditWishlistItem}
-              onDeleteItem={deleteWishlistItem}
+              onDeleteItem={handleDeleteWishlistItem}
               onAddWishlistCat={(data) => addWishlistCategory(data, activeAccountId)}
               onEditWishlistCat={handleEditWishlistList}
               onDeleteWishlistCat={deleteWishlistCategory}
               onAddItemToFolder={(catId) => { setWishlistDefaultCatId(catId); setModal('addWish'); }}
+              goals={goals}
+              onSaveForItem={(item) => { setSavingForItem(item); setModal('saveForItem'); }}
               showConfirm={showConfirm} />
           )}
           {view === 'variables' && (
@@ -737,6 +1060,10 @@ export default function App() {
               categories={categories} settings={settings} onSaveSettings={handleSaveSettings}
               incomes={incomes} onResetIncome={(incomeId) => resetCategoriesForIncome(incomeId, undefined, activeAccountId)}
               onFullReset={handleFullReset}
+              rules={rules} onAddRule={handleAddRule} onUpdateRule={handleUpdateRule} onDeleteRule={handleDeleteRule}
+              templates={templates} onAddTemplate={handleAddTemplate} onDeleteTemplate={handleDeleteTemplate}
+              nudgeCount={nudges.length}
+              onRecalculate={handleRecalculateCounters}
               showConfirm={showConfirm} showAlert={showAlert} showPrompt={showPrompt} />
           )}
           </Suspense>)}
@@ -797,7 +1124,10 @@ export default function App() {
       {modal === 'addTx' && categories.length > 0 && (
         <AddTransactionModal
           categories={categories}
+          transactions={transactions}
+          rules={rules}
           onAdd={(data) => addTransaction({ ...data, accountId: activeAccountId })}
+          onAddSplit={handleAddSplit}
           initial={transactionDefaults}
           defaultCategoryId={settings?.defaultCategoryId}
           onClose={() => { setModal(null); setTransactionDefaults(null); }}
@@ -806,6 +1136,8 @@ export default function App() {
       {modal === 'bulkAddTx' && categories.length > 0 && (
         <BulkAddExpensesModal
           categories={categories}
+          transactions={transactions}
+          rules={rules}
           defaultCategoryId={settings?.defaultCategoryId}
           onAdd={handleBulkAddExpenses}
           onClose={() => setModal(null)}
@@ -814,6 +1146,8 @@ export default function App() {
       {modal === 'editTx' && editingTransaction && categories.length > 0 && (
         <AddTransactionModal
           categories={categories}
+          transactions={transactions}
+          rules={rules}
           transaction={editingTransaction}
           onSave={(id, data) => { updateTransaction(id, data); setModal(null); setEditingTransaction(null); }}
           defaultCategoryId={settings?.defaultCategoryId}
@@ -860,10 +1194,46 @@ export default function App() {
         <ExportChatSummaryOptionsModal schema={chatSummarySchema} onConfirm={handleExportChatSummary}
           onClose={() => setModal(null)} />
       )}
+      {modal === 'shortcuts' && (
+        <Modal title="Keyboard shortcuts" onClose={() => setModal(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {SHORTCUTS.map(([keys, description]) => (
+              <div key={keys} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', borderRadius: 9, background: 'rgba(255,255,255,0.04)' }}>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{description}</span>
+                <kbd style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+                  {keys}
+                </kbd>
+              </div>
+            ))}
+          </div>
+          <div className="modal-actions" style={{ display: 'flex', marginTop: 18 }}>
+            <button className="btn-primary" onClick={() => setModal(null)} style={{ flex: 1 }}>Got it</button>
+          </div>
+        </Modal>
+      )}
+      {modal === 'addGoal' && (
+        <AddGoalModal incomes={incomes} onAdd={handleAddGoal} onClose={() => setModal(null)} />
+      )}
+      {modal === 'editGoal' && editingGoal && (
+        <AddGoalModal
+          goal={editingGoal}
+          incomes={incomes}
+          onSave={(id, data) => { updateGoal(id, data); setModal(null); setEditingGoal(null); }}
+          onClose={() => { setModal(null); setEditingGoal(null); }}
+        />
+      )}
+      {modal === 'saveForItem' && savingForItem && (
+        <SaveForItemModal
+          item={savingForItem}
+          incomes={incomes}
+          onConfirm={handleSaveForItem}
+          onClose={() => { setModal(null); setSavingForItem(null); }}
+        />
+      )}
       {modal === 'adjust' && categories.length > 0 && (
         <AdjustBudgetModal
           categories={categories}
-          totalIncome={incomes.length > 0 ? incomes.reduce((s, i) => s + (i.amount || 0), 0) : (settings?.income || 0)}
+          incomes={incomes}
           defaultCategoryId={adjustCategoryId}
           onTopUpFromIncome={handleTopUpFromIncome}
           onBorrowFromCategory={handleBorrowFromCategory}
@@ -871,7 +1241,26 @@ export default function App() {
           onClose={() => { setModal(null); setAdjustCategoryId(null); }}
         />
       )}
+      {categories.length > 0 && (
+        <QuickAdd
+          onClick={() => setModal('addTx')}
+          templates={templates}
+          onLogTemplate={handleLogTemplate}
+        />
+      )}
+
+      {paletteOpen && (
+      <CommandPalette
+        onClose={() => setPaletteOpen(false)}
+        commands={paletteCommands}
+        transactions={transactions}
+        categories={categories}
+        onPickTransaction={handleEditTransaction}
+      />
+      )}
+
       {dialogEl}
+      {toastEl}
 
       <style>{`
         @media (min-width: 768px) {

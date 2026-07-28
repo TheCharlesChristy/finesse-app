@@ -92,16 +92,60 @@ export function getNextRecurringDate(fromDate = new Date(), intervalUnit = 'mont
 
 // ── Income allocation helpers ────────────────────────────────────────────────
 
+// Mean Gregorian month length. Used for period conversion so that "monthly"
+// means the same thing in February as it does in March.
+export const AVERAGE_MONTH_DAYS = 365.25 / 12;
+
 export function roundMoney(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
 }
 
-// Effective allowance = base allowance + any temporary top-up funded from
-// unallocated income for the current cycle. The boost is cleared on reset, so
-// it only affects "how much can I still spend right now", not the recurring
-// base allowance used for income allocation, formulas, or pacing.
+function toValidDate(value) {
+  if (value == null) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+// Effective allowance = base allowance
+//   + any temporary top-up funded from unallocated income for this cycle
+//   + anything rolled over from previous cycles.
+//
+// The three are kept as separate fields because they behave differently at
+// reset: `temporaryBoost` is cleared, `rolloverBalance` is *created*, and
+// `allowance` is untouched. None of them affect the recurring base allowance
+// used for income allocation, formulas, or pacing.
 export function getEffectiveAllowance(category) {
-  return roundMoney((Number(category?.allowance) || 0) + (Number(category?.temporaryBoost) || 0));
+  return roundMoney(
+    (Number(category?.allowance) || 0)
+    + (Number(category?.temporaryBoost) || 0)
+    + (Number(category?.rolloverBalance) || 0)
+  );
+}
+
+/**
+ * What an opt-in rollover category carries into its next cycle.
+ *
+ * Deliberately excludes `temporaryBoost`: a top-up is borrowed or granted for
+ * one cycle, so leaving it unspent should release it rather than convert it
+ * into permanent budget.
+ *
+ * Overspend only carries when the user asked for it. Silently starting the next
+ * cycle in the red is a nasty surprise, but for people who want a true running
+ * balance it's the honest behaviour.
+ */
+export function getRolloverForNextCycle(category, clearedThisCycle = 0) {
+  if (!category?.rolloverEnabled) return 0;
+
+  const base = roundMoney((Number(category.allowance) || 0) + (Number(category.rolloverBalance) || 0));
+  // A category funded by several incomes has its counter cleared piecemeal, one
+  // income at a time, so by the final reset `spent` only holds the remainder.
+  // `clearedThisCycle` restores the rest, or rollover would over-credit by
+  // everything the earlier partial resets already wiped.
+  const spentThisCycle = roundMoney((Number(category.spent) || 0) + (Number(clearedThisCycle) || 0));
+  const leftover = roundMoney(base - spentThisCycle);
+
+  if (leftover >= 0) return leftover;
+  return category.rolloverCarryOverspend ? leftover : 0;
 }
 
 // Spare budget a category can lend or that's still safe to spend: effective
@@ -189,6 +233,119 @@ export function getIncomeCycleDays(resetFrequency, date = new Date()) {
     case 'monthly':
     default:            return getDaysInMonth(date);
   }
+}
+
+/**
+ * Average (calendar-independent) length of one reset cycle in days.
+ *
+ * Unlike `getIncomeCycleDays`, monthly resolves to 365.25/12 rather than the
+ * length of a specific month. Use this when converting amounts *between*
+ * periods, where anchoring to one particular month would skew the result.
+ */
+export function getIncomeCycleAverageDays(resetFrequency) {
+  switch (resetFrequency) {
+    case 'weekly':      return 7;
+    case 'fortnightly': return 14;
+    case '4weekly':     return 28;
+    case 'monthly':
+    default:            return AVERAGE_MONTH_DAYS;
+  }
+}
+
+export function getIncomeFrequency(income) {
+  return income?.resetFrequency || (income?.payDayOfMonth ? 'monthly' : 'monthly');
+}
+
+const PERIOD_DAYS = { day: 1, week: 7, fortnight: 14, month: AVERAGE_MONTH_DAYS, year: 365.25 };
+
+export function getPeriodDays(period = 'month') {
+  return PERIOD_DAYS[period] ?? AVERAGE_MONTH_DAYS;
+}
+
+/** What one income is worth per day, whatever its pay frequency. */
+export function getIncomeDailyRate(income) {
+  const amount = Number(income?.amount) || 0;
+  if (amount <= 0) return 0;
+  return amount / getIncomeCycleAverageDays(getIncomeFrequency(income));
+}
+
+/** A single income expressed over an arbitrary period. */
+export function getIncomeForPeriod(income, period = 'month') {
+  return roundMoney(getIncomeDailyRate(income) * getPeriodDays(period));
+}
+
+/**
+ * Total income across every source, normalised to one period.
+ *
+ * Summing `income.amount` directly is wrong whenever pay frequencies differ —
+ * a weekly £200 and a monthly £2,000 are not £2,200 of anything. This converts
+ * each source to a daily rate first. Monthly-only setups are unaffected.
+ */
+export function getNormalisedIncomeTotal(incomes = [], period = 'month') {
+  return roundMoney(
+    incomes.reduce((sum, income) => sum + getIncomeDailyRate(income) * getPeriodDays(period), 0)
+  );
+}
+
+/** True when income sources don't all share one pay frequency. */
+export function hasMixedIncomeFrequencies(incomes = []) {
+  const freqs = new Set(incomes.filter(i => (Number(i?.amount) || 0) > 0).map(getIncomeFrequency));
+  return freqs.size > 1;
+}
+
+/**
+ * One category's allowance normalised to a period.
+ *
+ * A category's `allowance` is denominated in the cycle of whichever income
+ * funds it — a category funded by a weekly wage holds a *weekly* allowance.
+ * Allowances must therefore be converted the same way incomes are before the
+ * two can be compared.
+ */
+export function getNormalisedCategoryAllowance(category, incomes = [], period = 'month') {
+  const allowance = Number(category?.allowance) || 0;
+  if (allowance === 0) return 0;
+
+  const targetDays = getPeriodDays(period);
+  const incomeMap = new Map(incomes.map(income => [Number(income.id), income]));
+  const allocations = normalizeIncomeAllocations(category.incomeAllocations)
+    .filter(allocation => incomeMap.has(allocation.incomeId));
+
+  // Unfunded / legacy categories are monthly by convention.
+  if (!allocations.length) {
+    const cycleDays = getIncomeCycleAverageDays(category?.resetFrequency || 'monthly');
+    return roundMoney(allowance * (targetDays / cycleDays));
+  }
+
+  let total = 0;
+  for (const allocation of allocations) {
+    const cycleDays = getIncomeCycleAverageDays(getIncomeFrequency(incomeMap.get(allocation.incomeId)));
+    total += (allowance * allocation.percent / 100) * (targetDays / cycleDays);
+  }
+  return roundMoney(total);
+}
+
+/** Total category allowance normalised to one period. */
+export function getNormalisedAllowanceTotal(categories = [], incomes = [], period = 'month') {
+  return roundMoney(
+    categories.reduce((sum, category) => sum + getNormalisedCategoryAllowance(category, incomes, period), 0)
+  );
+}
+
+/**
+ * Income not yet committed to any category, measured per pay cycle.
+ *
+ * Computed per source (each income's own amount minus what categories draw
+ * from it) rather than by subtracting one mixed-frequency total from another,
+ * which silently over- or under-states the free pool whenever pay frequencies
+ * differ. This is the pool a temporary top-up can safely draw on.
+ */
+export function getUnallocatedIncomeTotal(incomes = [], categories = []) {
+  const usage = getIncomeAllocationUsage(incomes, categories);
+  return roundMoney(
+    incomes.reduce((sum, income) => (
+      sum + Math.max(0, roundMoney((Number(income.amount) || 0) - (usage[String(income.id)] || 0)))
+    ), 0)
+  );
 }
 
 /**
@@ -301,33 +458,249 @@ export function evaluateFormula(formula, variables = [], categories = [], income
   }
 }
 
+// ── Budget cycles ────────────────────────────────────────────────────────────
+
+/**
+ * The current budget cycle for one category.
+ *
+ * A category's spend counter is zeroed by whichever income funds it, so its
+ * cycle is the income's — not the account-wide `settings` schedule, which only
+ * ever matched single-monthly-income setups. Resolution order:
+ *   1. the soonest-resetting income that funds this category
+ *   2. the category's own legacy `resetFrequency`
+ *   3. the account `settings` schedule
+ *
+ * Returns { start, end, freq, days, elapsed, remaining }.
+ */
+export function getCategoryCycle(category, incomes = [], settings = null, now = new Date()) {
+  const today = startOfDay(now);
+  const incomeMap = new Map(incomes.map(income => [Number(income.id), income]));
+
+  const advancePast = (freq, payDay, base) => {
+    let next = calcNextReset(freq, payDay, base);
+    let guard = 0;
+    while (next <= today && guard < 240) {
+      next = calcNextReset(freq, payDay, next);
+      guard += 1;
+    }
+    return next;
+  };
+
+  let end = null;
+  let freq = null;
+
+  for (const allocation of normalizeIncomeAllocations(category?.incomeAllocations)) {
+    const income = incomeMap.get(allocation.incomeId);
+    if (!income || income.holdActive) continue;
+    const incomeFreq = income.resetFrequency || (income.payDayOfMonth ? 'monthly' : null);
+    if (!incomeFreq) continue;
+
+    const base = toValidDate(income.lastPaid) || today;
+    const next = advancePast(incomeFreq, income.payDayOfMonth, base);
+    if (!end || next < end) {
+      end = next;
+      freq = incomeFreq;
+    }
+  }
+
+  if (!end && category?.resetFrequency) {
+    const base = toValidDate(category.lastReset) || today;
+    end = advancePast(category.resetFrequency, category.payDayOfMonth, base);
+    freq = category.resetFrequency;
+  }
+
+  if (!end) {
+    const scheduled = getEffectiveNextReset(settings);
+    const scheduledDate = scheduled ? toValidDate(scheduled.date || scheduled) : null;
+    end = scheduledDate || addMonths(today, 1);
+    freq = 'monthly';
+  }
+
+  end = startOfDay(end);
+
+  const lastReset = toValidDate(category?.lastReset);
+  const start = lastReset
+    ? startOfDay(lastReset)
+    : startOfDay(addDays(end, -Math.round(getIncomeCycleAverageDays(freq))));
+
+  const days = Math.max(1, differenceInDays(end, start));
+  const elapsed = Math.max(0, Math.min(days, differenceInDays(today, start)));
+
+  return { start, end, freq, days, elapsed, remaining: Math.max(0, days - elapsed) };
+}
+
+// ── Transactions ─────────────────────────────────────────────────────────────
+
+export const TX_EXPENSE = 'expense';
+export const TX_REFUND = 'refund';
+
+/**
+ * A transaction's effect on spend, signed.
+ *
+ * `amount` is always stored positive and `type` carries the direction, so a
+ * refund reduces the category's spend and credits the account. Anything that
+ * totals transactions must go through this, or refunds get counted as spend.
+ */
+export function getSignedAmount(transaction) {
+  const amount = Math.abs(Number(transaction?.amount) || 0);
+  return roundMoney(transaction?.type === TX_REFUND ? -amount : amount);
+}
+
+export function isRefund(transaction) {
+  return transaction?.type === TX_REFUND;
+}
+
+// ── Fast capture: merchant memory & rules ────────────────────────────────────
+
+/** The label a transaction is remembered by — explicit merchant, else its note. */
+export function getTransactionMerchant(transaction) {
+  return String(transaction?.merchant || transaction?.note || '').trim();
+}
+
+/**
+ * Places you've spent before, most useful first.
+ *
+ * Ranked by frequency then recency, so the shop you visit weekly outranks the
+ * one you visited once yesterday. Each entry carries the category you last
+ * used, which is what makes one-tap categorisation possible.
+ */
+export function getMerchantSuggestions(transactions = [], query = '', limit = 6) {
+  const search = String(query || '').trim().toLowerCase();
+  const byMerchant = new Map();
+
+  for (const tx of transactions) {
+    const label = getTransactionMerchant(tx);
+    if (!label) continue;
+
+    const key = label.toLowerCase();
+    const date = toValidDate(tx.date);
+    const existing = byMerchant.get(key);
+
+    if (!existing) {
+      byMerchant.set(key, {
+        label, count: 1, lastDate: date, lastCategoryId: tx.categoryId, lastAmount: Number(tx.amount) || 0,
+      });
+      continue;
+    }
+
+    existing.count += 1;
+    if (date && (!existing.lastDate || date > existing.lastDate)) {
+      existing.lastDate = date;
+      existing.lastCategoryId = tx.categoryId;
+      existing.lastAmount = Number(tx.amount) || 0;
+    }
+  }
+
+  return [...byMerchant.values()]
+    .filter(entry => !search || entry.label.toLowerCase().includes(search))
+    .sort((a, b) => (
+      b.count - a.count
+      || (b.lastDate?.getTime() || 0) - (a.lastDate?.getTime() || 0)
+      || a.label.localeCompare(b.label)
+    ))
+    .slice(0, limit);
+}
+
+/**
+ * First rule whose match text appears in `text`, or null.
+ * Rules are expected pre-sorted by priority (see `getRules` in db.js).
+ */
+export function matchRule(text, rules = []) {
+  const haystack = String(text || '').toLowerCase();
+  if (!haystack) return null;
+  return rules.find(rule => {
+    const needle = String(rule?.match || '').trim().toLowerCase();
+    return needle && haystack.includes(needle);
+  }) || null;
+}
+
+/**
+ * Best guess at the category for a note, and why.
+ *
+ * Explicit rules win over learned history: a rule is something the user stated,
+ * history is only inference. Returns null when there's nothing to go on, so
+ * callers can leave the current selection alone rather than guessing wildly.
+ */
+export function suggestCategoryForNote(text, { rules = [], transactions = [], categories = [] } = {}) {
+  const label = String(text || '').trim();
+  if (!label) return null;
+
+  const validCategory = (id) => categories.some(cat => Number(cat.id) === Number(id));
+
+  const rule = matchRule(label, rules);
+  if (rule && validCategory(rule.categoryId)) {
+    return { categoryId: Number(rule.categoryId), source: 'rule', match: rule.match };
+  }
+
+  const lower = label.toLowerCase();
+  const [best] = getMerchantSuggestions(transactions, '', Infinity)
+    .filter(entry => entry.label.toLowerCase() === lower || entry.label.toLowerCase().startsWith(lower));
+
+  if (best && validCategory(best.lastCategoryId)) {
+    return {
+      categoryId: Number(best.lastCategoryId),
+      source: 'history',
+      match: best.label,
+      lastAmount: best.lastAmount,
+    };
+  }
+
+  return null;
+}
+
+/** Every distinct tag in use, alphabetically — for filter chips and autocomplete. */
+export function getAllTags(transactions = []) {
+  const tags = new Set();
+  for (const tx of transactions) {
+    if (!Array.isArray(tx?.tags)) continue;
+    for (const tag of tx.tags) {
+      const clean = String(tag || '').trim();
+      if (clean) tags.add(clean);
+    }
+  }
+  return [...tags].sort((a, b) => a.localeCompare(b));
+}
+
+/** Normalise free-text tag entry: trimmed, de-duplicated, no empties. */
+export function normaliseTags(input) {
+  const list = Array.isArray(input) ? input : String(input || '').split(',');
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    const tag = String(raw || '').trim().replace(/^#/, '');
+    if (!tag) continue;
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(tag);
+  }
+  return out;
+}
+
 // ── Forecasting ──────────────────────────────────────────────────────────────
 
 /**
- * Daily burn rate per category, based on amount spent and days elapsed this period.
+ * Daily burn rate per category, based on amount spent and days elapsed in that
+ * category's own cycle.
  */
-export function getDailyBurnRate(categories, settings) {
-  if (!settings?.lastReset) return {};
-  const daysElapsed = Math.max(1, differenceInDays(new Date(), new Date(settings.lastReset)));
+export function getDailyBurnRate(categories = [], settings, incomes = [], now = new Date()) {
   const rates = {};
   for (const cat of categories) {
-    rates[cat.id] = (cat.spent || 0) / daysElapsed;
+    const { elapsed } = getCategoryCycle(cat, incomes, settings, now);
+    rates[cat.id] = (Number(cat.spent) || 0) / Math.max(1, elapsed);
   }
   return rates;
 }
 
 /**
- * Projected spend by end of period, per category.
+ * Projected spend by the end of the current cycle, per category.
  */
-export function getProjectedSpend(categories, settings) {
-  if (!settings?.lastReset) return {};
-  const daysElapsed = Math.max(1, differenceInDays(new Date(), new Date(settings.lastReset)));
-  const daysLeft = daysUntilReset(settings) || 0;
-  const totalDays = daysElapsed + daysLeft;
+export function getProjectedSpend(categories = [], settings, incomes = [], now = new Date()) {
   const projected = {};
   for (const cat of categories) {
-    const rate = (cat.spent || 0) / daysElapsed;
-    projected[cat.id] = rate * totalDays;
+    const { elapsed, days } = getCategoryCycle(cat, incomes, settings, now);
+    const rate = (Number(cat.spent) || 0) / Math.max(1, elapsed);
+    projected[cat.id] = roundMoney(rate * days);
   }
   return projected;
 }
@@ -336,10 +709,17 @@ export function getProjectedSpend(categories, settings) {
  * Total upcoming subscription charges for a category within the current budget period.
  * Counts every recurrence from each active subscription's nextDueAt until the next reset.
  */
-export function getUpcomingSubscriptionCost(subscriptions = [], categoryId, settings, now = new Date()) {
-  const nextResetResult = getEffectiveNextReset(settings);
-  if (!nextResetResult) return 0;
-  const nextReset = startOfDay(nextResetResult.date || nextResetResult);
+export function getUpcomingSubscriptionCost(subscriptions = [], categoryId, settings, now = new Date(), cycleEnd = null) {
+  // Prefer the caller's cycle end (from getCategoryCycle) — it follows the
+  // funding income. Falling back to `settings` only matters for legacy setups.
+  let nextReset = cycleEnd ? toValidDate(cycleEnd) : null;
+  if (!nextReset) {
+    const nextResetResult = getEffectiveNextReset(settings);
+    if (!nextResetResult) return 0;
+    nextReset = toValidDate(nextResetResult.date || nextResetResult);
+    if (!nextReset) return 0;
+  }
+  nextReset = startOfDay(nextReset);
 
   const catSubs = subscriptions.filter(s =>
     Number(s.categoryId) === Number(categoryId) && s.active !== false
@@ -366,10 +746,10 @@ export function getUpcomingSubscriptionCost(subscriptions = [], categoryId, sett
  * - daysUntil: if not now, how many days until burn rate frees enough
  * - shortfall: how much more is needed
  */
-export function wishlistAffordability(item, categories, settings) {
+export function wishlistAffordability(item, categories, settings, incomes = []) {
   const catMap = Object.fromEntries(categories.map(c => [c.id, c]));
   const assignedIds = item.categoryIds || [];
-  
+
   if (!assignedIds.length) return { canAffordNow: false, daysUntil: null, shortfall: item.price, combinedLeftover: 0 };
 
   const assigned = assignedIds.map(id => catMap[id]).filter(Boolean);
@@ -383,55 +763,695 @@ export function wishlistAffordability(item, categories, settings) {
 
   const shortfall = item.price - combinedLeftover;
 
-  // Estimate days: next reset restores allowances, so if price <= total allowances they can afford after reset
+  // Reset timing follows the funding income of the assigned categories, not the
+  // account-wide schedule. Use the soonest — that's when money first frees up.
+  const cycles = assigned.map(cat => getCategoryCycle(cat, incomes, settings));
+  const soonest = cycles.reduce((best, cycle) => (!best || cycle.end < best.end ? cycle : best), null);
+  const resetDays = soonest ? soonest.remaining : daysUntilReset(settings);
+  const cycleDays = soonest ? soonest.days : 30;
+
+  // Estimate: a reset restores allowances, so if the price fits inside one
+  // cycle's total allowance it becomes affordable at the next reset.
   const totalAllowance = assigned.reduce((sum, cat) => sum + (cat.allowance || 0), 0);
-  
+
   if (item.price <= totalAllowance) {
-    // Will be affordable after reset
-    const resetDays = daysUntilReset(settings);
     return { canAffordNow: false, daysUntil: resetDays, shortfall, combinedLeftover, afterReset: true };
   }
 
-  // Price exceeds total allowance — needs multiple periods
-  const monthlyAccumulation = totalAllowance;
-  if (monthlyAccumulation <= 0) return { canAffordNow: false, daysUntil: null, shortfall, combinedLeftover };
-  
-  const periodsNeeded = Math.ceil(item.price / monthlyAccumulation);
-  const resetDays = daysUntilReset(settings);
-  const daysUntil = (resetDays || 0) + (periodsNeeded - 1) * 30;
-  
+  if (totalAllowance <= 0) return { canAffordNow: false, daysUntil: null, shortfall, combinedLeftover };
+
+  const periodsNeeded = Math.ceil(item.price / totalAllowance);
+  const daysUntil = (resetDays || 0) + (periodsNeeded - 1) * cycleDays;
+
   return { canAffordNow: false, daysUntil, shortfall, combinedLeftover, periodsNeeded };
+}
+
+/**
+ * The one number the app never had: how much is actually free to spend.
+ *
+ * Per category: spare budget, minus subscriptions still due before its reset,
+ * spread across the days left in its own cycle. Summed across categories and
+ * reported over three horizons. `goalCommitment` (savings still to be set
+ * aside this cycle) is deducted proportionally.
+ */
+export function getSafeToSpend({
+  categories = [],
+  incomes = [],
+  subscriptions = [],
+  settings = null,
+  goalCommitment = 0,
+  now = new Date(),
+} = {}) {
+  let perDay = 0;
+  let week = 0;
+  let toReset = 0;
+  let committedSubscriptions = 0;
+  let nextReset = null;
+  let daysToReset = null;
+
+  for (const cat of categories) {
+    const cycle = getCategoryCycle(cat, incomes, settings, now);
+    const spare = getCategorySpare(cat);
+    const subs = getUpcomingSubscriptionCost(subscriptions, cat.id, settings, now, cycle.end);
+
+    committedSubscriptions = roundMoney(committedSubscriptions + Math.min(subs, spare));
+
+    const available = Math.max(0, roundMoney(spare - subs));
+    const daysLeft = Math.max(1, cycle.remaining);
+    const dailyRate = available / daysLeft;
+
+    perDay += dailyRate;
+    week += dailyRate * Math.min(7, daysLeft);
+    toReset += available;
+
+    if (!nextReset || cycle.end < nextReset) {
+      nextReset = cycle.end;
+      daysToReset = cycle.remaining;
+    }
+  }
+
+  const committedGoals = Math.min(Math.max(0, roundMoney(goalCommitment)), roundMoney(toReset));
+  const ratio = toReset > 0 ? Math.max(0, (toReset - committedGoals) / toReset) : 0;
+
+  return {
+    today: roundMoney(perDay * ratio),
+    week: roundMoney(week * ratio),
+    toReset: roundMoney(toReset - committedGoals),
+    committedSubscriptions,
+    committedGoals,
+    nextReset,
+    daysToReset,
+  };
 }
 
 /**
  * Build monthly spend history per category for chart.
  * Aggregates transactions by month.
  */
-export function buildMonthlyHistory(transactions, categories) {
+export function buildMonthlyHistory(transactions, categories, monthCount = 6) {
   const catMap = Object.fromEntries(categories.map(c => [c.id, c.name]));
-  const byMonth = {};
+  const byMonth = new Map();
 
   for (const tx of transactions) {
-    const key = format(new Date(tx.date), 'MMM yy');
-    if (!byMonth[key]) byMonth[key] = { month: key };
+    const date = toValidDate(tx.date);
+    if (!date) continue;
+
+    // Bucket on a sortable key: callers pass transactions in varying orders, so
+    // relying on insertion order silently returned the wrong six months.
+    const sortKey = format(date, 'yyyy-MM');
+    if (!byMonth.has(sortKey)) byMonth.set(sortKey, { sortKey, month: format(date, 'MMM yy') });
+
+    const bucket = byMonth.get(sortKey);
     const catName = catMap[tx.categoryId] || 'Other';
-    byMonth[key][catName] = (byMonth[key][catName] || 0) + tx.amount;
+    bucket[catName] = roundMoney((bucket[catName] || 0) + getSignedAmount(tx));
   }
 
-  return Object.values(byMonth).slice(-6); // last 6 months
+  return [...byMonth.values()]
+    .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+    .slice(-monthCount)
+    .map(row => {
+      const chartRow = { ...row };
+      delete chartRow.sortKey;
+      return chartRow;
+    });
 }
 
 /**
- * Projected end-of-period balance.
+ * Projected balance at the end of one period: income for that period minus
+ * projected spend over the same period.
+ *
+ * Both sides are normalised to `period` first. Categories on different cycles
+ * have projections denominated in different lengths of time, so the daily burn
+ * rate is the only common unit the two sides can meet in.
  */
-export function projectedEndBalance(categories, settings, incomes = []) {
+export function projectedEndBalance(categories = [], settings, incomes = [], period = 'month') {
   if (!settings && !incomes.length) return 0;
+
   const income = incomes.length > 0
-    ? incomes.reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
+    ? getNormalisedIncomeTotal(incomes, period)
     : (settings?.income || 0);
-  const projected = getProjectedSpend(categories, settings);
-  const totalProjected = Object.values(projected).reduce((a, b) => a + b, 0);
-  return income - totalProjected;
+
+  const periodDays = getPeriodDays(period);
+  const burnRates = getDailyBurnRate(categories, settings, incomes);
+  const totalProjected = Object.values(burnRates).reduce((sum, rate) => sum + rate, 0) * periodDays;
+
+  return roundMoney(income - totalProjected);
+}
+
+// ── Goals ────────────────────────────────────────────────────────────────────
+
+export function getGoalProgress(goal) {
+  const target = Math.abs(roundMoney(goal?.target));
+  const saved = Math.max(0, roundMoney(goal?.saved));
+  const remaining = Math.max(0, roundMoney(target - saved));
+
+  return {
+    target,
+    saved,
+    remaining,
+    pct: target > 0 ? Math.min(100, (saved / target) * 100) : 0,
+    complete: target > 0 && saved >= target - 0.005,
+  };
+}
+
+/**
+ * When a goal finishes at its current contribution rate.
+ *
+ * Returns nulls rather than Infinity when there's no contribution set — "no
+ * end date" is the honest answer, and it lets the UI say so.
+ */
+export function getGoalEta(goal, incomes = [], now = new Date()) {
+  const { remaining, complete } = getGoalProgress(goal);
+  if (complete) return { cycles: 0, date: null, complete: true };
+
+  const perCycle = roundMoney(goal?.perCycleContribution);
+  if (!(perCycle > 0)) return { cycles: null, date: null, complete: false };
+
+  const income = incomes.find(item => Number(item.id) === Number(goal?.incomeId));
+  const cycleDays = getIncomeCycleAverageDays(income ? getIncomeFrequency(income) : 'monthly');
+  const cycles = Math.ceil(remaining / perCycle);
+
+  return {
+    cycles,
+    date: addDays(startOfDay(now), Math.round(cycles * cycleDays)),
+    complete: false,
+    perCycle,
+  };
+}
+
+/** True when a goal will miss its target date at the current rate. */
+export function isGoalOffTrack(goal, incomes = [], now = new Date()) {
+  if (!goal?.targetDate) return false;
+  const target = toValidDate(goal.targetDate);
+  if (!target) return false;
+
+  const { complete } = getGoalProgress(goal);
+  if (complete) return false;
+
+  const eta = getGoalEta(goal, incomes, now);
+  if (!eta.date) return true; // a deadline with no contribution is off track by definition
+  return eta.date > startOfDay(target);
+}
+
+/**
+ * Savings still to be set aside this cycle, for deduction from safe-to-spend.
+ *
+ * Only counts goals that haven't yet had this cycle's contribution taken —
+ * money already moved into a goal has left the spendable pool once, and
+ * charging for it twice would understate what's actually free.
+ */
+export function getGoalCommitment(goals = [], incomes = [], settings = null, now = new Date()) {
+  let total = 0;
+
+  for (const goal of goals) {
+    const perCycle = roundMoney(goal?.perCycleContribution);
+    if (!(perCycle > 0)) continue;
+
+    const { remaining, complete } = getGoalProgress(goal);
+    if (complete) continue;
+
+    const income = incomes.find(item => Number(item.id) === Number(goal.incomeId));
+    if (income) {
+      // Already taken for this cycle? Then it's no longer pending.
+      const cycle = getCategoryCycle(
+        { incomeAllocations: [{ incomeId: Number(goal.incomeId), percent: 100 }] },
+        incomes, settings, now,
+      );
+      const lastTaken = toValidDate(goal.lastAutoContributeAt);
+      if (lastTaken && lastTaken >= cycle.start) continue;
+    }
+
+    total = roundMoney(total + Math.min(perCycle, remaining));
+  }
+
+  return total;
+}
+
+// ── Cash-flow forecast ───────────────────────────────────────────────────────
+
+/**
+ * Day-by-day projected account balance.
+ *
+ * Budget categories answer "can I afford this out of my Groceries allowance?".
+ * This answers the different and more urgent question: "will the money actually
+ * be in the account when that direct debit comes out?" — the one that produces
+ * failed payments.
+ *
+ * Combines scheduled income, scheduled subscriptions, and the current burn rate
+ * for everything else. Returns the series plus the first date the balance goes
+ * negative, if any.
+ */
+export function buildCashFlowForecast({
+  account = null,
+  categories = [],
+  incomes = [],
+  subscriptions = [],
+  settings = null,
+  days = 45,
+  now = new Date(),
+} = {}) {
+  const today = startOfDay(now);
+  const end = addDays(today, days);
+
+  // Discretionary burn, excluding anything a subscription already accounts for
+  // — those land on their own dates below and would otherwise be counted twice.
+  const burnRates = getDailyBurnRate(categories, settings, incomes, now);
+  const subscriptionDailyCost = subscriptions
+    .filter(sub => sub.active !== false)
+    .reduce((sum, sub) => {
+      const interval = Math.max(1, Number(sub.interval) || 1);
+      const unitDays = { day: 1, week: 7, month: AVERAGE_MONTH_DAYS, year: 365.25 }[sub.intervalUnit || 'month'] ?? AVERAGE_MONTH_DAYS;
+      return sum + (Number(sub.amount) || 0) / (interval * unitDays);
+    }, 0);
+  const dailyBurn = Math.max(0, Object.values(burnRates).reduce((sum, rate) => sum + rate, 0) - subscriptionDailyCost);
+
+  const events = new Map(); // yyyy-MM-dd → [{ label, amount }]
+  const addEvent = (date, label, amount) => {
+    const day = startOfDay(date);
+    if (day < today || day > end) return;
+    const key = format(day, 'yyyy-MM-dd');
+    if (!events.has(key)) events.set(key, []);
+    events.get(key).push({ label, amount: roundMoney(amount) });
+  };
+
+  for (const income of incomes) {
+    if (income.holdActive) continue;
+    const freq = income.resetFrequency || (income.payDayOfMonth ? 'monthly' : null);
+    if (!freq) continue;
+
+    let next = calcNextReset(freq, income.payDayOfMonth, toValidDate(income.lastPaid) || today);
+    let guard = 0;
+    while (next <= end && guard < 240) {
+      if (next > today) addEvent(next, income.name || 'Income', Number(income.amount) || 0);
+      next = calcNextReset(freq, income.payDayOfMonth, next);
+      guard += 1;
+    }
+  }
+
+  for (const sub of subscriptions) {
+    if (sub.active === false || !sub.nextDueAt) continue;
+    let next = toValidDate(sub.nextDueAt);
+    if (!next) continue;
+    next = startOfDay(next);
+
+    let guard = 0;
+    while (next <= end && guard < 240) {
+      addEvent(next, sub.name || 'Subscription', -(Number(sub.amount) || 0));
+      next = addRecurringInterval(next, sub.intervalUnit || 'month', sub.interval || 1);
+      guard += 1;
+    }
+  }
+
+  const series = [];
+  let balance = roundMoney(Number(account?.balance) || 0);
+  let lowest = { date: null, balance };
+  let firstNegative = null;
+
+  for (let day = today; day <= end; day = addDays(day, 1)) {
+    const key = format(day, 'yyyy-MM-dd');
+    const dayEvents = events.get(key) || [];
+
+    if (day > today) {
+      for (const event of dayEvents) balance = roundMoney(balance + event.amount);
+      balance = roundMoney(balance - dailyBurn);
+    }
+
+    if (balance < lowest.balance) lowest = { date: day, balance };
+    if (firstNegative === null && balance < 0) firstNegative = day;
+
+    series.push({
+      date: key,
+      label: format(day, 'd MMM'),
+      balance,
+      events: dayEvents,
+    });
+  }
+
+  return { series, firstNegative, lowest, dailyBurn: roundMoney(dailyBurn) };
+}
+
+// ── Nudges ───────────────────────────────────────────────────────────────────
+
+export const NUDGE_DANGER = 'danger';
+export const NUDGE_WARN = 'warn';
+export const NUDGE_INFO = 'info';
+
+const SUBSCRIPTION_DUE_WINDOW_DAYS = 3;
+const BACKUP_STALE_DAYS = 30;
+const SUBSCRIPTION_REVIEW_MONTHS = 6;
+
+/**
+ * Everything the app wants to tell you, as plain data.
+ *
+ * One source for both the in-app nudge centre and OS notifications, so the two
+ * can never disagree about what's outstanding. Pure and synchronous: no
+ * permissions, no scheduling, no side effects — callers decide how to deliver.
+ *
+ * Each nudge's `id` embeds the period it belongs to, so dismissing "payday
+ * today" hides it for today and not forever.
+ */
+export function buildNudges({
+  categories = [],
+  incomes = [],
+  subscriptions = [],
+  goals = [],
+  transactions = [],
+  settings = null,
+  now = new Date(),
+} = {}) {
+  const today = startOfDay(now);
+  const nudges = [];
+  const dayKey = format(today, 'yyyy-MM-dd');
+
+  // ── Subscriptions due or overdue ──
+  for (const sub of subscriptions) {
+    if (sub.active === false || !sub.nextDueAt) continue;
+    const due = toValidDate(sub.nextDueAt);
+    if (!due) continue;
+
+    const days = differenceInDays(startOfDay(due), today);
+    if (days > SUBSCRIPTION_DUE_WINDOW_DAYS) continue;
+
+    nudges.push({
+      id: `sub-due-${sub.id}-${format(startOfDay(due), 'yyyy-MM-dd')}`,
+      severity: days < 0 ? NUDGE_WARN : NUDGE_INFO,
+      title: days < 0 ? `${sub.name} is overdue`
+        : days === 0 ? `${sub.name} is due today`
+        : `${sub.name} due in ${days} day${days === 1 ? '' : 's'}`,
+      body: `${fmt(sub.amount || 0)} will be logged automatically.`,
+      view: 'subscriptions',
+    });
+  }
+
+  // ── Payday ──
+  for (const income of incomes) {
+    if (income.holdActive) continue;
+    const freq = income.resetFrequency || (income.payDayOfMonth ? 'monthly' : null);
+    if (!freq) continue;
+
+    const base = toValidDate(income.lastPaid) || today;
+    let next = calcNextReset(freq, income.payDayOfMonth, base);
+    let guard = 0;
+    while (next <= today && guard < 240) {
+      next = calcNextReset(freq, income.payDayOfMonth, next);
+      guard += 1;
+    }
+
+    const days = differenceInDays(startOfDay(next), today);
+    if (days > 1) continue;
+
+    nudges.push({
+      id: `payday-${income.id}-${format(startOfDay(next), 'yyyy-MM-dd')}`,
+      severity: NUDGE_INFO,
+      title: days === 0 ? `${income.name} lands today` : `${income.name} lands tomorrow`,
+      body: `${fmt(income.amount || 0)} — funded categories will reset.`,
+      view: 'dashboard',
+    });
+  }
+
+  // ── Over budget ──
+  const overspent = categories.filter(cat => (cat.spent || 0) > getEffectiveAllowance(cat) + 0.005);
+  if (overspent.length > 0) {
+    const total = roundMoney(overspent.reduce(
+      (sum, cat) => sum + ((cat.spent || 0) - getEffectiveAllowance(cat)), 0));
+    nudges.push({
+      id: `overspent-${dayKey}`,
+      severity: NUDGE_DANGER,
+      title: `${overspent.length} categor${overspent.length === 1 ? 'y is' : 'ies are'} over budget`,
+      body: `${fmt(total)} over in total: ${overspent.map(c => c.name).join(', ')}.`,
+      view: 'dashboard',
+    });
+  }
+
+  // ── Broken funding ──
+  const incomeIds = new Set(incomes.map(income => Number(income.id)));
+  const brokenFunding = categories.filter(cat => {
+    if (!incomes.length) return false;
+    const allocations = normalizeIncomeAllocations(cat.incomeAllocations);
+    return Math.abs(getAllocationPercentTotal(allocations) - 100) > 0.01
+      || allocations.some(allocation => !incomeIds.has(allocation.incomeId));
+  });
+  if (brokenFunding.length > 0) {
+    nudges.push({
+      id: `funding-${dayKey}`,
+      severity: NUDGE_WARN,
+      title: `${brokenFunding.length} categor${brokenFunding.length === 1 ? 'y is' : 'ies are'} not fully funded`,
+      body: `${brokenFunding.map(c => c.name).join(', ')} won't reset properly until fixed.`,
+      view: 'dashboard',
+    });
+  }
+
+  // ── Unallocated income ──
+  const unallocated = getUnallocatedIncomeTotal(incomes, categories);
+  const incomeTotal = incomes.reduce((sum, income) => sum + (Number(income.amount) || 0), 0);
+  if (incomeTotal > 0 && unallocated > incomeTotal * 0.2) {
+    nudges.push({
+      id: `unallocated-${dayKey}`,
+      severity: NUDGE_INFO,
+      title: `${fmt(unallocated)} of income isn't budgeted`,
+      body: 'Money without a job tends to get spent. Give it a category or a goal.',
+      view: 'dashboard',
+    });
+  }
+
+  // ── Goals off track ──
+  for (const goal of goals) {
+    if (!isGoalOffTrack(goal, incomes, now)) continue;
+    const { remaining } = getGoalProgress(goal);
+    nudges.push({
+      id: `goal-${goal.id}-${format(today, 'yyyy-MM')}`,
+      severity: NUDGE_WARN,
+      title: `"${goal.name}" won't hit its date`,
+      body: `${fmt(remaining)} still to go at the current rate.`,
+      view: 'goals',
+    });
+  }
+
+  // ── Subscription price changes ──
+  for (const sub of subscriptions) {
+    if (sub.active === false) continue;
+    const charges = transactions
+      .filter(tx => Number(tx.subscriptionId) === Number(sub.id))
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+    if (charges.length < 2) continue;
+
+    const latest = Math.abs(Number(charges[0].amount) || 0);
+    const previous = Math.abs(Number(charges[1].amount) || 0);
+    if (previous <= 0 || Math.abs(latest - previous) < 0.01) continue;
+
+    nudges.push({
+      id: `sub-price-${sub.id}-${latest}`,
+      severity: NUDGE_WARN,
+      title: `${sub.name} changed price`,
+      body: `${fmt(previous)} → ${fmt(latest)} per charge.`,
+      view: 'subscriptions',
+    });
+  }
+
+  // ── Long-running subscriptions worth a look ──
+  for (const sub of subscriptions) {
+    if (sub.active === false) continue;
+    const charges = transactions.filter(tx => Number(tx.subscriptionId) === Number(sub.id));
+    if (charges.length < SUBSCRIPTION_REVIEW_MONTHS) continue;
+
+    const total = roundMoney(charges.reduce((sum, tx) => sum + getSignedAmount(tx), 0));
+    nudges.push({
+      id: `sub-review-${sub.id}-${format(today, 'yyyy-MM')}`,
+      severity: NUDGE_INFO,
+      title: `You've paid ${fmt(total)} for ${sub.name}`,
+      body: `${charges.length} charges so far. Still worth it?`,
+      view: 'subscriptions',
+    });
+  }
+
+  // ── Backup health ──
+  // Everything lives in one browser. Clearing site data loses the lot, and
+  // there is no server-side copy to fall back on.
+  const lastBackup = toValidDate(settings?.lastBackupAt);
+  const hasData = transactions.length > 0 || categories.length > 0;
+  if (hasData) {
+    const daysSince = lastBackup ? differenceInDays(today, startOfDay(lastBackup)) : null;
+    if (daysSince == null || daysSince >= BACKUP_STALE_DAYS) {
+      nudges.push({
+        id: `backup-${format(today, 'yyyy-MM')}`,
+        severity: NUDGE_WARN,
+        title: lastBackup ? `No backup for ${daysSince} days` : 'You have never backed up',
+        body: 'Your data lives only in this browser. Clearing site data would lose it.',
+        view: 'settings',
+      });
+    }
+  }
+
+  const order = { [NUDGE_DANGER]: 0, [NUDGE_WARN]: 1, [NUDGE_INFO]: 2 };
+  return nudges.sort((a, b) => order[a.severity] - order[b.severity]);
+}
+
+/** Drop nudges the user has already dismissed. */
+export function filterDismissedNudges(nudges = [], dismissed = {}) {
+  return nudges.filter(nudge => !dismissed?.[nudge.id]);
+}
+
+// ── Insight ──────────────────────────────────────────────────────────────────
+
+/**
+ * Where the money actually went, by merchant.
+ *
+ * Categories say what kind of spending it was; merchants say what you actually
+ * bought — which is usually the more actionable of the two.
+ */
+export function getMerchantBreakdown(transactions = [], { since = null, limit = 8 } = {}) {
+  const from = toValidDate(since);
+  const totals = new Map();
+
+  for (const tx of transactions) {
+    const date = toValidDate(tx.date);
+    if (from && (!date || date < from)) continue;
+
+    const label = getTransactionMerchant(tx) || 'Uncategorised';
+    const key = label.toLowerCase();
+    const existing = totals.get(key) || { label, total: 0, count: 0 };
+    existing.total = roundMoney(existing.total + getSignedAmount(tx));
+    existing.count += 1;
+    totals.set(key, existing);
+  }
+
+  return [...totals.values()]
+    .filter(entry => entry.total > 0)
+    .sort((a, b) => b.total - a.total)
+    .slice(0, limit);
+}
+
+/**
+ * This cycle versus the one before it, overall and per category.
+ *
+ * Cycles are resolved per category, so a weekly-funded category is compared
+ * against its own previous week rather than against a calendar month.
+ */
+export function getCycleComparison(transactions = [], categories = [], incomes = [], settings = null, now = new Date()) {
+  const rows = [];
+  let currentTotal = 0;
+  let previousTotal = 0;
+
+  for (const category of categories) {
+    const cycle = getCategoryCycle(category, incomes, settings, now);
+    const previousStart = addDays(cycle.start, -cycle.days);
+
+    let current = 0;
+    let previous = 0;
+
+    for (const tx of transactions) {
+      if (Number(tx.categoryId) !== Number(category.id)) continue;
+      const date = toValidDate(tx.date);
+      if (!date) continue;
+      const day = startOfDay(date);
+
+      if (day >= cycle.start && day < cycle.end) current = roundMoney(current + getSignedAmount(tx));
+      else if (day >= previousStart && day < cycle.start) previous = roundMoney(previous + getSignedAmount(tx));
+    }
+
+    currentTotal = roundMoney(currentTotal + current);
+    previousTotal = roundMoney(previousTotal + previous);
+
+    rows.push({
+      id: category.id,
+      name: category.name,
+      color: category.color,
+      current,
+      previous,
+      change: roundMoney(current - previous),
+      // No previous spend means "new", not "infinitely worse" — leave the
+      // percentage null so callers can say so rather than print ∞%.
+      changePct: previous > 0 ? roundMoney(((current - previous) / previous) * 100) : null,
+    });
+  }
+
+  return {
+    categories: rows.sort((a, b) => Math.abs(b.change) - Math.abs(a.change)),
+    currentTotal,
+    previousTotal,
+    change: roundMoney(currentTotal - previousTotal),
+    changePct: previousTotal > 0 ? roundMoney(((currentTotal - previousTotal) / previousTotal) * 100) : null,
+  };
+}
+
+/**
+ * Running account balance over time, derived from the ledger.
+ *
+ * Balances aren't stored historically — only the current figure is. Working
+ * backwards from it keeps the series consistent with what the app shows now,
+ * rather than inventing a second source of truth.
+ */
+export function buildBalanceHistory(account, { transactions = [], incomeEvents = [], transfers = [], days = 60 } = {}) {
+  const today = startOfDay(new Date());
+  const from = addDays(today, -days);
+  const accountId = Number(account?.id);
+
+  const deltas = new Map(); // yyyy-MM-dd → net change that day
+  const bump = (date, amount) => {
+    const day = toValidDate(date);
+    if (!day) return;
+    const key = format(startOfDay(day), 'yyyy-MM-dd');
+    deltas.set(key, roundMoney((deltas.get(key) || 0) + amount));
+  };
+
+  for (const tx of transactions) {
+    if (Number(tx.accountId) !== accountId) continue;
+    bump(tx.date, -getSignedAmount(tx));
+  }
+  for (const event of incomeEvents) {
+    if (Number(event.accountId) !== accountId) continue;
+    bump(event.date, Number(event.amount) || 0);
+  }
+  for (const transfer of transfers) {
+    const amount = Number(transfer.amount) || 0;
+    if (Number(transfer.toAccountId) === accountId) bump(transfer.date, amount);
+    if (Number(transfer.fromAccountId) === accountId) bump(transfer.date, -amount);
+  }
+
+  // Walk back from today's known balance to find where the window started.
+  let balance = roundMoney(Number(account?.balance) || 0);
+  const series = [];
+  for (let day = today; day >= from; day = addDays(day, -1)) {
+    const key = format(day, 'yyyy-MM-dd');
+    series.unshift({ date: key, label: format(day, 'd MMM'), balance });
+    balance = roundMoney(balance - (deltas.get(key) || 0));
+  }
+
+  return series;
+}
+
+/**
+ * Transactions that stand out against their category's usual size.
+ *
+ * Uses a median-based threshold rather than a mean: a single huge outlier drags
+ * a mean upward enough to hide itself.
+ */
+export function flagUnusualSpend(transactions = [], { multiplier = 3, minimumAmount = 20 } = {}) {
+  const byCategory = new Map();
+  for (const tx of transactions) {
+    if (isRefund(tx)) continue;
+    const key = Number(tx.categoryId);
+    if (!byCategory.has(key)) byCategory.set(key, []);
+    byCategory.get(key).push(Math.abs(Number(tx.amount) || 0));
+  }
+
+  const thresholds = new Map();
+  for (const [categoryId, amounts] of byCategory) {
+    if (amounts.length < 4) continue; // too little history to call anything unusual
+    const sorted = [...amounts].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    if (median > 0) thresholds.set(categoryId, median * multiplier);
+  }
+
+  const flagged = new Set();
+  for (const tx of transactions) {
+    if (isRefund(tx)) continue;
+    const threshold = thresholds.get(Number(tx.categoryId));
+    const amount = Math.abs(Number(tx.amount) || 0);
+    if (threshold && amount >= Math.max(threshold, minimumAmount)) flagged.add(tx.id);
+  }
+
+  return flagged;
 }
 
 export function fmt(amount) {
@@ -465,17 +1485,43 @@ function getCycleStartForDate(date, payDay) {
   return new Date(prevYear, prevMonth, Math.min(payDay, daysInPrevMonth));
 }
 
-export function getCumulativeOverspend(categoryId, allowance, transactions, payDayOfMonth = 1) {
+/**
+ * Running total of over/underspend against `allowance`, summed across every
+ * past budget cycle.
+ *
+ * `options` may be a plain pay-day number (legacy monthly behaviour) or
+ * `{ freq, payDayOfMonth, anchor }`. Weekly/fortnightly/4-weekly cycles are
+ * bucketed by offset from `anchor` — slicing them by day-of-month, as this
+ * previously did, put several cycles' spend into a single bucket and reported
+ * phantom overspend.
+ */
+export function getCumulativeOverspend(categoryId, allowance, transactions, options = 1) {
   if (!allowance || allowance <= 0) return 0;
-  const catTxs = transactions.filter(tx => tx.categoryId === categoryId);
+
+  const catTxs = transactions.filter(tx => Number(tx.categoryId) === Number(categoryId));
   if (!catTxs.length) return 0;
-  const payDay = Number(payDayOfMonth) || 1;
+
+  const config = (options && typeof options === 'object') ? options : { payDayOfMonth: options };
+  const freq = config.freq || 'monthly';
+  const payDay = Number(config.payDayOfMonth) || 1;
+  const anchor = toValidDate(config.anchor);
+  const fixedCycleDays = { weekly: 7, fortnightly: 14, '4weekly': 28 }[freq] || null;
+
   const cycleSpend = new Map();
   for (const tx of catTxs) {
-    const cycleStart = getCycleStartForDate(new Date(tx.date), payDay);
-    const key = `${cycleStart.getFullYear()}-${cycleStart.getMonth()}-${cycleStart.getDate()}`;
-    cycleSpend.set(key, roundMoney((cycleSpend.get(key) || 0) + (Number(tx.amount) || 0)));
+    const date = toValidDate(tx.date);
+    if (!date) continue;
+
+    let key;
+    if (fixedCycleDays && anchor) {
+      key = `c${Math.floor(differenceInDays(startOfDay(date), startOfDay(anchor)) / fixedCycleDays)}`;
+    } else {
+      const cycleStart = getCycleStartForDate(date, payDay);
+      key = `${cycleStart.getFullYear()}-${cycleStart.getMonth()}-${cycleStart.getDate()}`;
+    }
+    cycleSpend.set(key, roundMoney((cycleSpend.get(key) || 0) + getSignedAmount(tx)));
   }
+
   let cumulative = 0;
   for (const spent of cycleSpend.values()) {
     cumulative += spent - allowance;

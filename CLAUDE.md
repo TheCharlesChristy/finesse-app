@@ -27,19 +27,45 @@ A personal finance PWA (Progressive Web App) for a single user. It runs entirely
 
 ```
 src/
-├── App.jsx               # Root: routing, modal state, auto-reset logic, all useLiveQuery calls
+├── App.jsx               # Root: routing, modal state, auto-reset orchestration, all handlers
 ├── db.js                 # Dexie schema + every database helper function
-├── utils.js              # Pure functions only — scheduling, forecasting, formatting
+├── utils.js              # Pure functions only — cycles, scheduling, forecasting, formatting
 ├── index.css             # All styling: CSS variables, glass classes, component styles
-├── views/                # One file per page/tab
+├── hooks/
+│   └── useFinesseData.js # Every useLiveQuery call, in one place. Called only by App.jsx
+├── views/                # One file per page/tab, lazy-loaded from App.jsx
 │   ├── Dashboard.jsx
+│   ├── CategoryDetail.jsx    # not in NAV — opened by tapping a category
+│   ├── Accounts.jsx
 │   ├── Transactions.jsx
+│   ├── PurchaseCheck.jsx     # "Can I Purchase It"
+│   ├── Calendar.jsx
+│   ├── Subscriptions.jsx
 │   ├── Forecasting.jsx
+│   ├── Goals.jsx             # savings pots and debts
 │   ├── Wishlist.jsx
+│   ├── Variables.jsx
 │   └── Settings.jsx
-└── components/
-    └── Modals.jsx        # All modal dialogs
+├── components/
+│   ├── QuickAdd.jsx      # Floating "log an expense" button (mobile)
+│   ├── CommandPalette.jsx # ⌘K: jump to a view, run an action, find a transaction
+│   ├── NudgeCenter.jsx   # Bell: what needs attention, from buildNudges()
+│   ├── Wizard.jsx        # Guided first run — income, then a starter category pack
+│   ├── modals/           # Modal dialogs, split by domain
+│   │   ├── index.js      #   barrel — import modals from here, never the files directly
+│   │   ├── shared.jsx    #   IncomeAllocationEditor, FormulaInput, ColourPicker, PALETTE…
+│   │   ├── transaction.jsx, category.jsx, income.jsx, subscription.jsx,
+│   │   └── wishlist.jsx, data.jsx, budget.jsx
+│   ├── CategorySelect.jsx, DateInput.jsx  # custom accessible form controls
+│   ├── ui.jsx            # Modal shell (focus trap), IconButton, Field, CardTitle
+│   ├── useDialog.jsx     # Promise-based confirm / alert / prompt
+│   └── Toast.jsx         # Transient confirmations with an optional Undo action
+└── __tests__/            # Vitest: utils.test.js (pure) + db.test.js (fake-indexeddb)
 ```
+
+`scripts/smoke.mjs` (`npm run smoke`) drives a real browser through the core
+flow against a running preview build. Unit tests can't catch a broken lazy
+import or a crashing view; that can.
 
 ---
 
@@ -47,15 +73,15 @@ src/
 
 ### Data flow
 
-All database reads happen in `App.jsx` via `useLiveQuery`. Data is passed down to views as props. Views call prop callbacks for mutations — they do not import from `db.js` directly. The one exception is `deleteTransaction` and `deleteWishlistItem`, which are passed directly as callbacks since they take only an ID.
+All database reads happen in `hooks/useFinesseData.js`, which `App.jsx` calls once. Data is passed down to views as props. Views call prop callbacks for mutations — they do not import from `db.js` directly. The one exception is `deleteTransaction` and `deleteWishlistItem`, which are passed directly as callbacks since they take only an ID.
 
 ```
-App.jsx (useLiveQuery) → props → views → callbacks → db.js → IndexedDB
-                                                          ↓
-                                              useLiveQuery re-renders automatically
+useFinesseData (useLiveQuery) → App.jsx → props → views → callbacks → db.js → IndexedDB
+                                                                          ↓
+                                                        useLiveQuery re-renders automatically
 ```
 
-Do not add `useLiveQuery` calls inside views. Keep all DB reads in `App.jsx`.
+Do not add `useLiveQuery` calls inside views. New live reads go in `useFinesseData.js` and reach views as props. Every query there must be scoped by `accountId` — `accounts` and `accountTransfers` are the only deliberate exceptions.
 
 ### Database helpers
 
@@ -70,6 +96,65 @@ The `categories.spent` field is a **counter maintained by the helpers**, not der
 ### Pure utils
 
 `utils.js` contains only pure functions. No Dexie imports, no React hooks, no side effects. If you need a new calculation, add it here as a named export.
+
+### Budget cycles — use `getCategoryCycle`
+
+A category's spend counter is reset by whichever **income** funds it, not by the
+account-wide `settings` schedule. `getCategoryCycle(category, incomes, settings)`
+returns `{ start, end, freq, days, elapsed, remaining }` and is the single
+source of truth. Anything that needs "this period" — burn rate, projections,
+upcoming subscription cost, wishlist timing, safe-to-spend — must go through it.
+
+Reaching for `settings.payDayOfMonth` or `settings.lastReset` directly is almost
+always a bug: it silently assumes one monthly income.
+
+### Two denominations — don't mix them
+
+Money in Finesse comes in two units, and adding them together is meaningless:
+
+- **Per cycle** — `category.allowance`, `spent`, `income.amount`. A category
+  funded by a weekly wage holds a *weekly* allowance. Correct for "what's left
+  to spend right now".
+- **Normalised** — `getNormalisedIncomeTotal`, `getNormalisedCategoryAllowance`,
+  `getNormalisedAllowanceTotal`. Required whenever income is compared against
+  budget, or figures from different pay frequencies are summed.
+
+`getUnallocatedIncomeTotal(incomes, categories)` computes free income per source
+rather than subtracting two mixed-unit totals — use it for any "spare money" pool.
+
+### Transaction direction — use `getSignedAmount`
+
+`transactions.amount` is **always stored positive**; `transactions.type`
+(`'expense'` | `'refund'`) carries the direction. A refund reduces its
+category's spend and credits the account.
+
+Anything that totals transactions must go through `getSignedAmount(tx)`, or
+refunds get counted as spend. This applies to filtered totals, monthly history,
+cumulative overspend, CSV export and counter rebuilds.
+
+Splits are N ordinary transactions sharing a `splitGroupId` — not a parent row
+with children — so every existing query, filter and reset handles them with no
+special-casing, and a single part can be edited or deleted on its own.
+
+### Goals are earmarks, not transfers
+
+Contributing to a goal doesn't move money between accounts — it marks some of
+what you already have as spoken for. That stops goals double-counting against
+transactions, and leaves `account.balance` as the single truth about how much
+money exists. `autoContributeGoals` is idempotent per pay date, because the
+reset path can fire more than once as live queries settle.
+
+### Rollover
+
+Opt-in per category. At a *full* reset the unspent remainder becomes
+`rolloverBalance`, which `getEffectiveAllowance` adds to what's spendable.
+Three fields, three behaviours at reset: `allowance` untouched,
+`temporaryBoost` cleared, `rolloverBalance` created.
+
+A category funded by several incomes resets piecemeal, so by the final reset
+`spent` only holds the remainder. `cycleClearedSpend` accumulates what earlier
+partial resets wiped, and `getRolloverForNextCycle` adds it back — without it,
+rollover over-credits multi-income categories.
 
 ### Schema changes
 
@@ -102,17 +187,20 @@ Key CSS variables:
 
 1. Create `src/views/MyView.jsx` — accept data as props, emit mutations via callbacks
 2. Add an entry to the `NAV` array in `App.jsx`
-3. Add `useLiveQuery` calls in `App.jsx` if new data is needed
+3. Add the query to `hooks/useFinesseData.js` if new data is needed, and pass it down from `App.jsx`
 4. Add a `{view === 'myview' && <MyView ... />}` render branch in `App.jsx`
 
 ---
 
 ## Adding a new modal
 
-1. Add the modal component to `src/components/Modals.jsx` as a named export
-2. Add a new string value to the `modal` state in `App.jsx` (e.g. `'myModal'`)
-3. Add `{modal === 'myModal' && <MyModal ... />}` at the bottom of `App.jsx`'s JSX
-4. Open it with `setModal('myModal')` from a button or callback
+1. Add the modal component to the matching file in `src/components/modals/` as a named export (or a new file if it's a new domain)
+2. Re-export it from `src/components/modals/index.js`
+3. Add a new string value to the `modal` state in `App.jsx` (e.g. `'myModal'`)
+4. Add `{modal === 'myModal' && <MyModal ... />}` at the bottom of `App.jsx`'s JSX
+5. Open it with `setModal('myModal')` from a button or callback
+
+Shared pieces (`IncomeAllocationEditor`, `FormulaInput`, `ColourPicker`, `PALETTE`, `FrequencyFields`) live in `modals/shared.jsx` — reuse them rather than rebuilding.
 
 Modals use `.modal-overlay` and `.modal-box` CSS classes. Always close on overlay click:
 ```jsx
@@ -145,11 +233,39 @@ When modifying this logic, preserve the `holdActive` early-exit and the `fastFor
 
 ---
 
+## Testing
+
+```bash
+npm test          # Vitest: pure utils + db helpers (fake-indexeddb)
+npm run lint
+npm run build
+npm run preview   # then, in another shell:
+npm run smoke     # real-browser walkthrough of the core flow
+```
+
+`categories.spent` is a counter, so anything touching transactions or resets
+must keep it in step with the transaction log — `db.test.js` covers those
+invariants and new mutations belong there too. `recalculateSpendCounters()`
+rebuilds the counters from the log if they ever drift.
+
+`npm run lint` is clean — keep it that way. `setState` inside an effect is the
+error you're most likely to hit; the fix is almost always to derive the value
+during render instead. The two allocation effects in `modals/category.jsx` are
+the one justified exception (the allowance and its funding split depend on each
+other, so the circle can't close in a single render) and carry a comment saying
+so.
+
+---
+
 ## What not to do
 
 - **Don't add a backend.** Data stays in IndexedDB.
 - **Don't add React Router.** Navigation is a single `view` state string in `App.jsx`.
-- **Don't use localStorage.** Dexie/IndexedDB is the only storage layer.
+- **Don't put app data in localStorage.** Dexie/IndexedDB is the storage layer
+  for everything the user owns — including UI state that should survive an
+  export/import, such as dismissed nudges. The single exception is
+  `finesse.activeAccountId`, which records which account was last open and is
+  meaningless on another device.
 - **Don't add global state management** (Redux, Zustand, Context). `useLiveQuery` in `App.jsx` + prop drilling is sufficient and explicit.
 - **Don't install a component library** (shadcn, MUI, etc.). The glass design system is hand-rolled and should stay that way.
 - **Don't rename `db.js` or `utils.js`** — they're imported widely.
@@ -161,7 +277,7 @@ When modifying this logic, preserve the `holdActive` early-exit and the `fastFor
 
 ### Add a new transaction field (e.g. receipt image)
 
-1. Accept the new field in `AddTransactionModal` in `Modals.jsx`
+1. Accept the new field in `AddTransactionModal` in `components/modals/transaction.jsx`
 2. Pass it through to `onAdd(...)` → `addTransaction(tx)` in `db.js` — Dexie will persist any extra fields automatically
 3. Render it in `Transactions.jsx`
 

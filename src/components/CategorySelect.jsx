@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown } from 'lucide-react';
-import { fmt } from '../utils';
+import { fmt, getEffectiveAllowance } from '../utils';
 
 export default function CategorySelect({
   categories = [],
@@ -29,7 +29,8 @@ export default function CategorySelect({
       value: String(category.id),
       label: category.name,
       color: category.color || 'var(--accent-blue)',
-      remaining: (Number(category.allowance) || 0) - (Number(category.spent) || 0),
+      // Effective allowance, so a topped-up category shows what's really left.
+      remaining: getEffectiveAllowance(category) - (Number(category.spent) || 0),
     })));
   }, [categories, includeAll, allLabel]);
 
