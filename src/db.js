@@ -1,7 +1,7 @@
 import Dexie from 'dexie';
 import { getNextRecurringDate, normalizeIncomeAllocations, roundMoney, getEffectiveAllowance,
   getCategorySpare, buildMonthlyHistory, projectedEndBalance, getUpcomingSubscriptionCost,
-  wishlistAffordability } from './utils';
+  getCategoryCycle, getNormalisedIncomeTotal, wishlistAffordability } from './utils';
 
 export const db = new Dexie('FinanceApp');
 
@@ -905,6 +905,58 @@ export async function resetCategoryTopUps(categoryId) {
   });
 }
 
+// ── Integrity repair ─────────────────────────────────────────────────────────
+// `categories.spent` is a counter maintained incrementally by the transaction
+// helpers, which makes it fast but means a failed write or an interrupted
+// import can leave it out of step with the transaction log. This rebuilds it
+// from the transactions themselves — the log is the source of truth.
+//
+// Only spend accrued since the category's last reset counts, since that is what
+// the counter represents. Returns a per-category report of what changed.
+export async function recalculateSpendCounters(accountId = null) {
+  const targetAccountId = accountId != null ? Number(accountId) : await getDefaultAccountId();
+  if (!targetAccountId) return { checked: 0, repaired: 0, categories: [] };
+
+  const [categories, transactions] = await Promise.all([
+    db.categories.where('accountId').equals(targetAccountId).toArray(),
+    db.transactions.where('accountId').equals(targetAccountId).toArray(),
+  ]);
+
+  const report = [];
+
+  for (const cat of categories) {
+    const since = cat.lastReset ? new Date(cat.lastReset) : null;
+    const actual = roundMoney(
+      transactions
+        .filter(tx => Number(tx.categoryId) === Number(cat.id))
+        .filter(tx => {
+          if (!since) return true;
+          const date = new Date(tx.date);
+          return !Number.isNaN(date.getTime()) && date >= since;
+        })
+        .reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0)
+    );
+
+    const stored = roundMoney(cat.spent || 0);
+    const drift = roundMoney(actual - stored);
+
+    if (Math.abs(drift) >= 0.01) {
+      await db.categories.update(cat.id, {
+        spent: actual,
+        spentByIncome: actual === 0 ? {} : allocateAmountByIncome(cat, actual),
+      });
+    }
+
+    report.push({ id: cat.id, name: cat.name, stored, actual, drift });
+  }
+
+  return {
+    checked: report.length,
+    repaired: report.filter(row => Math.abs(row.drift) >= 0.01).length,
+    categories: report,
+  };
+}
+
 // ── Budget reset ─────────────────────────────────────────────────────────────
 export async function resetBudget(accountId = null) {
   const now = new Date().toISOString();
@@ -1131,7 +1183,8 @@ export async function exportChatSummary(selection) {
     }
 
     if (computedSelection.has('incomeVsSpending')) {
-      const totalIncome = accIncomes.reduce((sum, income) => sum + (Number(income.amount) || 0), 0);
+      // Normalised to a monthly rate so mixed pay frequencies don't inflate it.
+      const totalIncome = getNormalisedIncomeTotal(accIncomes, 'month');
       const totalSpent = accCategories.reduce((sum, cat) => sum + (Number(cat.spent) || 0), 0);
       summary.incomeVsSpending = {
         totalIncome,
@@ -1156,7 +1209,11 @@ export async function exportChatSummary(selection) {
     if (computedSelection.has('upcomingSubscriptionCostByCategory')) {
       const categoryIdsWithSubs = [...new Set(accSubscriptions.map(sub => sub.categoryId))];
       summary.upcomingSubscriptionCostByCategory = Object.fromEntries(
-        categoryIdsWithSubs.map(categoryId => [categoryId, getUpcomingSubscriptionCost(accSubscriptions, categoryId, accSettings)])
+        categoryIdsWithSubs.map(categoryId => {
+          const cat = accCategories.find(c => Number(c.id) === Number(categoryId));
+          const cycleEnd = cat ? getCategoryCycle(cat, accIncomes, accSettings).end : null;
+          return [categoryId, getUpcomingSubscriptionCost(accSubscriptions, categoryId, accSettings, undefined, cycleEnd)];
+        })
       );
     }
 
@@ -1165,7 +1222,7 @@ export async function exportChatSummary(selection) {
         id: item.id,
         name: item.name,
         price: item.price,
-        affordability: wishlistAffordability(item, accCategories, accSettings),
+        affordability: wishlistAffordability(item, accCategories, accSettings, accIncomes),
       }));
     }
 

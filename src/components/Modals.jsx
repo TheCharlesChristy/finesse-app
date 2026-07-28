@@ -15,6 +15,7 @@ import {
   getIncomeCycleDays,
   getIncomeAllocationUsage,
   getPacedAllowanceMonthlyTotal,
+  getUnallocatedIncomeTotal,
   normalizeIncomeAllocations,
   roundMoney,
 } from '../utils';
@@ -1641,7 +1642,7 @@ export function ExportChatSummaryOptionsModal({ schema, onConfirm, onClose }) {
 // Every top-up is temporary and clears automatically at the next budget reset.
 export function AdjustBudgetModal({
   categories,
-  totalIncome,
+  incomes = [],
   defaultCategoryId,
   onTopUpFromIncome,
   onBorrowFromCategory,
@@ -1666,10 +1667,15 @@ export function AdjustBudgetModal({
 
   // Unallocated income = income not assigned to any category, counting existing
   // top-ups as allocated so the pool can't be over-committed.
-  const totalAllocated = roundMoney(
-    categories.reduce((s, c) => s + (c.allowance || 0) + (c.temporaryBoost || 0), 0)
+  //
+  // Computed per income source rather than by subtracting one grand total from
+  // another: with mixed pay frequencies those totals are in different units and
+  // the difference between them is meaningless.
+  const freeIncome = roundMoney(getUnallocatedIncomeTotal(incomes, categories));
+  const boostsGranted = roundMoney(
+    categories.reduce((s, c) => s + Math.max(0, c.temporaryBoost || 0), 0)
   );
-  const unallocated = roundMoney(totalIncome - totalAllocated);
+  const unallocated = Math.max(0, roundMoney(freeIncome - boostsGranted));
 
   const cat = categories.find(c => String(c.id) === catId);
   const parsedAmount = parseFloat(amount) || 0;

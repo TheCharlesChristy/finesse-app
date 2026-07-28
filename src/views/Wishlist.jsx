@@ -33,8 +33,8 @@ function AffordabilityBadge({ aff }) {
   return null;
 }
 
-function ItemRow({ item, expenseCategories, settings, onEdit, onDelete }) {
-  const aff = wishlistAffordability(item, expenseCategories, settings);
+function ItemRow({ item, expenseCategories, settings, incomes = [], onEdit, onDelete }) {
+  const aff = wishlistAffordability(item, expenseCategories, settings, incomes);
   const assignedCats = (item.categoryIds || []).map(id => expenseCategories.find(c => c.id === id)).filter(Boolean);
 
   return (
@@ -82,14 +82,14 @@ function ItemRow({ item, expenseCategories, settings, onEdit, onDelete }) {
   );
 }
 
-function ListSection({ node, depth, allItems, expenseCategories, settings, onEditItem, onDeleteItem, onAddToList, onEditList, onDeleteList, onAddList, totalListCount, expanded, onToggle }) {
+function ListSection({ node, depth, allItems, expenseCategories, settings, incomes = [], onEditItem, onDeleteItem, onAddToList, onEditList, onDeleteList, onAddList, totalListCount, expanded, onToggle }) {
   const [showSubInput, setShowSubInput] = useState(false);
   const [subName, setSubName] = useState('');
 
   const directItems = allItems.filter(i => i.wishlistCategoryId === node.id);
   const isOpen = expanded.has(node.id);
   const totalItems = countAllItems(node, allItems);
-  const canAffordDirect = directItems.filter(item => wishlistAffordability(item, expenseCategories, settings)?.canAffordNow).length;
+  const canAffordDirect = directItems.filter(item => wishlistAffordability(item, expenseCategories, settings, incomes)?.canAffordNow).length;
 
   const handleCreateSub = () => {
     if (!subName.trim()) return;
@@ -153,7 +153,7 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onEdi
       {/* Nested sub-lists */}
       {node.children.map(child => (
         <ListSection key={child.id} node={child} depth={depth + 1}
-          allItems={allItems} expenseCategories={expenseCategories} settings={settings}
+          allItems={allItems} expenseCategories={expenseCategories} settings={settings} incomes={incomes}
           onEditItem={onEditItem} onDeleteItem={onDeleteItem} onAddToList={onAddToList}
           onEditList={onEditList} onDeleteList={onDeleteList}
           onAddList={onAddList} totalListCount={totalListCount}
@@ -180,7 +180,7 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onEdi
       {directItems.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: node.children.length > 0 || showSubInput ? 6 : 0 }}>
           {directItems.map(item => (
-            <ItemRow key={item.id} item={item} expenseCategories={expenseCategories} settings={settings} onEdit={onEditItem} onDelete={onDeleteItem} />
+            <ItemRow key={item.id} item={item} expenseCategories={expenseCategories} settings={settings} incomes={incomes} onEdit={onEditItem} onDelete={onDeleteItem} />
           ))}
         </div>
       )}
@@ -213,7 +213,7 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, onEdi
   );
 }
 
-export default function Wishlist({ items, wishlistCategories, expenseCategories, settings, onAddItem, onEditItem, onDeleteItem, onAddWishlistCat, onEditWishlistCat, onDeleteWishlistCat, onAddItemToFolder, showConfirm }) {
+export default function Wishlist({ items, wishlistCategories, expenseCategories, settings, incomes = [], onAddItem, onEditItem, onDeleteItem, onAddWishlistCat, onEditWishlistCat, onDeleteWishlistCat, onAddItemToFolder, showConfirm }) {
   const [expanded, setExpanded] = useState(() => new Set([...wishlistCategories.map(c => c.id), 'uncategorized']));
   const [showNewList, setShowNewList] = useState(false);
   const [newListName, setNewListName] = useState('');
@@ -229,8 +229,8 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
   const uncategorizedItems = useMemo(() => items.filter(i => !i.wishlistCategoryId), [items]);
 
   const canAffordTotal = useMemo(() => items.filter(item =>
-    wishlistAffordability(item, expenseCategories, settings)?.canAffordNow
-  ).length, [items, expenseCategories, settings]);
+    wishlistAffordability(item, expenseCategories, settings, incomes)?.canAffordNow
+  ).length, [items, expenseCategories, settings, incomes]);
 
   const handleCreateList = () => {
     if (!newListName.trim()) return;
@@ -307,7 +307,7 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
       {/* ── Lists (recursive tree) ── */}
       {tree.map(node => (
         <ListSection key={node.id} node={node} depth={0}
-          allItems={items} expenseCategories={expenseCategories} settings={settings}
+          allItems={items} expenseCategories={expenseCategories} settings={settings} incomes={incomes}
           onEditItem={onEditItem} onDeleteItem={onDeleteItem} onAddToList={onAddItemToFolder}
           onEditList={onEditWishlistCat} onDeleteList={handleDeleteList} onAddList={onAddWishlistCat}
           totalListCount={wishlistCategories.length}
@@ -329,7 +329,7 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
           {expanded.has('uncategorized') && (
             <div style={{ padding: '8px 14px 12px', display: 'flex', flexDirection: 'column', gap: 5 }}>
               {uncategorizedItems.map(item => (
-                <ItemRow key={item.id} item={item} expenseCategories={expenseCategories} settings={settings} onEdit={onEditItem} onDelete={onDeleteItem} />
+                <ItemRow key={item.id} item={item} expenseCategories={expenseCategories} settings={settings} incomes={incomes} onEdit={onEditItem} onDelete={onDeleteItem} />
               ))}
             </div>
           )}

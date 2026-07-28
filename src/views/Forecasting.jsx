@@ -13,6 +13,9 @@ import {
   projectedEndBalance,
   calcNextReset,
   getCategoryIncomeAllocationAmount,
+  getNormalisedAllowanceTotal,
+  getNormalisedCategoryAllowance,
+  getNormalisedIncomeTotal,
   normalizeIncomeAllocations,
 } from '../utils';
 import { CardTitle } from '../components/ui';
@@ -81,8 +84,8 @@ const PieTooltip = ({ active, payload }) => {
 
 export default function Forecasting({ categories, settings, transactions, incomes = [] }) {
   const monthlyHistory = useMemo(() => buildMonthlyHistory(transactions, categories), [transactions, categories]);
-  const projectedSpend = useMemo(() => getProjectedSpend(categories, settings), [categories, settings]);
-  const dailyBurnRate  = useMemo(() => getDailyBurnRate(categories, settings), [categories, settings]);
+  const projectedSpend = useMemo(() => getProjectedSpend(categories, settings, incomes), [categories, settings, incomes]);
+  const dailyBurnRate  = useMemo(() => getDailyBurnRate(categories, settings, incomes), [categories, settings, incomes]);
   const legacyDays     = daysUntilReset(settings);
   const projBalance    = projectedEndBalance(categories, settings, incomes);
 
@@ -99,7 +102,12 @@ export default function Forecasting({ categories, settings, transactions, income
   ), [incomes, categories]);
   const nextIncomeReset = incomeResetSchedule.find(entry => !entry.held && entry.next);
 
-  const totalIncome     = incomes.length > 0 ? incomes.reduce((s, i) => s + (i.amount || 0), 0) : (settings?.income || 0);
+  // Normalised so a mix of weekly and monthly incomes compares correctly
+  // against the allowances they fund.
+  const totalIncome     = incomes.length > 0 ? getNormalisedIncomeTotal(incomes, 'month') : (settings?.income || 0);
+  const normalisedAllocated = incomes.length > 0
+    ? getNormalisedAllowanceTotal(categories, incomes, 'month')
+    : categories.reduce((s, c) => s + (c.allowance || 0), 0);
   const totalAllowances = categories.reduce((s, c) => s + (c.allowance || 0), 0);
   const totalSpent      = categories.reduce((s, c) => s + (c.spent || 0), 0);
   const spentPct        = totalAllowances > 0 ? (totalSpent / totalAllowances) * 100 : 0;
@@ -111,10 +119,15 @@ export default function Forecasting({ categories, settings, transactions, income
     { name: 'Remaining', value: Math.max(0, totalAllowances - totalSpent),    color: 'rgba(255,255,255,0.08)' },
   ];
 
-  // Pie 2: per-category allowance allocation
+  // Pie 2: per-category allowance allocation, normalised to a monthly rate so
+  // categories funded by different pay frequencies are comparable.
   const allocationData = categories
     .filter(c => (c.allowance || 0) > 0)
-    .map((c, i) => ({ name: c.name, value: c.allowance || 0, color: c.color || COLORS[i % COLORS.length] }));
+    .map((c, i) => ({
+      name: c.name,
+      value: incomes.length > 0 ? getNormalisedCategoryAllowance(c, incomes, 'month') : (c.allowance || 0),
+      color: c.color || COLORS[i % COLORS.length],
+    }));
 
   // Projected vs allowance bar chart data
   const projVsAllowance = categories.map((cat, i) => ({
@@ -288,7 +301,7 @@ export default function Forecasting({ categories, settings, transactions, income
                 </div>
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
                   {allocationData.map(entry => {
-                    const pct = totalAllowances > 0 ? ((entry.value / totalAllowances) * 100).toFixed(0) : 0;
+                    const pct = normalisedAllocated > 0 ? ((entry.value / normalisedAllocated) * 100).toFixed(0) : 0;
                     return (
                       <div key={entry.name} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12 }}>
                         <div style={{ width: 8, height: 8, borderRadius: '50%', background: entry.color, flexShrink: 0 }} />
@@ -313,9 +326,9 @@ export default function Forecasting({ categories, settings, transactions, income
                     ))}
                   </div>
                   <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 5 }}>
-                    {totalAllowances > totalIncome
-                      ? <span style={{ color: 'var(--danger)' }}>⚠ {((totalAllowances / totalIncome) * 100).toFixed(0)}% — over-allocated</span>
-                      : `${((totalAllowances / totalIncome) * 100).toFixed(0)}% of income allocated to categories`}
+                    {normalisedAllocated > totalIncome
+                      ? <span style={{ color: 'var(--danger)' }}>⚠ {((normalisedAllocated / totalIncome) * 100).toFixed(0)}% — over-allocated</span>
+                      : `${((normalisedAllocated / totalIncome) * 100).toFixed(0)}% of income allocated to categories`}
                   </div>
                 </div>
               )}

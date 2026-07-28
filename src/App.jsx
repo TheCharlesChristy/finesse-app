@@ -712,7 +712,7 @@ export default function App() {
           )}
           {view === 'wishlist' && (
             <Wishlist items={wishlistItems} wishlistCategories={wishlistCategories}
-              expenseCategories={categories} settings={settings}
+              expenseCategories={categories} settings={settings} incomes={incomes}
               onAddItem={() => { setWishlistDefaultCatId(null); setModal('addWish'); }}
               onEditItem={handleEditWishlistItem}
               onDeleteItem={deleteWishlistItem}
@@ -863,7 +863,7 @@ export default function App() {
       {modal === 'adjust' && categories.length > 0 && (
         <AdjustBudgetModal
           categories={categories}
-          totalIncome={incomes.length > 0 ? incomes.reduce((s, i) => s + (i.amount || 0), 0) : (settings?.income || 0)}
+          incomes={incomes}
           defaultCategoryId={adjustCategoryId}
           onTopUpFromIncome={handleTopUpFromIncome}
           onBorrowFromCategory={handleBorrowFromCategory}

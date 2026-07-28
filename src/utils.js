@@ -92,8 +92,18 @@ export function getNextRecurringDate(fromDate = new Date(), intervalUnit = 'mont
 
 // ── Income allocation helpers ────────────────────────────────────────────────
 
+// Mean Gregorian month length. Used for period conversion so that "monthly"
+// means the same thing in February as it does in March.
+export const AVERAGE_MONTH_DAYS = 365.25 / 12;
+
 export function roundMoney(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function toValidDate(value) {
+  if (value == null) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 // Effective allowance = base allowance + any temporary top-up funded from
@@ -189,6 +199,119 @@ export function getIncomeCycleDays(resetFrequency, date = new Date()) {
     case 'monthly':
     default:            return getDaysInMonth(date);
   }
+}
+
+/**
+ * Average (calendar-independent) length of one reset cycle in days.
+ *
+ * Unlike `getIncomeCycleDays`, monthly resolves to 365.25/12 rather than the
+ * length of a specific month. Use this when converting amounts *between*
+ * periods, where anchoring to one particular month would skew the result.
+ */
+export function getIncomeCycleAverageDays(resetFrequency) {
+  switch (resetFrequency) {
+    case 'weekly':      return 7;
+    case 'fortnightly': return 14;
+    case '4weekly':     return 28;
+    case 'monthly':
+    default:            return AVERAGE_MONTH_DAYS;
+  }
+}
+
+export function getIncomeFrequency(income) {
+  return income?.resetFrequency || (income?.payDayOfMonth ? 'monthly' : 'monthly');
+}
+
+const PERIOD_DAYS = { day: 1, week: 7, fortnight: 14, month: AVERAGE_MONTH_DAYS, year: 365.25 };
+
+export function getPeriodDays(period = 'month') {
+  return PERIOD_DAYS[period] ?? AVERAGE_MONTH_DAYS;
+}
+
+/** What one income is worth per day, whatever its pay frequency. */
+export function getIncomeDailyRate(income) {
+  const amount = Number(income?.amount) || 0;
+  if (amount <= 0) return 0;
+  return amount / getIncomeCycleAverageDays(getIncomeFrequency(income));
+}
+
+/** A single income expressed over an arbitrary period. */
+export function getIncomeForPeriod(income, period = 'month') {
+  return roundMoney(getIncomeDailyRate(income) * getPeriodDays(period));
+}
+
+/**
+ * Total income across every source, normalised to one period.
+ *
+ * Summing `income.amount` directly is wrong whenever pay frequencies differ —
+ * a weekly £200 and a monthly £2,000 are not £2,200 of anything. This converts
+ * each source to a daily rate first. Monthly-only setups are unaffected.
+ */
+export function getNormalisedIncomeTotal(incomes = [], period = 'month') {
+  return roundMoney(
+    incomes.reduce((sum, income) => sum + getIncomeDailyRate(income) * getPeriodDays(period), 0)
+  );
+}
+
+/** True when income sources don't all share one pay frequency. */
+export function hasMixedIncomeFrequencies(incomes = []) {
+  const freqs = new Set(incomes.filter(i => (Number(i?.amount) || 0) > 0).map(getIncomeFrequency));
+  return freqs.size > 1;
+}
+
+/**
+ * One category's allowance normalised to a period.
+ *
+ * A category's `allowance` is denominated in the cycle of whichever income
+ * funds it — a category funded by a weekly wage holds a *weekly* allowance.
+ * Allowances must therefore be converted the same way incomes are before the
+ * two can be compared.
+ */
+export function getNormalisedCategoryAllowance(category, incomes = [], period = 'month') {
+  const allowance = Number(category?.allowance) || 0;
+  if (allowance === 0) return 0;
+
+  const targetDays = getPeriodDays(period);
+  const incomeMap = new Map(incomes.map(income => [Number(income.id), income]));
+  const allocations = normalizeIncomeAllocations(category.incomeAllocations)
+    .filter(allocation => incomeMap.has(allocation.incomeId));
+
+  // Unfunded / legacy categories are monthly by convention.
+  if (!allocations.length) {
+    const cycleDays = getIncomeCycleAverageDays(category?.resetFrequency || 'monthly');
+    return roundMoney(allowance * (targetDays / cycleDays));
+  }
+
+  let total = 0;
+  for (const allocation of allocations) {
+    const cycleDays = getIncomeCycleAverageDays(getIncomeFrequency(incomeMap.get(allocation.incomeId)));
+    total += (allowance * allocation.percent / 100) * (targetDays / cycleDays);
+  }
+  return roundMoney(total);
+}
+
+/** Total category allowance normalised to one period. */
+export function getNormalisedAllowanceTotal(categories = [], incomes = [], period = 'month') {
+  return roundMoney(
+    categories.reduce((sum, category) => sum + getNormalisedCategoryAllowance(category, incomes, period), 0)
+  );
+}
+
+/**
+ * Income not yet committed to any category, measured per pay cycle.
+ *
+ * Computed per source (each income's own amount minus what categories draw
+ * from it) rather than by subtracting one mixed-frequency total from another,
+ * which silently over- or under-states the free pool whenever pay frequencies
+ * differ. This is the pool a temporary top-up can safely draw on.
+ */
+export function getUnallocatedIncomeTotal(incomes = [], categories = []) {
+  const usage = getIncomeAllocationUsage(incomes, categories);
+  return roundMoney(
+    incomes.reduce((sum, income) => (
+      sum + Math.max(0, roundMoney((Number(income.amount) || 0) - (usage[String(income.id)] || 0)))
+    ), 0)
+  );
 }
 
 /**
@@ -301,33 +424,101 @@ export function evaluateFormula(formula, variables = [], categories = [], income
   }
 }
 
+// ── Budget cycles ────────────────────────────────────────────────────────────
+
+/**
+ * The current budget cycle for one category.
+ *
+ * A category's spend counter is zeroed by whichever income funds it, so its
+ * cycle is the income's — not the account-wide `settings` schedule, which only
+ * ever matched single-monthly-income setups. Resolution order:
+ *   1. the soonest-resetting income that funds this category
+ *   2. the category's own legacy `resetFrequency`
+ *   3. the account `settings` schedule
+ *
+ * Returns { start, end, freq, days, elapsed, remaining }.
+ */
+export function getCategoryCycle(category, incomes = [], settings = null, now = new Date()) {
+  const today = startOfDay(now);
+  const incomeMap = new Map(incomes.map(income => [Number(income.id), income]));
+
+  const advancePast = (freq, payDay, base) => {
+    let next = calcNextReset(freq, payDay, base);
+    let guard = 0;
+    while (next <= today && guard < 240) {
+      next = calcNextReset(freq, payDay, next);
+      guard += 1;
+    }
+    return next;
+  };
+
+  let end = null;
+  let freq = null;
+
+  for (const allocation of normalizeIncomeAllocations(category?.incomeAllocations)) {
+    const income = incomeMap.get(allocation.incomeId);
+    if (!income || income.holdActive) continue;
+    const incomeFreq = income.resetFrequency || (income.payDayOfMonth ? 'monthly' : null);
+    if (!incomeFreq) continue;
+
+    const base = toValidDate(income.lastPaid) || today;
+    const next = advancePast(incomeFreq, income.payDayOfMonth, base);
+    if (!end || next < end) {
+      end = next;
+      freq = incomeFreq;
+    }
+  }
+
+  if (!end && category?.resetFrequency) {
+    const base = toValidDate(category.lastReset) || today;
+    end = advancePast(category.resetFrequency, category.payDayOfMonth, base);
+    freq = category.resetFrequency;
+  }
+
+  if (!end) {
+    const scheduled = getEffectiveNextReset(settings);
+    const scheduledDate = scheduled ? toValidDate(scheduled.date || scheduled) : null;
+    end = scheduledDate || addMonths(today, 1);
+    freq = 'monthly';
+  }
+
+  end = startOfDay(end);
+
+  const lastReset = toValidDate(category?.lastReset);
+  const start = lastReset
+    ? startOfDay(lastReset)
+    : startOfDay(addDays(end, -Math.round(getIncomeCycleAverageDays(freq))));
+
+  const days = Math.max(1, differenceInDays(end, start));
+  const elapsed = Math.max(0, Math.min(days, differenceInDays(today, start)));
+
+  return { start, end, freq, days, elapsed, remaining: Math.max(0, days - elapsed) };
+}
+
 // ── Forecasting ──────────────────────────────────────────────────────────────
 
 /**
- * Daily burn rate per category, based on amount spent and days elapsed this period.
+ * Daily burn rate per category, based on amount spent and days elapsed in that
+ * category's own cycle.
  */
-export function getDailyBurnRate(categories, settings) {
-  if (!settings?.lastReset) return {};
-  const daysElapsed = Math.max(1, differenceInDays(new Date(), new Date(settings.lastReset)));
+export function getDailyBurnRate(categories = [], settings, incomes = [], now = new Date()) {
   const rates = {};
   for (const cat of categories) {
-    rates[cat.id] = (cat.spent || 0) / daysElapsed;
+    const { elapsed } = getCategoryCycle(cat, incomes, settings, now);
+    rates[cat.id] = (Number(cat.spent) || 0) / Math.max(1, elapsed);
   }
   return rates;
 }
 
 /**
- * Projected spend by end of period, per category.
+ * Projected spend by the end of the current cycle, per category.
  */
-export function getProjectedSpend(categories, settings) {
-  if (!settings?.lastReset) return {};
-  const daysElapsed = Math.max(1, differenceInDays(new Date(), new Date(settings.lastReset)));
-  const daysLeft = daysUntilReset(settings) || 0;
-  const totalDays = daysElapsed + daysLeft;
+export function getProjectedSpend(categories = [], settings, incomes = [], now = new Date()) {
   const projected = {};
   for (const cat of categories) {
-    const rate = (cat.spent || 0) / daysElapsed;
-    projected[cat.id] = rate * totalDays;
+    const { elapsed, days } = getCategoryCycle(cat, incomes, settings, now);
+    const rate = (Number(cat.spent) || 0) / Math.max(1, elapsed);
+    projected[cat.id] = roundMoney(rate * days);
   }
   return projected;
 }
@@ -336,10 +527,17 @@ export function getProjectedSpend(categories, settings) {
  * Total upcoming subscription charges for a category within the current budget period.
  * Counts every recurrence from each active subscription's nextDueAt until the next reset.
  */
-export function getUpcomingSubscriptionCost(subscriptions = [], categoryId, settings, now = new Date()) {
-  const nextResetResult = getEffectiveNextReset(settings);
-  if (!nextResetResult) return 0;
-  const nextReset = startOfDay(nextResetResult.date || nextResetResult);
+export function getUpcomingSubscriptionCost(subscriptions = [], categoryId, settings, now = new Date(), cycleEnd = null) {
+  // Prefer the caller's cycle end (from getCategoryCycle) — it follows the
+  // funding income. Falling back to `settings` only matters for legacy setups.
+  let nextReset = cycleEnd ? toValidDate(cycleEnd) : null;
+  if (!nextReset) {
+    const nextResetResult = getEffectiveNextReset(settings);
+    if (!nextResetResult) return 0;
+    nextReset = toValidDate(nextResetResult.date || nextResetResult);
+    if (!nextReset) return 0;
+  }
+  nextReset = startOfDay(nextReset);
 
   const catSubs = subscriptions.filter(s =>
     Number(s.categoryId) === Number(categoryId) && s.active !== false
@@ -366,10 +564,10 @@ export function getUpcomingSubscriptionCost(subscriptions = [], categoryId, sett
  * - daysUntil: if not now, how many days until burn rate frees enough
  * - shortfall: how much more is needed
  */
-export function wishlistAffordability(item, categories, settings) {
+export function wishlistAffordability(item, categories, settings, incomes = []) {
   const catMap = Object.fromEntries(categories.map(c => [c.id, c]));
   const assignedIds = item.categoryIds || [];
-  
+
   if (!assignedIds.length) return { canAffordNow: false, daysUntil: null, shortfall: item.price, combinedLeftover: 0 };
 
   const assigned = assignedIds.map(id => catMap[id]).filter(Boolean);
@@ -383,55 +581,139 @@ export function wishlistAffordability(item, categories, settings) {
 
   const shortfall = item.price - combinedLeftover;
 
-  // Estimate days: next reset restores allowances, so if price <= total allowances they can afford after reset
+  // Reset timing follows the funding income of the assigned categories, not the
+  // account-wide schedule. Use the soonest — that's when money first frees up.
+  const cycles = assigned.map(cat => getCategoryCycle(cat, incomes, settings));
+  const soonest = cycles.reduce((best, cycle) => (!best || cycle.end < best.end ? cycle : best), null);
+  const resetDays = soonest ? soonest.remaining : daysUntilReset(settings);
+  const cycleDays = soonest ? soonest.days : 30;
+
+  // Estimate: a reset restores allowances, so if the price fits inside one
+  // cycle's total allowance it becomes affordable at the next reset.
   const totalAllowance = assigned.reduce((sum, cat) => sum + (cat.allowance || 0), 0);
-  
+
   if (item.price <= totalAllowance) {
-    // Will be affordable after reset
-    const resetDays = daysUntilReset(settings);
     return { canAffordNow: false, daysUntil: resetDays, shortfall, combinedLeftover, afterReset: true };
   }
 
-  // Price exceeds total allowance — needs multiple periods
-  const monthlyAccumulation = totalAllowance;
-  if (monthlyAccumulation <= 0) return { canAffordNow: false, daysUntil: null, shortfall, combinedLeftover };
-  
-  const periodsNeeded = Math.ceil(item.price / monthlyAccumulation);
-  const resetDays = daysUntilReset(settings);
-  const daysUntil = (resetDays || 0) + (periodsNeeded - 1) * 30;
-  
+  if (totalAllowance <= 0) return { canAffordNow: false, daysUntil: null, shortfall, combinedLeftover };
+
+  const periodsNeeded = Math.ceil(item.price / totalAllowance);
+  const daysUntil = (resetDays || 0) + (periodsNeeded - 1) * cycleDays;
+
   return { canAffordNow: false, daysUntil, shortfall, combinedLeftover, periodsNeeded };
+}
+
+/**
+ * The one number the app never had: how much is actually free to spend.
+ *
+ * Per category: spare budget, minus subscriptions still due before its reset,
+ * spread across the days left in its own cycle. Summed across categories and
+ * reported over three horizons. `goalCommitment` (savings still to be set
+ * aside this cycle) is deducted proportionally.
+ */
+export function getSafeToSpend({
+  categories = [],
+  incomes = [],
+  subscriptions = [],
+  settings = null,
+  goalCommitment = 0,
+  now = new Date(),
+} = {}) {
+  let perDay = 0;
+  let week = 0;
+  let toReset = 0;
+  let committedSubscriptions = 0;
+  let nextReset = null;
+  let daysToReset = null;
+
+  for (const cat of categories) {
+    const cycle = getCategoryCycle(cat, incomes, settings, now);
+    const spare = getCategorySpare(cat);
+    const subs = getUpcomingSubscriptionCost(subscriptions, cat.id, settings, now, cycle.end);
+
+    committedSubscriptions = roundMoney(committedSubscriptions + Math.min(subs, spare));
+
+    const available = Math.max(0, roundMoney(spare - subs));
+    const daysLeft = Math.max(1, cycle.remaining);
+    const dailyRate = available / daysLeft;
+
+    perDay += dailyRate;
+    week += dailyRate * Math.min(7, daysLeft);
+    toReset += available;
+
+    if (!nextReset || cycle.end < nextReset) {
+      nextReset = cycle.end;
+      daysToReset = cycle.remaining;
+    }
+  }
+
+  const committedGoals = Math.min(Math.max(0, roundMoney(goalCommitment)), roundMoney(toReset));
+  const ratio = toReset > 0 ? Math.max(0, (toReset - committedGoals) / toReset) : 0;
+
+  return {
+    today: roundMoney(perDay * ratio),
+    week: roundMoney(week * ratio),
+    toReset: roundMoney(toReset - committedGoals),
+    committedSubscriptions,
+    committedGoals,
+    nextReset,
+    daysToReset,
+  };
 }
 
 /**
  * Build monthly spend history per category for chart.
  * Aggregates transactions by month.
  */
-export function buildMonthlyHistory(transactions, categories) {
+export function buildMonthlyHistory(transactions, categories, monthCount = 6) {
   const catMap = Object.fromEntries(categories.map(c => [c.id, c.name]));
-  const byMonth = {};
+  const byMonth = new Map();
 
   for (const tx of transactions) {
-    const key = format(new Date(tx.date), 'MMM yy');
-    if (!byMonth[key]) byMonth[key] = { month: key };
+    const date = toValidDate(tx.date);
+    if (!date) continue;
+
+    // Bucket on a sortable key: callers pass transactions in varying orders, so
+    // relying on insertion order silently returned the wrong six months.
+    const sortKey = format(date, 'yyyy-MM');
+    if (!byMonth.has(sortKey)) byMonth.set(sortKey, { sortKey, month: format(date, 'MMM yy') });
+
+    const bucket = byMonth.get(sortKey);
     const catName = catMap[tx.categoryId] || 'Other';
-    byMonth[key][catName] = (byMonth[key][catName] || 0) + tx.amount;
+    bucket[catName] = roundMoney((bucket[catName] || 0) + (Number(tx.amount) || 0));
   }
 
-  return Object.values(byMonth).slice(-6); // last 6 months
+  return [...byMonth.values()]
+    .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+    .slice(-monthCount)
+    .map(row => {
+      const chartRow = { ...row };
+      delete chartRow.sortKey;
+      return chartRow;
+    });
 }
 
 /**
- * Projected end-of-period balance.
+ * Projected balance at the end of one period: income for that period minus
+ * projected spend over the same period.
+ *
+ * Both sides are normalised to `period` first. Categories on different cycles
+ * have projections denominated in different lengths of time, so the daily burn
+ * rate is the only common unit the two sides can meet in.
  */
-export function projectedEndBalance(categories, settings, incomes = []) {
+export function projectedEndBalance(categories = [], settings, incomes = [], period = 'month') {
   if (!settings && !incomes.length) return 0;
+
   const income = incomes.length > 0
-    ? incomes.reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
+    ? getNormalisedIncomeTotal(incomes, period)
     : (settings?.income || 0);
-  const projected = getProjectedSpend(categories, settings);
-  const totalProjected = Object.values(projected).reduce((a, b) => a + b, 0);
-  return income - totalProjected;
+
+  const periodDays = getPeriodDays(period);
+  const burnRates = getDailyBurnRate(categories, settings, incomes);
+  const totalProjected = Object.values(burnRates).reduce((sum, rate) => sum + rate, 0) * periodDays;
+
+  return roundMoney(income - totalProjected);
 }
 
 export function fmt(amount) {
@@ -465,17 +747,43 @@ function getCycleStartForDate(date, payDay) {
   return new Date(prevYear, prevMonth, Math.min(payDay, daysInPrevMonth));
 }
 
-export function getCumulativeOverspend(categoryId, allowance, transactions, payDayOfMonth = 1) {
+/**
+ * Running total of over/underspend against `allowance`, summed across every
+ * past budget cycle.
+ *
+ * `options` may be a plain pay-day number (legacy monthly behaviour) or
+ * `{ freq, payDayOfMonth, anchor }`. Weekly/fortnightly/4-weekly cycles are
+ * bucketed by offset from `anchor` — slicing them by day-of-month, as this
+ * previously did, put several cycles' spend into a single bucket and reported
+ * phantom overspend.
+ */
+export function getCumulativeOverspend(categoryId, allowance, transactions, options = 1) {
   if (!allowance || allowance <= 0) return 0;
-  const catTxs = transactions.filter(tx => tx.categoryId === categoryId);
+
+  const catTxs = transactions.filter(tx => Number(tx.categoryId) === Number(categoryId));
   if (!catTxs.length) return 0;
-  const payDay = Number(payDayOfMonth) || 1;
+
+  const config = (options && typeof options === 'object') ? options : { payDayOfMonth: options };
+  const freq = config.freq || 'monthly';
+  const payDay = Number(config.payDayOfMonth) || 1;
+  const anchor = toValidDate(config.anchor);
+  const fixedCycleDays = { weekly: 7, fortnightly: 14, '4weekly': 28 }[freq] || null;
+
   const cycleSpend = new Map();
   for (const tx of catTxs) {
-    const cycleStart = getCycleStartForDate(new Date(tx.date), payDay);
-    const key = `${cycleStart.getFullYear()}-${cycleStart.getMonth()}-${cycleStart.getDate()}`;
+    const date = toValidDate(tx.date);
+    if (!date) continue;
+
+    let key;
+    if (fixedCycleDays && anchor) {
+      key = `c${Math.floor(differenceInDays(startOfDay(date), startOfDay(anchor)) / fixedCycleDays)}`;
+    } else {
+      const cycleStart = getCycleStartForDate(date, payDay);
+      key = `${cycleStart.getFullYear()}-${cycleStart.getMonth()}-${cycleStart.getDate()}`;
+    }
     cycleSpend.set(key, roundMoney((cycleSpend.get(key) || 0) + (Number(tx.amount) || 0)));
   }
+
   let cumulative = 0;
   for (const spent of cycleSpend.values()) {
     cumulative += spent - allowance;

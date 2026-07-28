@@ -4,11 +4,16 @@ import {
   fmt,
   calcNextReset,
   getAllocationPercentTotal,
+  getCategoryCycle,
   getEffectiveAllowance,
   getIncomeCycleDays,
   getIncomeAllocationUsage,
+  getNormalisedAllowanceTotal,
+  getNormalisedCategoryAllowance,
+  getNormalisedIncomeTotal,
   getPacedAllowanceStatus,
   getUpcomingSubscriptionCost,
+  hasMixedIncomeFrequencies,
   normalizeIncomeAllocations,
   roundMoney,
   getCumulativeOverspend,
@@ -40,10 +45,21 @@ export default function Dashboard({
   const [showAllIncomes, setShowAllIncomes] = useState(false);
   const [showAllCategories, setShowAllCategories] = useState(false);
 
-  // Derived totals
-  const totalIncome = incomes.length > 0
-    ? incomes.reduce((s, i) => s + (i.amount || 0), 0)
+  // Derived totals.
+  //
+  // Two different denominations are in play and they must not be mixed:
+  //   · per-cycle  — what's left to spend *right now*, across every category's
+  //                  current cycle. Raw sums are correct here.
+  //   · normalised — income vs budget comparisons, where a weekly wage and a
+  //                  monthly salary have to be converted before being added.
+  const mixedFrequencies = hasMixedIncomeFrequencies(incomes);
+  const monthlyIncome = incomes.length > 0
+    ? getNormalisedIncomeTotal(incomes, 'month')
     : (settings?.income || 0);
+  const monthlyAllocated = incomes.length > 0
+    ? getNormalisedAllowanceTotal(categories, incomes, 'month')
+    : categories.reduce((s, c) => s + (c.allowance || 0), 0);
+  const allocatedPct = monthlyIncome > 0 ? (monthlyAllocated / monthlyIncome) * 100 : 0;
 
   const totalAllowances = categories.reduce((s, c) => s + (c.allowance || 0), 0);
   const totalBoost      = categories.reduce((s, c) => s + (c.temporaryBoost || 0), 0);
@@ -115,11 +131,16 @@ export default function Dashboard({
         <div className="dashboard-summary-grid">
           <div>
             <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 700, marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Monthly Income</div>
-            <div className="font-display dashboard-summary-value" style={{ color: 'var(--accent-mint)' }}>{fmt(totalIncome)}</div>
+            <div className="font-display dashboard-summary-value" style={{ color: 'var(--accent-mint)' }}>{fmt(monthlyIncome)}</div>
             <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
-              {fmt(totalEffective)} allocated · {fmt(totalIncome - totalEffective)} unallocated
+              {fmt(monthlyAllocated)} allocated · {fmt(roundMoney(monthlyIncome - monthlyAllocated))} unallocated
               {totalAdded > 0 ? ` · ${fmt(totalAdded)} added` : ''}
             </div>
+            {mixedFrequencies && (
+              <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 3 }}>
+                Converted to a monthly rate — your income sources pay on different schedules.
+              </div>
+            )}
           </div>
 
           <div>
@@ -132,18 +153,21 @@ export default function Dashboard({
         </div>
 
         <div className="dashboard-summary-bars">
-          {totalIncome > 0 && (
+          {monthlyIncome > 0 && (
             <div>
               <div style={{ display: 'flex', height: 6, borderRadius: 99, overflow: 'hidden', background: 'rgba(255,255,255,0.06)', gap: 1 }}>
-                {categories.filter(c => (c.allowance || 0) > 0).map(cat => (
-                  <div key={cat.id} title={`${cat.name}: ${fmt(cat.allowance)}`}
-                    style={{ width: `${Math.min(100, (cat.allowance / totalIncome) * 100)}%`, background: cat.color || 'var(--accent-blue)', height: '100%', minWidth: 2 }} />
-                ))}
+                {categories.filter(c => (c.allowance || 0) > 0).map(cat => {
+                  const monthlyShare = getNormalisedCategoryAllowance(cat, incomes, 'month');
+                  return (
+                    <div key={cat.id} title={`${cat.name}: ${fmt(monthlyShare)}/month`}
+                      style={{ width: `${Math.min(100, (monthlyShare / monthlyIncome) * 100)}%`, background: cat.color || 'var(--accent-blue)', height: '100%', minWidth: 2 }} />
+                  );
+                })}
               </div>
               <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 4 }}>
-                {totalAllowances > totalIncome
-                  ? <span style={{ color: 'var(--danger)' }}>⚠ {((totalAllowances / totalIncome) * 100).toFixed(0)}% over-allocated</span>
-                  : `${((totalAllowances / totalIncome) * 100).toFixed(0)}% of income allocated`}
+                {monthlyAllocated > monthlyIncome
+                  ? <span style={{ color: 'var(--danger)' }}>⚠ {allocatedPct.toFixed(0)}% over-allocated</span>
+                  : `${allocatedPct.toFixed(0)}% of income allocated`}
               </div>
             </div>
           )}
@@ -335,9 +359,16 @@ export default function Dashboard({
               )];
               const catCycleDays = catAllocFreqs.length === 1 ? getIncomeCycleDays(catAllocFreqs[0]) : null;
               const pacedStatus = getPacedAllowanceStatus(cat, undefined, catCycleDays);
-              const catSubCost = getUpcomingSubscriptionCost(subscriptions, cat.id, settings);
+              // Both of these are cycle-bound, and this category's cycle follows
+              // the income funding it — not the account-wide pay day.
+              const catCycle = getCategoryCycle(cat, incomes, settings);
+              const catSubCost = getUpcomingSubscriptionCost(subscriptions, cat.id, settings, undefined, catCycle.end);
               const projectedLeft = roundMoney(left - catSubCost);
-              const cumulativeOverspend = getCumulativeOverspend(cat.id, cat.allowance, transactions, settings?.payDayOfMonth);
+              const cumulativeOverspend = getCumulativeOverspend(cat.id, cat.allowance, transactions, {
+                freq: catCycle.freq,
+                payDayOfMonth: settings?.payDayOfMonth,
+                anchor: catCycle.start,
+              });
               return (
                 <div key={cat.id}>
                   <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 }}>

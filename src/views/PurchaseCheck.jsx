@@ -1,14 +1,16 @@
 import { useMemo, useState } from 'react';
 import { AlertCircle, Check, Plus, ShoppingCart } from 'lucide-react';
-import { fmt } from '../utils';
+import { fmt, getEffectiveAllowance } from '../utils';
 import CategorySelect from '../components/CategorySelect';
 import { CardTitle } from '../components/ui';
 
 const SOURCE_AUTO = 'auto';
 const SOURCE_MULTI = 'multi';
 
+// Must match the Dashboard: a top-up raises what's actually spendable, so it
+// has to count here too or the two views contradict each other.
 function getRemaining(category) {
-  return (Number(category.allowance) || 0) - (Number(category.spent) || 0);
+  return getEffectiveAllowance(category) - (Number(category.spent) || 0);
 }
 
 function getPurchasePlan(categories, price, sourceMode, selectedIds) {
@@ -17,7 +19,7 @@ function getPurchasePlan(categories, price, sourceMode, selectedIds) {
     .map(category => ({
       category,
       remaining: getRemaining(category),
-      allowance: Number(category.allowance) || 0,
+      allowance: getEffectiveAllowance(category),
       spent: Number(category.spent) || 0,
     }))
     .sort((a, b) => b.remaining - a.remaining);
