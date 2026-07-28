@@ -996,3 +996,37 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb {
 html[data-theme="light"] .sidebar-overlay {
   background: rgba(100, 130, 180, 0.4);
 }
+
+/* ── Safe to spend ──────────────────────────────────────────────────────── */
+.safe-to-spend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 22px 26px;
+  border-color: rgba(79,255,176,0.24);
+  background: linear-gradient(135deg, rgba(79,255,176,0.07), rgba(93,184,255,0.04));
+}
+.safe-to-spend-main { min-width: 0; }
+.safe-to-spend-reserved {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.05);
+  flex-shrink: 0;
+}
+
+/* ── Cycle comparison ───────────────────────────────────────────────────── */
+.cycle-compare-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.04);
+}
+@media (max-width: 620px) {
+  .safe-to-spend { padding: 18px 18px; }
+  .cycle-compare-row { grid-template-columns: 1fr auto; }
+}

@@ -17,6 +17,9 @@ import {
   normalizeIncomeAllocations,
   roundMoney,
   getCumulativeOverspend,
+  getCycleComparison,
+  getSafeToSpend,
+  isRefund,
 } from '../utils';
 import { format } from 'date-fns';
 import { CardTitle, IconButton } from '../components/ui';
@@ -40,6 +43,7 @@ export default function Dashboard({
   onIncomeHoldToggle, onIncomeFastForward,
   onEditIncome, onDeleteIncome,
   onEditCategory, onDeleteCategory,
+  onEditTransaction, onDeleteTransaction, onOpenCategory,
   onAdjust,
 }) {
   const [showAllIncomes, setShowAllIncomes] = useState(false);
@@ -76,6 +80,16 @@ export default function Dashboard({
     return incomes.length > 0 && (Math.abs(total - 100) > 0.01 || allocations.some(a => !incomeMap.has(a.incomeId)));
   });
   const overAllocatedIncomes = incomes.filter(income => (incomeUsage[String(income.id)] || 0) > (income.amount || 0) + 0.005);
+
+  const safeToSpend = useMemo(
+    () => getSafeToSpend({ categories, incomes, subscriptions, settings }),
+    [categories, incomes, subscriptions, settings],
+  );
+
+  const comparison = useMemo(
+    () => getCycleComparison(transactions, categories, incomes, settings),
+    [transactions, categories, incomes, settings],
+  );
 
   const recentTxs = useMemo(() => {
     const catMap = Object.fromEntries(categories.map(c => [c.id, c]));
@@ -123,6 +137,44 @@ export default function Dashboard({
           <button className="btn-primary mobile-full" onClick={onAddIncome}>
             Add your first income
           </button>
+        </div>
+      )}
+
+      {/* ── Safe to spend ──
+          The question the app is actually for. Everything else on this page is
+          a component of this number; none of them answered it directly. */}
+      {categories.length > 0 && (
+        <div className="glass safe-to-spend" style={{ borderRadius: 18 }}>
+          <div className="safe-to-spend-main">
+            <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 5 }}>
+              Safe to spend today
+            </div>
+            <div className="font-display" style={{ fontSize: 40, lineHeight: 1.05, color: safeToSpend.today > 0 ? 'var(--good)' : 'var(--danger)' }}>
+              {fmt(safeToSpend.today)}
+            </div>
+            <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 6, lineHeight: 1.6 }}>
+              {fmt(safeToSpend.week)} this week · {fmt(safeToSpend.toReset)} until reset
+              {safeToSpend.daysToReset != null && (
+                <> · {safeToSpend.daysToReset} day{safeToSpend.daysToReset === 1 ? '' : 's'} left</>
+              )}
+            </div>
+          </div>
+
+          {(safeToSpend.committedSubscriptions > 0 || safeToSpend.committedGoals > 0) && (
+            <div className="safe-to-spend-reserved">
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Already spoken for</div>
+              {safeToSpend.committedSubscriptions > 0 && (
+                <div style={{ fontSize: 12, color: 'var(--accent-purple)' }}>
+                  {fmt(safeToSpend.committedSubscriptions)} subscriptions
+                </div>
+              )}
+              {safeToSpend.committedGoals > 0 && (
+                <div style={{ fontSize: 12, color: 'var(--accent-blue)' }}>
+                  {fmt(safeToSpend.committedGoals)} savings
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -375,7 +427,19 @@ export default function Dashboard({
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                       <div style={{ width: 8, height: 8, borderRadius: '50%', background: cat.color || 'var(--accent-blue)', flexShrink: 0 }} />
                       <div style={{ minWidth: 0 }}>
-                        <span style={{ fontSize: 13, fontWeight: 500 }}>{cat.name}</span>
+                        {onOpenCategory ? (
+                          <button type="button" onClick={() => onOpenCategory(cat.id)}
+                            title={`Open ${cat.name}`}
+                            style={{
+                              background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                              fontSize: 13, fontWeight: 500, color: 'var(--text-primary)',
+                              fontFamily: 'DM Sans, sans-serif', textAlign: 'left',
+                            }}>
+                            {cat.name}
+                          </button>
+                        ) : (
+                          <span style={{ fontSize: 13, fontWeight: 500 }}>{cat.name}</span>
+                        )}
                         {(allocations.length > 0 || cat.resetFrequency || cat.allowanceFormula || pacedStatus || boost !== 0 || !fundingOk || catSubCost > 0 || cumulativeOverspend !== 0) && (
                           <div style={{ display: 'flex', gap: 5, marginTop: 2, flexWrap: 'wrap' }}>
                             {boost > 0 && (
@@ -507,23 +571,76 @@ export default function Dashboard({
         )}
       </div>
 
+      {/* ── This cycle vs last ──
+           A total on its own says nothing about whether it's good or bad.
+           Compared against the same point last cycle, it does. */}
+      {comparison.previousTotal > 0 && (
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+          <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 4 }}>
+            <CardTitle as="h2">This Cycle vs Last</CardTitle>
+            <span style={{ fontSize: 13, fontWeight: 700, color: comparison.change > 0 ? 'var(--danger)' : 'var(--good)' }}>
+              {comparison.change > 0 ? '+' : '−'}{fmt(Math.abs(comparison.change))}
+              {comparison.changePct != null && ` (${comparison.change > 0 ? '+' : ''}${comparison.changePct.toFixed(0)}%)`}
+            </span>
+          </div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 14 }}>
+            {fmt(comparison.currentTotal)} so far · {fmt(comparison.previousTotal)} over the previous cycle
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {comparison.categories.filter(row => row.change !== 0).slice(0, 5).map(row => (
+              <div key={row.id} className="cycle-compare-row">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: row.color || 'var(--accent-blue)', flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</span>
+                </div>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                  {fmt(row.previous)} → {fmt(row.current)}
+                </span>
+                <span style={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', color: row.change > 0 ? 'var(--danger)' : 'var(--good)' }}>
+                  {row.change > 0 ? '+' : '−'}{fmt(Math.abs(row.change))}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── Recent Transactions ── */}
       {recentTxs.length > 0 && (
         <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
           <CardTitle as="h2" style={{ marginBottom: 14 }}>Recent Transactions</CardTitle>
           <div style={{ maxHeight: 400, overflowY: 'auto', paddingRight: 4, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {recentTxs.map(tx => (
-              <div key={tx.id} className="mobile-list-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: 10 }}>
-                <div className="mobile-list-main" style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: tx.cat?.color || 'var(--accent-blue)', flexShrink: 0 }} />
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.note || tx.cat?.name || 'Expense'}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{tx.cat?.name} · {format(new Date(tx.date), 'd MMM')}</div>
+            {recentTxs.map(tx => {
+              const refund = isRefund(tx);
+              return (
+                <div key={tx.id} className="mobile-list-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: 10 }}>
+                  <div className="mobile-list-main" style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: tx.cat?.color || 'var(--accent-blue)', flexShrink: 0 }} />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.note || tx.cat?.name || 'Expense'}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{tx.cat?.name} · {format(new Date(tx.date), 'd MMM')}</div>
+                    </div>
                   </div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: refund ? 'var(--good)' : 'var(--accent-warm)', flexShrink: 0 }}>
+                    {refund ? '+' : '-'}{fmt(tx.amount)}
+                  </div>
+                  {/* Spotting a mistake here and having to go elsewhere to fix
+                      it was the most common dead end on this page. */}
+                  {onEditTransaction && (
+                    <IconButton onClick={() => onEditTransaction(tx)} size={28} style={{ opacity: 0.6, flexShrink: 0 }}
+                      label={`Edit ${tx.note || tx.cat?.name || 'expense'}`}>
+                      <Pencil size={12} />
+                    </IconButton>
+                  )}
+                  {onDeleteTransaction && (
+                    <IconButton onClick={() => onDeleteTransaction(tx)} size={28} style={{ opacity: 0.5, flexShrink: 0 }}
+                      label={`Delete ${tx.note || tx.cat?.name || 'expense'}`}>
+                      <Trash2 size={12} />
+                    </IconButton>
+                  )}
                 </div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--accent-warm)' }}>-{fmt(tx.amount)}</div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

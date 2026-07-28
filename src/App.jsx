@@ -27,6 +27,7 @@ const Calendar      = lazy(() => import('./views/Calendar'));
 const Subscriptions = lazy(() => import('./views/Subscriptions'));
 const SettingsView  = lazy(() => import('./views/Settings'));
 const Variables     = lazy(() => import('./views/Variables'));
+const CategoryDetail = lazy(() => import('./views/CategoryDetail'));
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
@@ -88,6 +89,7 @@ export default function App() {
   const [transactionDefaults, setTransactionDefaults] = useState(null);
   const [adjustCategoryId, setAdjustCategoryId] = useState(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [detailCategoryId, setDetailCategoryId] = useState(null);
   const [activeAccountId, setActiveAccountId] = useState(() => {
     const stored = Number(localStorage.getItem('finesse.activeAccountId'));
     return Number.isFinite(stored) && stored > 0 ? stored : null;
@@ -718,7 +720,9 @@ export default function App() {
               display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
             }}><Menu size={18} aria-hidden="true" /></button>
             <h1 className="font-display" style={{ fontSize: 20, fontWeight: 400, margin: 0 }}>
-              {NAV.find(n => n.id === view)?.label}
+              {view === 'categoryDetail'
+                ? (categories.find(c => Number(c.id) === Number(detailCategoryId))?.name || 'Category')
+                : NAV.find(n => n.id === view)?.label}
             </h1>
           </div>
 
@@ -751,7 +755,24 @@ export default function App() {
               onDeleteIncome={handleDeleteIncome}
               onEditCategory={handleEditCategory}
               onDeleteCategory={handleDeleteCategory}
+              onEditTransaction={handleEditTransaction}
+              onDeleteTransaction={handleDeleteTransaction}
+              onOpenCategory={(id) => { setDetailCategoryId(id); setView('categoryDetail'); }}
               onAdjust={handleOpenAdjust}
+            />
+          )}
+          {view === 'categoryDetail' && (
+            <CategoryDetail
+              category={categories.find(c => Number(c.id) === Number(detailCategoryId)) || null}
+              transactions={transactions}
+              subscriptions={subscriptions}
+              incomes={incomes}
+              settings={settings}
+              onBack={() => { setView('dashboard'); setDetailCategoryId(null); }}
+              onEdit={handleEditCategory}
+              onAdjust={handleOpenAdjust}
+              onEditTransaction={handleEditTransaction}
+              onDeleteTransaction={handleDeleteTransaction}
             />
           )}
           {view === 'accounts' && (
@@ -777,7 +798,8 @@ export default function App() {
               onAddSubscription={() => setModal('addSubscription')} />
           )}
           {view === 'forecasting' && (
-            <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes} />
+            <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes}
+              incomeEvents={incomeEvents} transfers={accountTransfers} account={activeAccount} />
           )}
           {view === 'purchase' && (
             <PurchaseCheck categories={categories} onLogPurchase={handleLogPurchase} />

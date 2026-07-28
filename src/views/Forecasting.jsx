@@ -16,6 +16,8 @@ import {
   getNormalisedAllowanceTotal,
   getNormalisedCategoryAllowance,
   getNormalisedIncomeTotal,
+  getMerchantBreakdown,
+  buildBalanceHistory,
   normalizeIncomeAllocations,
 } from '../utils';
 import { CardTitle } from '../components/ui';
@@ -82,8 +84,13 @@ const PieTooltip = ({ active, payload }) => {
   );
 };
 
-export default function Forecasting({ categories, settings, transactions, incomes = [] }) {
+export default function Forecasting({ categories, settings, transactions, incomes = [], incomeEvents = [], transfers = [], account = null }) {
   const monthlyHistory = useMemo(() => buildMonthlyHistory(transactions, categories), [transactions, categories]);
+  const merchantSpend = useMemo(() => getMerchantBreakdown(transactions, { limit: 8 }), [transactions]);
+  const balanceHistory = useMemo(
+    () => (account ? buildBalanceHistory(account, { transactions, incomeEvents, transfers, days: 60 }) : []),
+    [account, transactions, incomeEvents, transfers],
+  );
   const projectedSpend = useMemo(() => getProjectedSpend(categories, settings, incomes), [categories, settings, incomes]);
   const dailyBurnRate  = useMemo(() => getDailyBurnRate(categories, settings, incomes), [categories, settings, incomes]);
   const legacyDays     = daysUntilReset(settings);
@@ -410,6 +417,66 @@ export default function Forecasting({ categories, settings, transactions, income
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: d.color, width: 60, textAlign: 'right', flexShrink: 0 }}>
                   {fmt(d['Daily Rate'])}/d
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Balance history ──
+           Categories say how the budget is doing; this says whether the account
+           behind it is actually growing or shrinking. */}
+      {balanceHistory.length > 1 && (
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+          <CardTitle as="h2" style={{ marginBottom: 6 }}>Account Balance</CardTitle>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>
+            Last 60 days, reconstructed from your transactions, income and transfers
+          </div>
+          <div className="mobile-chart-scroll">
+            <ResponsiveContainer width="100%" height={200}>
+              <AreaChart data={balanceHistory}>
+                <defs>
+                  <linearGradient id="grad-balance" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#4fffb0" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="#4fffb0" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" interval={Math.max(0, Math.floor(balanceHistory.length / 6) - 1)} />
+                <YAxis tickFormatter={v => `£${Math.round(v)}`} />
+                <Tooltip content={<GlassTooltip />} />
+                <Area type="monotone" dataKey="balance" name="Balance"
+                  stroke="#4fffb0" strokeWidth={2} fill="url(#grad-balance)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* ── Merchants ──
+           Categories tell you the kind of spending; merchants tell you what you
+           actually bought, which is usually the more actionable of the two. */}
+      {merchantSpend.length > 0 && (
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+          <CardTitle as="h2" style={{ marginBottom: 6 }}>Where Your Money Goes</CardTitle>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>Top merchants across all time</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {merchantSpend.map((entry, i) => (
+              <div key={entry.label} className="mobile-row-stack" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 120, fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {entry.label}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div className="progress-track">
+                    <div className="progress-fill" style={{
+                      width: `${Math.min(100, (entry.total / merchantSpend[0].total) * 100)}%`,
+                      background: COLORS[i % COLORS.length],
+                    }} />
+                  </div>
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: COLORS[i % COLORS.length], width: 78, textAlign: 'right', flexShrink: 0 }}>
+                  {fmt(entry.total)}
                 </div>
               </div>
             ))}

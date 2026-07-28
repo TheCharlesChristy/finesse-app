@@ -864,6 +864,169 @@ export function projectedEndBalance(categories = [], settings, incomes = [], per
   return roundMoney(income - totalProjected);
 }
 
+// ── Insight ──────────────────────────────────────────────────────────────────
+
+/**
+ * Where the money actually went, by merchant.
+ *
+ * Categories say what kind of spending it was; merchants say what you actually
+ * bought — which is usually the more actionable of the two.
+ */
+export function getMerchantBreakdown(transactions = [], { since = null, limit = 8 } = {}) {
+  const from = toValidDate(since);
+  const totals = new Map();
+
+  for (const tx of transactions) {
+    const date = toValidDate(tx.date);
+    if (from && (!date || date < from)) continue;
+
+    const label = getTransactionMerchant(tx) || 'Uncategorised';
+    const key = label.toLowerCase();
+    const existing = totals.get(key) || { label, total: 0, count: 0 };
+    existing.total = roundMoney(existing.total + getSignedAmount(tx));
+    existing.count += 1;
+    totals.set(key, existing);
+  }
+
+  return [...totals.values()]
+    .filter(entry => entry.total > 0)
+    .sort((a, b) => b.total - a.total)
+    .slice(0, limit);
+}
+
+/**
+ * This cycle versus the one before it, overall and per category.
+ *
+ * Cycles are resolved per category, so a weekly-funded category is compared
+ * against its own previous week rather than against a calendar month.
+ */
+export function getCycleComparison(transactions = [], categories = [], incomes = [], settings = null, now = new Date()) {
+  const rows = [];
+  let currentTotal = 0;
+  let previousTotal = 0;
+
+  for (const category of categories) {
+    const cycle = getCategoryCycle(category, incomes, settings, now);
+    const previousStart = addDays(cycle.start, -cycle.days);
+
+    let current = 0;
+    let previous = 0;
+
+    for (const tx of transactions) {
+      if (Number(tx.categoryId) !== Number(category.id)) continue;
+      const date = toValidDate(tx.date);
+      if (!date) continue;
+      const day = startOfDay(date);
+
+      if (day >= cycle.start && day < cycle.end) current = roundMoney(current + getSignedAmount(tx));
+      else if (day >= previousStart && day < cycle.start) previous = roundMoney(previous + getSignedAmount(tx));
+    }
+
+    currentTotal = roundMoney(currentTotal + current);
+    previousTotal = roundMoney(previousTotal + previous);
+
+    rows.push({
+      id: category.id,
+      name: category.name,
+      color: category.color,
+      current,
+      previous,
+      change: roundMoney(current - previous),
+      // No previous spend means "new", not "infinitely worse" — leave the
+      // percentage null so callers can say so rather than print ∞%.
+      changePct: previous > 0 ? roundMoney(((current - previous) / previous) * 100) : null,
+    });
+  }
+
+  return {
+    categories: rows.sort((a, b) => Math.abs(b.change) - Math.abs(a.change)),
+    currentTotal,
+    previousTotal,
+    change: roundMoney(currentTotal - previousTotal),
+    changePct: previousTotal > 0 ? roundMoney(((currentTotal - previousTotal) / previousTotal) * 100) : null,
+  };
+}
+
+/**
+ * Running account balance over time, derived from the ledger.
+ *
+ * Balances aren't stored historically — only the current figure is. Working
+ * backwards from it keeps the series consistent with what the app shows now,
+ * rather than inventing a second source of truth.
+ */
+export function buildBalanceHistory(account, { transactions = [], incomeEvents = [], transfers = [], days = 60 } = {}) {
+  const today = startOfDay(new Date());
+  const from = addDays(today, -days);
+  const accountId = Number(account?.id);
+
+  const deltas = new Map(); // yyyy-MM-dd → net change that day
+  const bump = (date, amount) => {
+    const day = toValidDate(date);
+    if (!day) return;
+    const key = format(startOfDay(day), 'yyyy-MM-dd');
+    deltas.set(key, roundMoney((deltas.get(key) || 0) + amount));
+  };
+
+  for (const tx of transactions) {
+    if (Number(tx.accountId) !== accountId) continue;
+    bump(tx.date, -getSignedAmount(tx));
+  }
+  for (const event of incomeEvents) {
+    if (Number(event.accountId) !== accountId) continue;
+    bump(event.date, Number(event.amount) || 0);
+  }
+  for (const transfer of transfers) {
+    const amount = Number(transfer.amount) || 0;
+    if (Number(transfer.toAccountId) === accountId) bump(transfer.date, amount);
+    if (Number(transfer.fromAccountId) === accountId) bump(transfer.date, -amount);
+  }
+
+  // Walk back from today's known balance to find where the window started.
+  let balance = roundMoney(Number(account?.balance) || 0);
+  const series = [];
+  for (let day = today; day >= from; day = addDays(day, -1)) {
+    const key = format(day, 'yyyy-MM-dd');
+    series.unshift({ date: key, label: format(day, 'd MMM'), balance });
+    balance = roundMoney(balance - (deltas.get(key) || 0));
+  }
+
+  return series;
+}
+
+/**
+ * Transactions that stand out against their category's usual size.
+ *
+ * Uses a median-based threshold rather than a mean: a single huge outlier drags
+ * a mean upward enough to hide itself.
+ */
+export function flagUnusualSpend(transactions = [], { multiplier = 3, minimumAmount = 20 } = {}) {
+  const byCategory = new Map();
+  for (const tx of transactions) {
+    if (isRefund(tx)) continue;
+    const key = Number(tx.categoryId);
+    if (!byCategory.has(key)) byCategory.set(key, []);
+    byCategory.get(key).push(Math.abs(Number(tx.amount) || 0));
+  }
+
+  const thresholds = new Map();
+  for (const [categoryId, amounts] of byCategory) {
+    if (amounts.length < 4) continue; // too little history to call anything unusual
+    const sorted = [...amounts].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    if (median > 0) thresholds.set(categoryId, median * multiplier);
+  }
+
+  const flagged = new Set();
+  for (const tx of transactions) {
+    if (isRefund(tx)) continue;
+    const threshold = thresholds.get(Number(tx.categoryId));
+    const amount = Math.abs(Number(tx.amount) || 0);
+    if (threshold && amount >= Math.max(threshold, minimumAmount)) flagged.add(tx.id);
+  }
+
+  return flagged;
+}
+
 export function fmt(amount) {
   return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(amount);
 }

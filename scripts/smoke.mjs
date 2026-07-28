@@ -168,6 +168,43 @@ if ((txText.match(/split/g) || []).length < 2) {
 }
 step('split writes one row per category, tagged as a split');
 
+// ── Insight ──────────────────────────────────────────────────────────────
+
+await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+await page.waitForTimeout(400);
+// innerText reflects CSS text-transform, so this label comes back uppercased.
+const dash = await page.locator('body').innerText();
+if (!/safe to spend today/i.test(dash)) errors.push('safe-to-spend hero missing');
+if (!/safe to spend today\s*\n?£/i.test(dash)) errors.push('safe-to-spend shows no figure');
+step('safe-to-spend hero renders');
+
+// Category drill-down: tapping a category opens its own page.
+await page.getByRole('button', { name: 'Groceries', exact: true }).first().click();
+await page.waitForTimeout(500);
+const detail = await page.locator('body').innerText();
+if (!(await page.locator('h1').innerText()).includes('Groceries')) {
+  errors.push('category drill-down did not open');
+}
+for (const expected of ['Left this cycle', 'Safe per day', 'Transactions', 'Where It Went']) {
+  if (!detail.includes(expected)) errors.push(`category detail missing: ${expected}`);
+}
+step('category drill-down shows cycle stats, merchants and transactions');
+
+await page.getByRole('button', { name: 'Back to Dashboard' }).click();
+await page.waitForTimeout(400);
+if (!(await page.locator('h1').innerText()).includes('Dashboard')) {
+  errors.push('back from category detail did not return to the Dashboard');
+}
+step('drill-down returns to the Dashboard');
+
+await page.getByRole('button', { name: 'Forecasting', exact: true }).click();
+await page.waitForTimeout(600);
+const forecast = await page.locator('body').innerText();
+for (const expected of ['Account Balance', 'Where Your Money Goes']) {
+  if (!forecast.includes(expected)) errors.push(`forecasting missing: ${expected}`);
+}
+step('balance history and merchant breakdown render');
+
 await browser.close();
 
 if (errors.length) {

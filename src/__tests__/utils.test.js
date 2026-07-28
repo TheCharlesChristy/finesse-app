@@ -17,6 +17,10 @@ import {
   getUnallocatedIncomeTotal,
   getUpcomingSubscriptionCost,
   getAllTags,
+  getMerchantBreakdown,
+  getCycleComparison,
+  buildBalanceHistory,
+  flagUnusualSpend,
   getMerchantSuggestions,
   getSignedAmount,
   isRefund,
@@ -514,5 +518,115 @@ describe('signed amounts', () => {
       { categoryId: 1, amount: 100, date: now },
       { categoryId: 1, amount: 30, date: now, type: 'refund' },
     ], 1)).toBe(20);
+  });
+});
+
+describe('insight', () => {
+  const now = new Date();
+  const day = (offset) => iso(addDays(now, offset));
+
+  it('ranks merchants by spend and nets refunds out', () => {
+    const breakdown = getMerchantBreakdown([
+      { merchant: 'Tesco', amount: 50, date: day(-1) },
+      { merchant: 'Tesco', amount: 30, date: day(-2) },
+      { merchant: 'Tesco', amount: 20, date: day(-2), type: 'refund' },
+      { merchant: 'Costa', amount: 40, date: day(-3) },
+    ]);
+
+    expect(breakdown.map(e => [e.label, e.total])).toEqual([['Tesco', 60], ['Costa', 40]]);
+  });
+
+  it('excludes merchants outside the window and fully-refunded ones', () => {
+    const breakdown = getMerchantBreakdown([
+      { merchant: 'Old', amount: 50, date: day(-40) },
+      { merchant: 'New', amount: 10, date: day(-1) },
+      { merchant: 'Wash', amount: 10, date: day(-1) },
+      { merchant: 'Wash', amount: 10, date: day(-1), type: 'refund' },
+    ], { since: addDays(now, -7) });
+
+    expect(breakdown.map(e => e.label)).toEqual(['New']);
+  });
+
+  it('compares this cycle against the previous one, per category', () => {
+    const incomes = [makeIncome({ id: 10, resetFrequency: 'weekly', daysAgo: 2 })];
+    const categories = [makeCategory({ id: 1, allowance: 100, incomeId: 10, daysAgo: 2 })];
+    const result = getCycleComparison([
+      { categoryId: 1, amount: 30, date: day(-1) },  // this cycle
+      { categoryId: 1, amount: 50, date: day(-5) },  // previous cycle
+    ], categories, incomes);
+
+    expect(result.currentTotal).toBe(30);
+    expect(result.previousTotal).toBe(50);
+    expect(result.change).toBe(-20);
+    expect(result.changePct).toBe(-40);
+  });
+
+  it('reports no percentage when there is no previous spend to compare against', () => {
+    const incomes = [makeIncome({ id: 10, resetFrequency: 'weekly', daysAgo: 1 })];
+    const categories = [makeCategory({ id: 1, incomeId: 10, daysAgo: 1 })];
+    const result = getCycleComparison([{ categoryId: 1, amount: 20, date: day(0) }], categories, incomes);
+
+    expect(result.changePct).toBeNull();
+    expect(result.categories[0].changePct).toBeNull();
+  });
+
+  it('reconstructs balance history backwards from the current balance', () => {
+    // Each point is the balance at the *end* of that day. Working forwards:
+    // −60 → +200 income → 140 → −40 spend → 100 → unchanged → 100.
+    const series = buildBalanceHistory({ id: 1, balance: 100 }, {
+      transactions: [{ accountId: 1, amount: 40, date: day(-1) }],
+      incomeEvents: [{ accountId: 1, amount: 200, date: day(-2) }],
+      days: 3,
+    });
+
+    expect(series.map(p => p.balance)).toEqual([-60, 140, 100, 100]);
+    expect(series.at(-1).balance).toBe(100); // today matches the stored balance
+  });
+
+  it('ignores other accounts and applies transfers in both directions', () => {
+    // The £999 belongs to account 2 and must not move account 1's line.
+    const out = buildBalanceHistory({ id: 1, balance: 50 }, {
+      transactions: [{ accountId: 2, amount: 999, date: day(-1) }],
+      transfers: [{ fromAccountId: 1, toAccountId: 2, amount: 25, date: day(-1) }],
+      days: 2,
+    });
+    expect(out.map(p => p.balance)).toEqual([75, 50, 50]);
+
+    // Same transfer seen from the receiving side.
+    const incoming = buildBalanceHistory({ id: 2, balance: 75 }, {
+      transfers: [{ fromAccountId: 1, toAccountId: 2, amount: 25, date: day(-1) }],
+      days: 2,
+    });
+    expect(incoming.map(p => p.balance)).toEqual([50, 75, 75]);
+  });
+
+  it('flags outliers against the category median, not the mean', () => {
+    const txs = [
+      { id: 1, categoryId: 1, amount: 3, date: day(-1) },
+      { id: 2, categoryId: 1, amount: 3.5, date: day(-2) },
+      { id: 3, categoryId: 1, amount: 4, date: day(-3) },
+      { id: 4, categoryId: 1, amount: 3, date: day(-4) },
+      { id: 5, categoryId: 1, amount: 120, date: day(-5) },
+    ];
+    const flagged = flagUnusualSpend(txs);
+
+    expect(flagged.has(5)).toBe(true);
+    expect(flagged.has(1)).toBe(false);
+  });
+
+  it('stays quiet without enough history, and never flags refunds', () => {
+    expect(flagUnusualSpend([
+      { id: 1, categoryId: 1, amount: 5, date: day(-1) },
+      { id: 2, categoryId: 1, amount: 500, date: day(-2) },
+    ]).size).toBe(0);
+
+    const withRefund = flagUnusualSpend([
+      { id: 1, categoryId: 1, amount: 3, date: day(-1) },
+      { id: 2, categoryId: 1, amount: 3, date: day(-2) },
+      { id: 3, categoryId: 1, amount: 3, date: day(-3) },
+      { id: 4, categoryId: 1, amount: 3, date: day(-4) },
+      { id: 5, categoryId: 1, amount: 200, date: day(-5), type: 'refund' },
+    ]);
+    expect(withRefund.has(5)).toBe(false);
   });
 });

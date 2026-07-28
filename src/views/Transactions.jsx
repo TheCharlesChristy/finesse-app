@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
-import { CopyPlus, CreditCard, Layers3, Pencil, Trash2, Search, Undo2 } from 'lucide-react';
-import { fmt, getAllTags, getSignedAmount, isRefund } from '../utils';
+import { AlertTriangle, CopyPlus, CreditCard, Layers3, Pencil, Trash2, Search, Undo2 } from 'lucide-react';
+import { flagUnusualSpend, fmt, getAllTags, getSignedAmount, isRefund } from '../utils';
 import { format, isSameDay, isSameMonth, startOfDay, subDays } from 'date-fns';
 import CategorySelect from '../components/CategorySelect';
 import { IconButton } from '../components/ui';
@@ -107,6 +107,9 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
 
   const catMap = useMemo(() => Object.fromEntries(categories.map(c => [c.id, c])), [categories]);
   const allTags = useMemo(() => getAllTags(transactions), [transactions]);
+  // Flagged against each category's own median, so a £60 weekly shop isn't
+  // "unusual" just because coffees are £3.
+  const unusual = useMemo(() => flagUnusualSpend(transactions), [transactions]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -310,6 +313,12 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                         <span>{cat?.name || 'Unknown'} · {txDate ? format(txDate, 'HH:mm') : 'No time'}</span>
+                        {unusual.has(tx.id) && (
+                          <span title="Much larger than usual for this category"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--warn)', background: 'rgba(251,191,112,0.12)', padding: '1px 6px', borderRadius: 10 }}>
+                            <AlertTriangle size={9} /> unusual
+                          </span>
+                        )}
                         {tx.splitGroupId && (
                           <span title="Part of a split purchase" style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 6px', borderRadius: 10 }}>
                             split
