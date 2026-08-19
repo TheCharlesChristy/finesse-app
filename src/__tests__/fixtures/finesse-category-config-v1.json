@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 1,
+  "kind": "finesse.categoryConfig",
+  "targetAccountId": 3,
+  "applyAt": "next-cycle",
+  "baselineIncome": {
+    "id": 1,
+    "name": "LM",
+    "amount": 2400
+  },
+  "variables": [
+    {
+      "action": "update",
+      "id": 5,
+      "name": "Bills",
+      "value": 650
+    },
+    {
+      "action": "update",
+      "id": 6,
+      "name": "Subs",
+      "value": 45
+    },
+    {
+      "action": "update",
+      "id": 7,
+      "name": "AnnualBills",
+      "value": 810
+    },
+    {
+      "action": "create",
+      "id": null,
+      "name": "CostofFuelTank",
+      "value": 60
+    }
+  ],
+  "categories": [
+    {
+      "action": "update",
+      "id": 10,
+      "name": "Bills",
+      "renamedFrom": "Household Bills",
+      "allowance": 650,
+      "allowanceFormula": "$Bills",
+      "color": "#5db8ff",
+      "sortOrder": 1,
+      "incomeAllocations": [
+        {
+          "incomeId": 1,
+          "percent": 100
+        }
+      ]
+    },
+    {
+      "action": "update",
+      "id": 11,
+      "name": "Subscriptions",
+      "renamedFrom": "Subs & Streaming",
+      "allowance": 45,
+      "allowanceFormula": "$Subs",
+      "color": "#a78bfa",
+      "sortOrder": 2,
+      "incomeAllocations": [
+        {
+          "incomeId": 1,
+          "percent": 100
+        }
+      ]
+    },
+    {
+      "action": "update",
+      "id": 12,
+      "name": "Annual Bills",
+      "renamedFrom": "Yearly Costs",
+      "allowance": 67.5,
+      "allowanceFormula": "$AnnualBills/12",
+      "rollover": true,
+      "color": "#fbbf70",
+      "sortOrder": 3,
+      "incomeAllocations": [
+        {
+          "incomeId": 1,
+          "percent": 100
+        }
+      ]
+    },
+    {
+      "action": "update",
+      "id": 13,
+      "name": "Fuel",
+      "renamedFrom": "Petrol",
+      "allowance": 200,
+      "allowanceFormula": "$CostofFuelTank * 3.3333333333333333",
+      "color": "#4fffb0",
+      "sortOrder": 4,
+      "incomeAllocations": [
+        {
+          "incomeId": 1,
+          "percent": 100
+        }
+      ]
+    },
+    {
+      "action": "update",
+      "id": 14,
+      "name": "Groceries",
+      "renamedFrom": "Food Shop",
+      "allowance": 360,
+      "allowanceFormula": "{LM}*.15",
+      "color": "#ff9f68",
+      "sortOrder": 5,
+      "incomeAllocations": [
+        {
+          "incomeId": 1,
+          "percent": 100
+        }
+      ]
+    },
+    {
+      "action": "update",
+      "id": 15,
+      "name": "Savings",
+      "renamedFrom": "Rainy Day",
+      "allowance": 439.1,
+      "allowanceFormula": "{LM} - $Bills - $Subs - $AnnualBills/12 - $CostofFuelTank*3.3333333333333333 - {LM}*.416",
+      "allowanceFormulaFallback": "{LM}*.1767",
+      "rollover": true,
+      "color": "#4fffb0",
+      "sortOrder": 9,
+      "incomeAllocations": [
+        {
+          "incomeId": 1,
+          "percent": 100
+        }
+      ]
+    },
+    {
+      "action": "create",
+      "id": null,
+      "name": "Eating Out",
+      "allowance": 192,
+      "allowanceFormula": "{LM}*.08",
+      "color": "#ff6b8a",
+      "sortOrder": 6,
+      "incomeAllocations": [
+        {
+          "incomeId": 1,
+          "percent": 100
+        }
+      ]
+    },
+    {
+      "action": "create",
+      "id": null,
+      "name": "Personal",
+      "allowance": 240,
+      "allowanceFormula": "{LM}*.10",
+      "color": "#c084fc",
+      "sortOrder": 7,
+      "incomeAllocations": [
+        {
+          "incomeId": 1,
+          "percent": 100
+        }
+      ]
+    },
+    {
+      "action": "keep",
+      "id": 16,
+      "name": "Transport",
+      "allowance": 206.4,
+      "sortOrder": 8
+    }
+  ],
+  "validation": {
+    "expectedIncomeTotal": 2400,
+    "expectedAllowanceTotal": 2400,
+    "expectedCategoryCount": 9,
+    "expectedVariableCount": 4
+  },
+  "importerNotes": [
+    "Savings is the residual category: its formula absorbs whatever the other allocations leave, so the plan always sums to exactly 100% of income.",
+    "Annual Bills and Savings carry rollover, so unspent money accumulates across cycles instead of being zeroed at each reset.",
+    "Annual Bills accumulates 67.50 a month toward the 700 bill that lands in January."
+  ]
+}

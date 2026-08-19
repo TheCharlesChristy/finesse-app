@@ -512,6 +512,137 @@ const goalsAfter = await page.locator('body').innerText();
 if (!/24% APR/.test(goalsAfter)) errors.push('debt card does not show its APR and interest cost');
 step('debt goal models interest rather than dividing the balance');
 
+// ── Budget config import ──
+// The importer is the one flow that rewrites every allowance at once, so it has
+// to be exercised end to end: parse, validate against the live account, preview,
+// stage, and cancel. The config is built from the ids actually in IndexedDB
+// rather than hard-coded, since an `update` that names the wrong id is exactly
+// what validation is supposed to reject.
+await page.getByRole('button', { name: 'Settings', exact: true }).click();
+await page.waitForTimeout(600);
+
+const configPayload = await page.evaluate(async () => {
+  const open = () => new Promise((resolve, reject) => {
+    const request = indexedDB.open('FinanceApp');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  const readAll = (database, table) => new Promise((resolve, reject) => {
+    const req = database.transaction(table, 'readonly').objectStore(table).getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+
+  const database = await open();
+  const [accounts, incomes, categories] = await Promise.all([
+    readAll(database, 'accounts'), readAll(database, 'incomes'), readAll(database, 'categories'),
+  ]);
+  const account = accounts[0];
+  const income = incomes[0];
+  const scoped = categories.filter(c => Number(c.accountId) === Number(account.id));
+
+  // Keep every existing category at its current allowance, then add one
+  // residual that absorbs whatever income is left — so the plan allocates
+  // exactly 100% and the allocation check has something real to verify.
+  const held = scoped.reduce((sum, c) => sum + (Number(c.allowance) || 0), 0);
+  const residual = Math.round((income.amount - held) * 100) / 100;
+
+  return {
+    incomeName: income.name,
+    incomeAmount: income.amount,
+    residual,
+    config: {
+      schemaVersion: 1,
+      kind: 'finesse.categoryConfig',
+      targetAccountId: account.id,
+      applyAt: 'next-cycle',
+      baselineIncome: { id: income.id, name: income.name, amount: income.amount },
+      variables: [{ action: 'create', id: null, name: 'SmokeRate', value: residual }],
+      categories: [
+        ...scoped.map((c, index) => ({
+          action: 'update',
+          id: c.id,
+          name: `${c.name} Renamed`,
+          renamedFrom: c.name,
+          allowance: Math.round((Number(c.allowance) || 0) * 100) / 100,
+          sortOrder: index + 1,
+        })),
+        {
+          action: 'create',
+          id: null,
+          name: 'Smoke Savings',
+          allowance: residual,
+          allowanceFormula: '$SmokeRate',
+          rollover: true,
+          sortOrder: scoped.length + 1,
+        },
+      ],
+      validation: { expectedIncomeTotal: income.amount, expectedAllowanceTotal: income.amount },
+      importerNotes: ['Built by the smoke test from the live account.'],
+    },
+  };
+});
+
+// A malformed file must be rejected in the preview, with nothing staged.
+await page.getByRole('button', { name: /Import Budget Config/ }).click();
+await page.getByRole('dialog').waitFor({ timeout: 5000 });
+// Scoped to the dialog: Settings' own backup importer also takes a .json file.
+const configInput = page.getByRole('dialog').locator('input[type="file"]');
+await configInput.setInputFiles({
+  name: 'broken.json',
+  mimeType: 'application/json',
+  buffer: Buffer.from(JSON.stringify({ ...configPayload.config, kind: 'finesse.backup' })),
+});
+await page.waitForTimeout(600);
+
+const rejected = await page.getByRole('dialog').innerText();
+if (!/cannot be imported/i.test(rejected)) errors.push(`bad config was not rejected:\n${rejected}`);
+if (!/Nothing has been changed/i.test(rejected)) errors.push('rejection does not say the data is untouched');
+if (await page.getByRole('button', { name: /Stage for next payday/ }).isEnabled()) {
+  errors.push('a config that failed validation can still be staged');
+}
+step('budget config importer rejects a malformed file without staging it');
+
+// The same config, valid: it must preview, name the renames, and balance.
+await configInput.setInputFiles({
+  name: 'budget.json',
+  mimeType: 'application/json',
+  buffer: Buffer.from(JSON.stringify(configPayload.config)),
+});
+await page.waitForTimeout(600);
+
+const preview = await page.getByRole('dialog').innerText();
+if (!/Nothing changes today/i.test(preview)) errors.push('preview does not say the change is staged');
+if (!/was “Groceries”/.test(preview)) errors.push(`preview does not mark the rename:\n${preview}`);
+if (!/Smoke Savings/.test(preview)) errors.push('preview omits the created category');
+if (!/rollover/.test(preview)) errors.push('preview does not mark the rollover category');
+if (!/100%/.test(preview)) errors.push(`preview does not report a fully allocated budget:\n${preview}`);
+step('budget config previews the diff and reports a fully allocated budget');
+
+await page.getByRole('button', { name: /Stage for next payday/ }).click();
+await page.getByRole('dialog').waitFor({ state: 'detached' });
+await page.waitForTimeout(800);
+
+// Staging must change nothing yet — the banner says when it will.
+const staged = await page.locator('body').innerText();
+if (!/New budget applies on/i.test(staged)) errors.push(`no staged-budget banner:\n${staged}`);
+if (/Groceries Renamed/.test(staged)) errors.push('staging applied the config immediately');
+step('staging shows a banner and leaves the current cycle untouched');
+
+await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+await page.waitForTimeout(500);
+if (!/New budget applies on/i.test(await page.locator('body').innerText())) {
+  errors.push('staged-budget banner does not follow the user across views');
+}
+
+await page.getByRole('button', { name: 'Cancel', exact: true }).first().click();
+await page.getByRole('button', { name: 'Discard' }).click();
+await page.waitForTimeout(800);
+if (/New budget applies on/i.test(await page.locator('body').innerText())) {
+  errors.push('cancelling a staged budget left the banner up');
+}
+step('a staged budget can be cancelled before it lands');
+
 await browser.close();
 
 if (errors.length) {

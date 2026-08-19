@@ -415,47 +415,212 @@ export function getPacedAllowanceStatus(category, date = new Date(), cycleDays =
   };
 }
 
+// ── Formula evaluation ───────────────────────────────────────────────────────
+
 /**
- * Evaluate a formula string with variable and category substitutions.
- * - $varName  → replaced with variable.value
- * - [CatName] → replaced with category.allowance (non-formula categories only)
+ * Tokenise an arithmetic expression.
+ *
+ * Returns null on any character that isn't part of the arithmetic grammar, so
+ * an unsubstituted `$Var`, `{Income}` or `[Category]` token fails here rather
+ * than being silently coerced.
+ */
+function tokenizeArithmetic(input) {
+  const tokens = [];
+  let i = 0;
+
+  while (i < input.length) {
+    const ch = input[i];
+
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') { i += 1; continue; }
+
+    if (ch === '+' || ch === '-' || ch === '*' || ch === '/' || ch === '(' || ch === ')') {
+      tokens.push({ type: ch });
+      i += 1;
+      continue;
+    }
+
+    // Numbers, including the leading-dot form the app's own formulas use (`.416`).
+    if ((ch >= '0' && ch <= '9') || ch === '.') {
+      let j = i;
+      let seenDot = false;
+      while (j < input.length) {
+        const c = input[j];
+        if (c >= '0' && c <= '9') { j += 1; continue; }
+        if (c === '.' && !seenDot) { seenDot = true; j += 1; continue; }
+        break;
+      }
+      const text = input.slice(i, j);
+      const value = Number(text);
+      if (text === '.' || !Number.isFinite(value)) return null;
+      tokens.push({ type: 'number', value });
+      i = j;
+      continue;
+    }
+
+    return null;
+  }
+
+  return tokens;
+}
+
+/**
+ * Evaluate an arithmetic expression by recursive descent.
+ *
+ * Deliberately a real parser rather than a regex plus `Function()`: precedence
+ * has to be right for the chained residual formulas (`a - b/12 - c*3.33`), and
+ * building a function from user text is exactly the kind of thing a PWA's
+ * content-security policy should be free to forbid.
+ *
+ *   expression := term (('+' | '-') term)*
+ *   term       := factor (('*' | '/') factor)*
+ *   factor     := ('+' | '-') factor | primary
+ *   primary    := number | '(' expression ')'
+ *
+ * Returns a finite number, or null if the text isn't a well-formed expression.
+ */
+export function evaluateArithmetic(input) {
+  if (typeof input !== 'string') return null;
+  const tokens = tokenizeArithmetic(input);
+  if (!tokens || tokens.length === 0) return null;
+
+  let pos = 0;
+  const peek = () => tokens[pos];
+  let failed = false;
+
+  const parseExpression = () => {
+    let left = parseTerm();
+    if (failed) return 0;
+    while (peek() && (peek().type === '+' || peek().type === '-')) {
+      const op = tokens[pos].type;
+      pos += 1;
+      const right = parseTerm();
+      if (failed) return 0;
+      left = op === '+' ? left + right : left - right;
+    }
+    return left;
+  };
+
+  const parseTerm = () => {
+    let left = parseFactor();
+    if (failed) return 0;
+    while (peek() && (peek().type === '*' || peek().type === '/')) {
+      const op = tokens[pos].type;
+      pos += 1;
+      const right = parseFactor();
+      if (failed) return 0;
+      left = op === '*' ? left * right : left / right;
+    }
+    return left;
+  };
+
+  const parseFactor = () => {
+    const token = peek();
+    if (!token) { failed = true; return 0; }
+    if (token.type === '-') { pos += 1; return -parseFactor(); }
+    if (token.type === '+') { pos += 1; return parseFactor(); }
+    return parsePrimary();
+  };
+
+  const parsePrimary = () => {
+    const token = peek();
+    if (!token) { failed = true; return 0; }
+    if (token.type === 'number') { pos += 1; return token.value; }
+    if (token.type === '(') {
+      pos += 1;
+      const value = parseExpression();
+      if (failed) return 0;
+      if (!peek() || peek().type !== ')') { failed = true; return 0; }
+      pos += 1;
+      return value;
+    }
+    failed = true;
+    return 0;
+  };
+
+  const result = parseExpression();
+  if (failed || pos !== tokens.length) return null;
+  if (typeof result !== 'number' || !Number.isFinite(result)) return null;
+  return roundMoney(result);
+}
+
+// Reasons a formula can fail to produce a number. The importer surfaces these
+// verbatim, so a rejected config says *which* token was wrong rather than only
+// that something was.
+export const FORMULA_OK = 'ok';
+export const FORMULA_EMPTY = 'empty';
+export const FORMULA_UNDEFINED_VARIABLE = 'undefined-variable';
+export const FORMULA_UNDEFINED_INCOME = 'undefined-income';
+export const FORMULA_UNDEFINED_CATEGORY = 'undefined-category';
+export const FORMULA_INVALID = 'invalid-expression';
+
+/**
+ * Evaluate a formula and say why it failed, if it did.
+ *
+ * `evaluateFormula` is the value-or-null wrapper over this; callers that have
+ * to explain a failure to the user (the config importer) use this instead.
+ *
+ * Returns { value, status, token } — `token` names the offending reference
+ * when the failure is an unresolved one.
+ */
+export function evaluateFormulaDetailed(formula, variables = [], categories = [], incomes = []) {
+  if (!formula || typeof formula !== 'string' || !formula.trim()) {
+    return { value: null, status: FORMULA_EMPTY, token: null };
+  }
+
+  let expr = formula;
+
+  // Longest name first, so `$AnnualBills` isn't half-eaten by a `$Annual`, and
+  // the negative lookahead stops `$Bill` matching inside `$Bills`.
+  const varsSorted = [...variables].filter(v => v?.name).sort((a, b) => b.name.length - a.name.length);
+  for (const v of varsSorted) {
+    const escaped = String(v.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    expr = expr.replace(new RegExp(`\\$${escaped}(?![a-zA-Z0-9_])`, 'g'), `(${Number(v.value) || 0})`);
+  }
+
+  const incomesSorted = [...incomes].filter(i => i?.name).sort((a, b) => b.name.length - a.name.length);
+  for (const i of incomesSorted) {
+    const escaped = String(i.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    expr = expr.replace(new RegExp(`\\{${escaped}\\}`, 'g'), `(${Number(i.amount) || 0})`);
+  }
+
+  // Only plain-number categories can be referenced — a formula referring to
+  // another formula would need an evaluation order this doesn't define.
+  const plainCats = categories.filter(c => c?.name && !c.allowanceFormula);
+  const catsSorted = [...plainCats].sort((a, b) => b.name.length - a.name.length);
+  for (const c of catsSorted) {
+    const escaped = String(c.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    expr = expr.replace(new RegExp(`\\[${escaped}\\]`, 'g'), `(${Number(c.allowance) || 0})`);
+  }
+
+  // Anything left inside a sigil never resolved. Name it rather than reporting
+  // a generic parse failure — "references $Nonexistent" is actionable.
+  const leftoverVar = expr.match(/\$([A-Za-z0-9_]*)/);
+  if (leftoverVar) {
+    return { value: null, status: FORMULA_UNDEFINED_VARIABLE, token: `$${leftoverVar[1]}` };
+  }
+  const leftoverIncome = expr.match(/\{([^}]*)\}/);
+  if (leftoverIncome) {
+    return { value: null, status: FORMULA_UNDEFINED_INCOME, token: `{${leftoverIncome[1]}}` };
+  }
+  const leftoverCategory = expr.match(/\[([^\]]*)\]/);
+  if (leftoverCategory) {
+    return { value: null, status: FORMULA_UNDEFINED_CATEGORY, token: `[${leftoverCategory[1]}]` };
+  }
+
+  const value = evaluateArithmetic(expr);
+  if (value === null) return { value: null, status: FORMULA_INVALID, token: null };
+  return { value, status: FORMULA_OK, token: null };
+}
+
+/**
+ * Evaluate a formula string with variable, income and category substitutions.
+ * - $varName    → variable.value
+ * - {IncomeName}→ income.amount
+ * - [CatName]   → category.allowance (non-formula categories only)
  * Returns a number rounded to 2dp, or null on any error.
  */
 export function evaluateFormula(formula, variables = [], categories = [], incomes = []) {
-  if (!formula || typeof formula !== 'string') return null;
-  try {
-    let expr = formula;
-
-    // Replace $varName tokens (longest name first to avoid partial matches)
-    const varsSorted = [...variables].sort((a, b) => b.name.length - a.name.length);
-    for (const v of varsSorted) {
-      expr = expr.replace(new RegExp(`\\$${v.name}(?![a-zA-Z0-9_])`, 'g'), String(v.value ?? 0));
-    }
-
-    // Replace {IncomeName} tokens
-    const incomesSorted = [...incomes].sort((a, b) => b.name.length - a.name.length);
-    for (const i of incomesSorted) {
-      const escaped = i.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      expr = expr.replace(new RegExp(`\\{${escaped}\\}`, 'g'), String(i.amount ?? 0));
-    }
-
-    // Replace [CategoryName] tokens — only plain-number (non-formula) categories
-    const plainCats = categories.filter(c => !c.allowanceFormula);
-    const catsSorted = [...plainCats].sort((a, b) => b.name.length - a.name.length);
-    for (const c of catsSorted) {
-      const escaped = c.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      expr = expr.replace(new RegExp(`\\[${escaped}\\]`, 'g'), String(c.allowance ?? 0));
-    }
-
-    // Safety: only digits, operators, parens, dots, whitespace allowed after substitution
-    if (!/^[\d\s+\-*/().]+$/.test(expr)) return null;
-
-    const result = Function('"use strict"; return (' + expr + ')')(); // safe: only [0-9 +\-*/.() ] reach here
-    if (typeof result !== 'number' || !isFinite(result)) return null;
-    return Math.round(result * 100) / 100;
-  } catch {
-    return null;
-  }
+  return evaluateFormulaDetailed(formula, variables, categories, incomes).value;
 }
 
 // ── Budget cycles ────────────────────────────────────────────────────────────
@@ -1497,6 +1662,46 @@ export function buildNudges({
   }
 
   // ── Backup health ──
+  // ── Budget config ──
+  // A staged config changes every allowance on a date the user chose days or
+  // weeks ago. Saying so up front is the difference between "my budget landed"
+  // and "something rewrote my budget overnight".
+  const staged = settings?.stagedBudgetConfig;
+  if (staged && !staged.consumedAt) {
+    if (staged.lastAttemptErrors?.length) {
+      nudges.push({
+        id: `budget-config-failed-${staged.stagedAt}-${staged.lastAttemptAt || ''}`,
+        severity: NUDGE_DANGER,
+        title: 'Your new budget could not be applied',
+        body: `${staged.lastAttemptErrors[0].message} Nothing was changed — your previous budget is still running.`,
+        view: 'settings',
+      });
+    } else {
+      const count = staged.plan?.categories?.length || 0;
+      nudges.push({
+        id: `budget-config-staged-${staged.stagedAt}`,
+        severity: NUDGE_INFO,
+        title: 'A new budget is waiting for payday',
+        body: `${count} categor${count === 1 ? 'y' : 'ies'} will be redefined at your next reset. Nothing has changed yet.`,
+        view: 'settings',
+      });
+    }
+  }
+
+  const appliedUndo = settings?.budgetConfigUndo;
+  if (appliedUndo?.appliedAt) {
+    const appliedOn = toValidDate(appliedUndo.appliedAt);
+    if (appliedOn) {
+      nudges.push({
+        id: `budget-config-applied-${appliedUndo.appliedAt}`,
+        severity: NUDGE_INFO,
+        title: 'Your new budget is live',
+        body: `Applied on ${format(startOfDay(appliedOn), 'd MMM')}. It can be undone from Settings until your next reset.`,
+        view: 'settings',
+      });
+    }
+  }
+
   // Everything lives in one browser. Clearing site data loses the lot, and
   // there is no server-side copy to fall back on.
   const lastBackup = toValidDate(settings?.lastBackupAt);

@@ -10,3 +10,4 @@ export { ImportModeModal, ExportChatSummaryOptionsModal } from './data';
 export { AdjustBudgetModal } from './budget';
 export { AddGoalModal, SaveForItemModal } from './goal';
 export { ImportStatementModal } from './statement';
+export { ImportBudgetConfigModal } from './budgetConfig';

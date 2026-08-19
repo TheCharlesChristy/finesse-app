@@ -32,6 +32,7 @@ src/
 ├── utils.js              # Pure functions only — cycles, scheduling, forecasting, formatting
 ├── index.css             # All styling: CSS variables, glass classes, component styles
 ├── csv.js                # Pure: bank-statement parsing, column mapping, dedupe, reconciliation
+├── budgetConfig.js       # Pure: budget-config validation and the staged preview diff
 ├── prediction.js         # Pure: Monte Carlo spend simulation and backtesting
 ├── storage.js            # navigator.storage: persistence + quota
 ├── share.js              # navigator.share for exports, with a download fallback
@@ -65,6 +66,7 @@ src/
 │   │   ├── shared.jsx    #   IncomeAllocationEditor, FormulaInput, ColourPicker, PALETTE…
 │   │   ├── transaction.jsx, category.jsx, income.jsx, subscription.jsx,
 │   │   ├── statement.jsx #   bank-statement import: map columns → review → commit
+│   │   ├── budgetConfig.jsx #  budget-config import: validate → preview diff → stage
 │   │   └── wishlist.jsx, data.jsx, budget.jsx, goal.jsx
 │   ├── CategorySelect.jsx, DateInput.jsx  # custom accessible form controls
 │   ├── LockScreen.jsx    # PIN gate, rendered *instead of* the app
@@ -188,6 +190,47 @@ single current figure with `debtHasHistory: false`. Finesse records what remains
 on a debt goal, not when each payment landed, so a historical debt line would be
 invented. Hold to this: where the data can't support a series, say so rather
 than plotting a plausible-looking one.
+
+### Budget config import — staged, never applied on import
+
+A JSON config file redefines every category and variable for an account at once
+(`budgetConfig.js` validates, `db.js` writes, `modals/budgetConfig.jsx` previews).
+The one rule that shapes everything else: **an import is staged, not applied.**
+Changing a budget mid-cycle corrupts that cycle's pacing and every comparison
+drawn from it, so a config is validated and previewed on import, held on
+`settings.stagedBudgetConfig`, and applied by `applyStagedBudgetConfig` at the
+reset of the income its formulas are written against.
+
+Four invariants worth keeping:
+
+- **Runtime state is never written.** `RUNTIME_CATEGORY_FIELDS` names what an
+  import must not touch — `spent`, `spentByIncome`, `lastReset`,
+  `incomeResetAt`, `temporaryBoost`, `boostSources`, `cycleClearedSpend`. An
+  `update` preserves the row's id, so a rename keeps its transaction history.
+- **Variables are written before categories,** because category formulas
+  dereference them. The preview evaluates against the *post-apply* variable set,
+  or it would show numbers the apply step would never produce.
+- **Formulas are the source of truth, not the file's numbers.** Apply
+  re-evaluates against live income; a config that no longer balances is left
+  staged and reported rather than written at numbers the user didn't approve.
+- **Import never deletes.** A category the config omits is left untouched and
+  the user is told so.
+
+Apply runs in one Dexie transaction and takes an `exportSnapshot()` backup
+first. Undo is offered for one cycle (`undoExpiresAt`) — long enough to catch a
+budget you didn't want, short of restoring allowances that have gone stale and
+discarding rollover accrued since.
+
+### Formula evaluation
+
+`evaluateFormula` substitutes `$var`, `{Income}` and `[Category]` tokens, then
+hands the result to `evaluateArithmetic` — a real tokeniser and recursive-descent
+parser, not a regex and `Function()`. Precedence has to be right for the chained
+residual formulas (`a - b/12 - c*3.33`), and building a function from user text
+is exactly what a PWA's content-security policy should be free to forbid.
+
+`evaluateFormulaDetailed` is the same thing with a reason attached, so the config
+importer can say *which* reference failed rather than only that something did.
 
 ### Schema changes
 

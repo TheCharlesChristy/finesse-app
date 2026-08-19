@@ -3,8 +3,10 @@ import { startOfDay } from 'date-fns';
 import { getNextRecurringDate, normalizeIncomeAllocations, roundMoney, getEffectiveAllowance,
   getCategorySpare, buildMonthlyHistory, projectedEndBalance, getUpcomingSubscriptionCost,
   getCategoryCycle, getNormalisedIncomeTotal, getSignedAmount, getRolloverForNextCycle,
+  getIncomeCycleAverageDays,
   TX_EXPENSE, TX_REFUND,
   wishlistAffordability } from './utils';
+import { buildBudgetConfigPlan, isStagedConfigDue, isBudgetConfigUndoExpired } from './budgetConfig';
 
 export const db = new Dexie('FinanceApp');
 
@@ -1380,6 +1382,292 @@ export async function resetCategoriesForIncome(incomeId, resetAt = new Date().to
   }
 
   return resetCount;
+}
+
+// ── Budget config import ─────────────────────────────────────────────────────
+//
+// A config file redefines an account's categories and variables in one go.
+// Editing a budget category by category, mid-cycle, corrupts that cycle's
+// pacing and every comparison drawn from it, so an import is *staged*: it is
+// validated and previewed immediately, held, and applied at the next reset.
+//
+// The staged record lives on the account's settings row rather than in a table
+// of its own. It is one bounded object per account with the same lifecycle as
+// `dismissedNudges` — and keeping it there means it travels through export and
+// import for free, which a new table would not.
+
+/**
+ * Hold a validated config until the next reset.
+ *
+ * Deliberately refuses a plan that failed validation: staging a config that
+ * cannot be applied only moves the failure to a moment when the user isn't
+ * watching. Returns what it replaced, so the UI can say a previous config was
+ * displaced rather than quietly overwriting it.
+ */
+export async function stageBudgetConfig(accountId, { config, plan, fileName = null } = {}) {
+  const id = accountId != null ? Number(accountId) : await getDefaultAccountId();
+  if (id == null) throw new Error('No account to stage a budget config against.');
+  if (!plan?.ok) throw new Error('Refusing to stage a config that failed validation.');
+
+  const settings = await getSettings(id);
+  const replaced = settings?.stagedBudgetConfig || null;
+
+  const staged = {
+    stagedAt: new Date().toISOString(),
+    fileName,
+    config,
+    plan,
+    // Which reset this waits for. The formulas are written in terms of this
+    // income, so applying them at a different income's reset would evaluate
+    // them against a cycle they don't describe.
+    applyIncomeId: plan.meta?.baselineIncomeId ?? null,
+    applyNotBefore: plan.meta?.applyNotBefore ?? null,
+    consumedAt: null,
+  };
+
+  await saveSettings({ ...(settings || {}), stagedBudgetConfig: staged }, id);
+  return { staged, replaced };
+}
+
+/** Drop a staged config without applying it. */
+export async function cancelStagedBudgetConfig(accountId) {
+  const id = accountId != null ? Number(accountId) : await getDefaultAccountId();
+  if (id == null) return null;
+  const settings = await getSettings(id);
+  if (!settings?.stagedBudgetConfig) return null;
+  const cancelled = settings.stagedBudgetConfig;
+  await saveSettings({ ...settings, stagedBudgetConfig: null }, id);
+  return cancelled;
+}
+
+/** Everything the validator needs to judge a config against this account. */
+export async function getBudgetConfigContext(accountId) {
+  const id = accountId != null ? Number(accountId) : await getDefaultAccountId();
+  if (id == null) return null;
+  const [accounts, categories, variables, incomes, settings] = await Promise.all([
+    db.accounts.toArray(),
+    db.categories.where('accountId').equals(id).toArray(),
+    db.variables.where('accountId').equals(id).toArray(),
+    db.incomes.where('accountId').equals(id).toArray(),
+    getSettings(id),
+  ]);
+  return {
+    account: accounts.find(a => Number(a.id) === id) || null,
+    accounts, categories, variables, incomes, settings,
+  };
+}
+
+/**
+ * Apply a staged config, atomically or not at all.
+ *
+ * Formulas are re-evaluated here rather than trusted from staging time: income
+ * may have changed in between, and the formulas — not the numbers in the file —
+ * are the source of truth. That means the plan is rebuilt and re-validated
+ * against live data, and a config that no longer balances is left staged and
+ * reported rather than applied at a worse number than the user approved.
+ *
+ * The write runs inside one Dexie transaction, so a failure part-way rolls the
+ * whole thing back. A partially applied budget is worse than a failed one.
+ */
+export async function applyStagedBudgetConfig(accountId, { incomeId = null, resetAt = new Date() } = {}) {
+  const id = accountId != null ? Number(accountId) : await getDefaultAccountId();
+  if (id == null) return { applied: false, reason: 'no-account' };
+
+  const settings = await getSettings(id);
+  const staged = settings?.stagedBudgetConfig;
+  if (!staged) return { applied: false, reason: 'nothing-staged' };
+  if (!isStagedConfigDue(staged, { incomeId, resetAt })) {
+    return { applied: false, reason: 'not-due' };
+  }
+
+  const context = await getBudgetConfigContext(id);
+  const plan = buildBudgetConfigPlan(staged.config, context);
+
+  if (!plan.ok) {
+    // Nothing is written. The config stays staged with the failure recorded, so
+    // the user gets a nudge explaining why their new budget did not land rather
+    // than a budget that half did.
+    const at = new Date().toISOString();
+    await saveSettings({
+      ...settings,
+      stagedBudgetConfig: { ...staged, lastAttemptAt: at, lastAttemptErrors: plan.errors },
+    }, id);
+    return { applied: false, reason: 'validation-failed', errors: plan.errors, plan };
+  }
+
+  // Automatic backup, taken before anything is written and outside the write
+  // transaction — `exportSnapshot` reads tables this transaction doesn't own.
+  // It is the app's own share-link export: setup without transaction logs, so
+  // it stays bounded however long the ledger gets.
+  let backup = null;
+  try {
+    backup = await exportSnapshot();
+  } catch (error) {
+    console.error('Budget config: automatic backup failed', error);
+    return { applied: false, reason: 'backup-failed', error: String(error) };
+  }
+
+  const appliedAt = (resetAt instanceof Date ? resetAt : new Date(resetAt)).toISOString();
+
+  // Undo is offered for one cycle — long enough to notice a budget you didn't
+  // want, short of restoring allowances that have since gone stale.
+  const income = context.incomes.find(i => Number(i.id) === Number(plan.meta.baselineIncomeId));
+  const cycleDays = getIncomeCycleAverageDays(income?.resetFrequency || 'monthly');
+  const undoExpiresAt = new Date(
+    new Date(appliedAt).getTime() + Math.round(cycleDays * 24 * 60 * 60 * 1000)
+  ).toISOString();
+
+  const undo = {
+    appliedAt,
+    undoExpiresAt,
+    label: staged.fileName || 'budget config',
+    // Exactly what apply can touch, captured whole. Undo restores these rows
+    // rather than reversing a diff, so it cannot drift from what was changed.
+    categories: context.categories.map(row => ({ ...row })),
+    variables: context.variables.map(row => ({ ...row })),
+    createdCategoryIds: [],
+    createdVariableIds: [],
+    backup,
+  };
+
+  await db.transaction('rw', db.categories, db.variables, db.settings, async () => {
+    // ── Variables first: category formulas dereference them. ──
+    const variableIdByName = new Map();
+    for (const row of plan.variables) {
+      if (row.action === 'create') {
+        const newId = await db.variables.add({ accountId: id, name: row.name, value: row.value });
+        undo.createdVariableIds.push(newId);
+        variableIdByName.set(row.name, newId);
+      } else if (row.action === 'update') {
+        await db.variables.update(Number(row.id), { name: row.name, value: row.value });
+        variableIdByName.set(row.name, Number(row.id));
+      } else {
+        variableIdByName.set(row.name, Number(row.id));
+      }
+    }
+
+    // ── Then categories. ──
+    for (const row of plan.categories) {
+      if (row.action === 'create') {
+        const newId = await db.categories.add({
+          accountId: id,
+          ...row.fields,
+          // A new category starts its life with a clean counter. This is the
+          // only place an import writes runtime state, and only because there
+          // is no prior state to preserve.
+          spent: 0,
+          spentByIncome: {},
+          incomeResetAt: {},
+          temporaryBoost: 0,
+          boostSources: [],
+          rolloverBalance: 0,
+          cycleClearedSpend: 0,
+          lastReset: appliedAt,
+        });
+        undo.createdCategoryIds.push(newId);
+        continue;
+      }
+
+      if (row.action === 'keep') continue;
+
+      const existing = await db.categories.get(Number(row.id));
+      if (!existing) {
+        // Validated moments ago against the same data — if it is gone now,
+        // something else is writing concurrently and this transaction must not
+        // paper over it.
+        throw new Error(`Category ${row.id} disappeared while the budget config was being applied.`);
+      }
+
+      const fields = { ...row.fields };
+
+      // Turning rollover off releases the accumulated balance, matching what
+      // the category editor does. Turning it on, or leaving it on, keeps every
+      // penny already banked — that balance is the user's money, not config.
+      if (fields.rolloverEnabled === false) fields.rolloverBalance = 0;
+
+      // Funding split changed: the spend already counted has to be re-bucketed
+      // against the new split, which is what `updateCategory` exists to do.
+      if (Object.prototype.hasOwnProperty.call(fields, 'incomeAllocations')) {
+        fields.spentByIncome = allocateAmountByIncome({ ...existing, ...fields }, existing.spent || 0);
+      }
+
+      await db.categories.update(Number(row.id), fields);
+    }
+
+    const current = await db.settings.where('accountId').equals(id).toArray();
+    const row = current[0];
+    if (row) {
+      await db.settings.update(row.id, {
+        stagedBudgetConfig: null,
+        budgetConfigUndo: undo,
+        lastBudgetConfigAppliedAt: appliedAt,
+        lastAutoBackupAt: appliedAt,
+      });
+    }
+  });
+
+  return { applied: true, plan, undo, appliedAt };
+}
+
+/**
+ * Put the budget back as it was before the last config apply.
+ *
+ * Restores the snapshotted rows verbatim and removes what the apply created.
+ * A created category that has since been spent against is kept rather than
+ * deleted: `deleteCategory` would take its transactions with it, and losing
+ * real spending to undo a budget change is not a trade worth making.
+ */
+export async function undoBudgetConfigApply(accountId) {
+  const id = accountId != null ? Number(accountId) : await getDefaultAccountId();
+  if (id == null) return { undone: false, reason: 'no-account' };
+
+  const settings = await getSettings(id);
+  const undo = settings?.budgetConfigUndo;
+  if (!undo) return { undone: false, reason: 'nothing-to-undo' };
+  if (isBudgetConfigUndoExpired(undo)) return { undone: false, reason: 'expired' };
+
+  const keptCategories = [];
+
+  // Read outside the write transaction so the decision about which created
+  // categories are safe to delete is made before anything changes.
+  const spentAgainst = new Set();
+  for (const createdId of undo.createdCategoryIds || []) {
+    const count = await db.transactions.where('categoryId').equals(Number(createdId)).count();
+    if (count > 0) spentAgainst.add(Number(createdId));
+  }
+
+  await db.transaction('rw', db.categories, db.variables, db.settings, async () => {
+    for (const row of undo.categories || []) {
+      await db.categories.put(row);
+    }
+    for (const row of undo.variables || []) {
+      await db.variables.put(row);
+    }
+
+    for (const createdId of undo.createdCategoryIds || []) {
+      if (spentAgainst.has(Number(createdId))) {
+        const cat = await db.categories.get(Number(createdId));
+        if (cat) keptCategories.push({ id: cat.id, name: cat.name });
+        continue;
+      }
+      await db.categories.delete(Number(createdId));
+    }
+
+    for (const createdId of undo.createdVariableIds || []) {
+      await db.variables.delete(Number(createdId));
+    }
+
+    const current = await db.settings.where('accountId').equals(id).toArray();
+    const row = current[0];
+    if (row) {
+      await db.settings.update(row.id, {
+        budgetConfigUndo: null,
+        lastBudgetConfigUndoneAt: new Date().toISOString(),
+      });
+    }
+  });
+
+  return { undone: true, keptCategories, appliedAt: undo.appliedAt };
 }
 
 // ── Export / Import ──────────────────────────────────────────────────────────

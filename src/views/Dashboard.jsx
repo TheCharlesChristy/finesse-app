@@ -420,6 +420,11 @@ export default function Dashboard({
               const boost    = roundMoney(cat.temporaryBoost || 0);
               const pct      = effAllowance > 0 ? Math.min(100, ((cat.spent || 0) / effAllowance) * 100) : 0;
               const left     = effAllowance - (cat.spent || 0);
+              // A rollover category doesn't zero at reset, so "spare this cycle"
+              // is the wrong frame for it: what's left is an accumulating
+              // balance, and the pacing tags that measure a cycle's progress
+              // say nothing useful about a pot being saved into.
+              const isRollover = Boolean(cat.rolloverEnabled);
               const barColor = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warn)' : 'var(--accent-mint)';
               const allocations = normalizeIncomeAllocations(cat.incomeAllocations);
               const allocationTotal = getAllocationPercentTotal(allocations);
@@ -437,13 +442,13 @@ export default function Dashboard({
                 allocations.map(a => incomeMap.get(a.incomeId)?.resetFrequency).filter(Boolean)
               )];
               const catCycleDays = catAllocFreqs.length === 1 ? getIncomeCycleDays(catAllocFreqs[0]) : null;
-              const pacedStatus = getPacedAllowanceStatus(cat, undefined, catCycleDays);
+              const pacedStatus = isRollover ? null : getPacedAllowanceStatus(cat, undefined, catCycleDays);
               // Both of these are cycle-bound, and this category's cycle follows
               // the income funding it — not the account-wide pay day.
               const catCycle = getCategoryCycle(cat, incomes, settings);
               const catSubCost = getUpcomingSubscriptionCost(subscriptions, cat.id, settings, undefined, catCycle.end);
               const projectedLeft = roundMoney(left - catSubCost);
-              const cumulativeOverspend = getCumulativeOverspend(cat.id, cat.allowance, transactions, {
+              const cumulativeOverspend = isRollover ? 0 : getCumulativeOverspend(cat.id, cat.allowance, transactions, {
                 freq: catCycle.freq,
                 payDayOfMonth: settings?.payDayOfMonth,
                 anchor: catCycle.start,
@@ -574,8 +579,11 @@ export default function Dashboard({
                     <div className="mobile-actions" style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                       <div style={{ display: 'flex', gap: 10, fontSize: 12, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                         <span style={{ color: 'var(--text-muted)' }}>{fmt(cat.spent || 0)} / {fmt(effAllowance)}</span>
-                        <span style={{ color: left < 0 ? 'var(--danger)' : 'var(--text-secondary)', fontWeight: 500, minWidth: 56, textAlign: 'right' }}>
-                          {left < 0 ? '-' : ''}{fmt(Math.abs(left))} left
+                        <span title={isRollover
+                          ? 'Accumulated balance — this category carries its money across cycles'
+                          : 'Left to spend before the next reset'}
+                          style={{ color: left < 0 ? 'var(--danger)' : 'var(--text-secondary)', fontWeight: 500, minWidth: 56, textAlign: 'right' }}>
+                          {left < 0 ? '-' : ''}{fmt(Math.abs(left))} {isRollover ? 'balance' : 'left'}
                         </span>
                       </div>
                       {onAdjust && (

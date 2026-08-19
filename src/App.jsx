@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
-import { CalendarDays, CalendarRange, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
+import { CalendarClock, CalendarDays, CalendarRange, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
   getSettings, saveSettings, addCategory, updateCategory, deleteCategory,
@@ -15,8 +15,11 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   addSplitTransaction, addRule, updateRule, deleteRule,
   addTemplate, deleteTemplate, logTemplate,
   addGoal, updateGoal, deleteGoal, contributeToGoal, autoContributeGoals,
-  recalculateSpendCounters } from './db';
+  recalculateSpendCounters,
+  stageBudgetConfig, cancelStagedBudgetConfig, applyStagedBudgetConfig,
+  undoBudgetConfigApply, getBudgetConfigContext } from './db';
 import { useFinesseData } from './hooks/useFinesseData';
+import { describeStagedConfig, isBudgetConfigUndoExpired } from './budgetConfig';
 import { buildNudges, calcNextReset, evaluateFormula, filterDismissedNudges, fmt, getGoalCommitment, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
 
 const Dashboard     = lazy(() => import('./views/Dashboard'));
@@ -36,7 +39,7 @@ import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportMode
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
   AdjustBudgetModal, ExportChatSummaryOptionsModal, ImportStatementModal,
-  AddGoalModal, SaveForItemModal } from './components/modals';
+  AddGoalModal, SaveForItemModal, ImportBudgetConfigModal } from './components/modals';
 import { Modal } from './components/ui';
 import { useDialog } from './components/useDialog';
 import { useToast } from './components/Toast';
@@ -127,6 +130,27 @@ function getLatestDueIncomeReset(income, now = new Date()) {
   return due;
 }
 
+/**
+ * When an income next resets, as a date rather than "is one overdue".
+ * `getLatestDueIncomeReset` answers the auto-reset question; the banner needs
+ * the forward-looking one — the day the staged budget actually lands.
+ */
+function getNextIncomeReset(income, now = new Date()) {
+  const freq = income?.resetFrequency || (income?.payDayOfMonth ? 'monthly' : null);
+  if (!freq || income.holdActive) return null;
+
+  const base = income.lastPaid ? new Date(income.lastPaid) : now;
+  let next = calcNextReset(freq, income.payDayOfMonth, base);
+  let guard = 0;
+  while (next <= now && guard < 240) {
+    next = calcNextReset(freq, income.payDayOfMonth, next);
+    guard += 1;
+  }
+  return next;
+}
+
+const RESET_DATE_FORMAT = { day: 'numeric', month: 'long' };
+
 export default function App() {
   const { dialogEl, showConfirm, showAlert, showPrompt } = useDialog();
   const { toastEl, showToast } = useToast();
@@ -138,6 +162,7 @@ export default function App() {
     readLaunchAction() === 'purchase-check' ? 'purchase' : 'dashboard'
   ));
   const [pendingImport, setPendingImport] = useState(readSharedSnapshot);
+  const [budgetConfigContext, setBudgetConfigContext] = useState(null);
   const [modal, setModal] = useState(() => {
     if (readSharedSnapshot()) return 'importMode';
     return readLaunchAction() === 'log-expense' ? 'addTx' : null;
@@ -325,6 +350,29 @@ export default function App() {
           type: 'recurring',
         });
         await resetCategoriesForIncome(income.id, resetAt, activeAccountId);
+
+        // A staged budget config lands here and nowhere else: after the old
+        // cycle's rollover has settled against the *old* allowances, and before
+        // goals draw from the new ones. Applying it any earlier would rewrite
+        // the budget the closing cycle was measured against.
+        const configResult = await applyStagedBudgetConfig(activeAccountId, {
+          incomeId: income.id, resetAt: due,
+        });
+        if (configResult.applied) {
+          const count = configResult.plan.categories.length;
+          showToast(`New budget applied to ${count} categor${count === 1 ? 'y' : 'ies'}`, {
+            detail: 'It can be undone from Settings for the next cycle.',
+          });
+        } else if (configResult.reason === 'validation-failed' || configResult.reason === 'backup-failed') {
+          // Nothing was written. The nudge built from the recorded failure is
+          // the durable channel — this toast only catches the user who is
+          // looking at the app when it happens.
+          console.error('Budget config could not be applied', configResult);
+          showToast('Your new budget could not be applied', {
+            detail: 'Nothing changed. See Settings for what went wrong.',
+          });
+        }
+
         // After the reset, so a cycle's savings come out of the fresh budget.
         await autoContributeGoals(income.id, activeAccountId, resetAt);
         await updateIncome(income.id, { lastPaid: resetAt, holdActive: false });
@@ -336,7 +384,7 @@ export default function App() {
         if (current) await saveSettings({ ...current, lastReset: latestReset.toISOString() }, activeAccountId);
       }
     })();
-  }, [incomes, activeAccountId]);
+  }, [incomes, activeAccountId, showToast]);
 
   // Formula recomputation: runs whenever variables or categories change
   useEffect(() => {
@@ -440,6 +488,59 @@ export default function App() {
     setPendingImport(data);
     setModal('importMode');
   }, []);
+
+  // ── Budget config import ──
+  // The modal validates against a snapshot of the account rather than the
+  // live props, because the validator needs the whole account (its other
+  // accounts included, to check `targetAccountId`) and the views only ever
+  // see the active one.
+  const handleOpenImportBudgetConfig = useCallback(async () => {
+    const context = await getBudgetConfigContext(activeAccountId);
+    setBudgetConfigContext(context);
+    setModal('importBudgetConfig');
+  }, [activeAccountId]);
+
+  const handleStageBudgetConfig = useCallback(async ({ config, plan, fileName }) => {
+    const { replaced } = await stageBudgetConfig(activeAccountId, { config, plan, fileName });
+    setModal(null);
+    setBudgetConfigContext(null);
+    const count = plan.categories.length;
+    showToast(
+      replaced ? 'Staged — this replaces the config you imported earlier' : 'Budget config staged',
+      { detail: `${count} categor${count === 1 ? 'y' : 'ies'} will be redefined at your next reset. Nothing has changed yet.` },
+    );
+  }, [activeAccountId, showToast]);
+
+  const handleCancelStagedBudgetConfig = useCallback(async () => {
+    const ok = await showConfirm(
+      'Discard the budget config waiting to be applied? Your current budget carries on unchanged.',
+      { title: 'Cancel staged budget', confirmText: 'Discard' },
+    );
+    if (!ok) return;
+    await cancelStagedBudgetConfig(activeAccountId);
+    showToast('Staged budget discarded');
+  }, [activeAccountId, showConfirm, showToast]);
+
+  const handleUndoBudgetConfig = useCallback(async () => {
+    const ok = await showConfirm(
+      'Put your categories and variables back as they were before the new budget was applied?',
+      { title: 'Undo budget config', confirmText: 'Undo' },
+    );
+    if (!ok) return;
+
+    const result = await undoBudgetConfigApply(activeAccountId);
+    if (!result.undone) {
+      showToast(result.reason === 'expired'
+        ? 'That budget change is more than a cycle old and can no longer be undone'
+        : 'There is nothing to undo');
+      return;
+    }
+    showToast('Budget restored', {
+      detail: result.keptCategories?.length
+        ? `${result.keptCategories.map(c => c.name).join(', ')} kept — ${result.keptCategories.length === 1 ? 'it has' : 'they have'} transactions logged against ${result.keptCategories.length === 1 ? 'it' : 'them'}.`
+        : undefined,
+    });
+  }, [activeAccountId, showConfirm, showToast]);
 
   const handleImportConfirm = useCallback(async (mode) => {
     if (!pendingImport) {
@@ -887,6 +988,35 @@ export default function App() {
   }, [modal, navigate]);
 
   // ── Nudges ───────────────────────────────────────────────────────────────
+  // ── Staged budget config ──
+  const stagedBudgetConfig = settings?.stagedBudgetConfig?.consumedAt
+    ? null
+    : (settings?.stagedBudgetConfig || null);
+
+  const stagedBudgetSummary = useMemo(
+    () => describeStagedConfig(stagedBudgetConfig) || { categoryCount: 0, variableCount: 0, summary: '' },
+    [stagedBudgetConfig]);
+
+  // The day the staged budget lands: the next reset of the income its formulas
+  // are written against, falling back to the soonest reset of any income.
+  const nextBudgetResetLabel = useMemo(() => {
+    if (!incomes.length) return null;
+    const wantedId = stagedBudgetConfig?.applyIncomeId;
+    const target = incomes.find(i => Number(i.id) === Number(wantedId));
+    const dates = (target ? [target] : incomes)
+      .map(income => getNextIncomeReset(income))
+      .filter(Boolean)
+      .sort((a, b) => a - b);
+    return dates.length ? dates[0].toLocaleDateString('en-GB', RESET_DATE_FORMAT) : null;
+  }, [incomes, stagedBudgetConfig?.applyIncomeId]);
+
+  const stagedBudgetLabel = stagedBudgetConfig ? nextBudgetResetLabel : null;
+
+  // An expired undo is not offered at all, rather than offered and refused.
+  const budgetConfigUndo = settings?.budgetConfigUndo && !isBudgetConfigUndoExpired(settings.budgetConfigUndo)
+    ? settings.budgetConfigUndo
+    : null;
+
   const nudges = useMemo(() => filterDismissedNudges(
     buildNudges({ categories, incomes, subscriptions, goals, transactions, settings, storageState }),
     settings?.dismissedNudges,
@@ -1059,6 +1189,32 @@ export default function App() {
             <NudgeCenter nudges={nudges} onDismiss={handleDismissNudge} onNavigate={handleNudgeNavigate} />
           </div>
 
+          {/* A staged budget changes every allowance on a date the user chose
+              days ago. It stays visible on every view until it lands. */}
+          {stagedBudgetConfig && (
+            <div className="glass" style={{
+              borderRadius: 14, padding: '12px 16px', marginBottom: 16,
+              display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+              borderLeft: '3px solid var(--accent-blue)',
+            }}>
+              <CalendarClock size={16} style={{ color: 'var(--accent-blue)', flexShrink: 0 }} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>
+                  New budget applies on {stagedBudgetLabel}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                  {stagedBudgetSummary.categoryCount} categories, {stagedBudgetSummary.variableCount} variables
+                  {stagedBudgetSummary.summary ? ` — ${stagedBudgetSummary.summary}` : ''}.
+                  Nothing has changed yet.
+                </div>
+              </div>
+              <button className="btn-secondary" onClick={handleCancelStagedBudgetConfig}
+                style={{ fontSize: 12, flexShrink: 0 }}>
+                Cancel
+              </button>
+            </div>
+          )}
+
           {!accountsQuery ? (
             <div className="glass" aria-busy="true" style={{ borderRadius: 16, padding: '64px 24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
               Loading your finances…
@@ -1215,6 +1371,12 @@ export default function App() {
               storageState={storageState}
               onRequestPersistence={handleRequestPersistence}
               onImportStatement={() => setModal('importStatement')}
+              onImportBudgetConfig={handleOpenImportBudgetConfig}
+              stagedBudgetConfig={stagedBudgetConfig}
+              stagedBudgetLabel={stagedBudgetLabel}
+              budgetConfigUndo={budgetConfigUndo}
+              onCancelStagedBudgetConfig={handleCancelStagedBudgetConfig}
+              onUndoBudgetConfig={handleUndoBudgetConfig}
               showConfirm={showConfirm} showAlert={showAlert} showPrompt={showPrompt} />
           )}
           </Suspense>)}
@@ -1346,6 +1508,15 @@ export default function App() {
           defaultCategoryId={settings?.defaultCategoryId}
           onImport={handleImportStatement}
           onClose={() => setModal(null)}
+        />
+      )}
+      {modal === 'importBudgetConfig' && budgetConfigContext && (
+        <ImportBudgetConfigModal
+          context={budgetConfigContext}
+          stagedConfig={stagedBudgetConfig}
+          nextResetLabel={stagedBudgetLabel || nextBudgetResetLabel}
+          onStage={handleStageBudgetConfig}
+          onClose={() => { setModal(null); setBudgetConfigContext(null); }}
         />
       )}
       {modal === 'importMode' && (

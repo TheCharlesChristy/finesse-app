@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, Download, Upload, FileText, FileUp, RefreshCcw, RefreshCw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap, Info, HardDrive, ShieldCheck, Lock } from 'lucide-react';
+import { Bell, Download, Upload, FileText, FileUp, FileCog, RefreshCcw, RefreshCw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap, Info, HardDrive, ShieldCheck, Lock, Undo2 } from 'lucide-react';
 import { fmt } from '../utils';
 import { notificationPermission, notificationsSupported, requestNotificationPermission } from '../notifications';
 import { formatBytes, getStorageEstimate, STORAGE_BEST_EFFORT, STORAGE_PERSISTED, STORAGE_UNSUPPORTED } from '../storage';
@@ -42,6 +42,12 @@ export default function Settings({
   storageState = null,
   onRequestPersistence,
   onImportStatement,
+  onImportBudgetConfig,
+  stagedBudgetConfig = null,
+  stagedBudgetLabel = null,
+  budgetConfigUndo = null,
+  onCancelStagedBudgetConfig,
+  onUndoBudgetConfig,
   showConfirm,
   showAlert,
   showPrompt,
@@ -744,6 +750,72 @@ export default function Settings({
         </div>
         <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10 }}>
           Share Link carries your accounts, categories, incomes, subscriptions and wishlist to a new device — it excludes transaction history. Chat Summary lets you pick exactly which data and fields to include before generating a JSON export with computed spending insights, meant for sharing with a financial advisor or an AI assistant for analysis.
+        </div>
+
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 18, paddingTop: 18 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Budget Config</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
+            Redefine every category and variable from a JSON file in one go. Changing a
+            budget category by category, mid-cycle, corrupts that cycle&rsquo;s pacing and
+            every comparison drawn from it — so an import is checked and previewed now,
+            then applied at your next reset. Nothing is written until then, and an import
+            never deletes a category.
+          </div>
+
+          {stagedBudgetConfig ? (
+            <div style={{
+              background: 'rgba(93,184,255,0.08)', borderRadius: 12, padding: '12px 14px',
+              marginBottom: 12, fontSize: 12, lineHeight: 1.5,
+            }}>
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                {stagedBudgetLabel ? `A new budget applies on ${stagedBudgetLabel}` : 'A new budget is staged'}
+              </div>
+              <div style={{ color: 'var(--text-muted)' }}>
+                {stagedBudgetConfig.plan?.categories?.length || 0} categories and{' '}
+                {stagedBudgetConfig.plan?.variables?.length || 0} variables, from{' '}
+                {stagedBudgetConfig.fileName || 'an imported config'}. Nothing has changed yet.
+              </div>
+              {stagedBudgetConfig.lastAttemptErrors?.length > 0 && (
+                <div style={{ color: 'var(--danger)', marginTop: 8 }}>
+                  It could not be applied at the last reset: {stagedBudgetConfig.lastAttemptErrors[0].message}
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {budgetConfigUndo?.appliedAt && (
+            <div style={{
+              background: 'rgba(79,255,176,0.08)', borderRadius: 12, padding: '12px 14px',
+              marginBottom: 12, fontSize: 12, lineHeight: 1.5,
+            }}>
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                A budget config was applied on{' '}
+                {new Date(budgetConfigUndo.appliedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}
+              </div>
+              <div style={{ color: 'var(--text-muted)' }}>
+                It can be undone until your next reset. Undoing restores your categories
+                and variables as they were; any spending logged since is kept.
+              </div>
+            </div>
+          )}
+
+          <div className="mobile-actions mobile-actions-full" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button className="btn-secondary" onClick={onImportBudgetConfig}
+              style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <FileCog size={14} /> {stagedBudgetConfig ? 'Replace Budget Config' : 'Import Budget Config (.json)'}
+            </button>
+            {stagedBudgetConfig && (
+              <button className="btn-secondary" onClick={onCancelStagedBudgetConfig}>
+                Cancel Staged Budget
+              </button>
+            )}
+            {budgetConfigUndo?.appliedAt && (
+              <button className="btn-secondary" onClick={onUndoBudgetConfig}
+                style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <Undo2 size={14} /> Undo Applied Budget
+              </button>
+            )}
+          </div>
         </div>
 
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 18, paddingTop: 18 }}>
