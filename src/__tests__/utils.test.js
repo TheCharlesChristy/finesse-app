@@ -35,6 +35,7 @@ import {
   getMerchantBreakdown,
   getCycleComparison,
   buildBalanceHistory,
+  buildNetWorthHistory,
   flagUnusualSpend,
   getMerchantSuggestions,
   getSignedAmount,
@@ -1105,5 +1106,105 @@ describe('debt payoff strategies', () => {
   it('handles having no debts at all', () => {
     expect(simulateDebtStrategy([], monthly)).toMatchObject({ cycles: 0, totalInterest: 0 });
     expect(compareDebtStrategies([], monthly).saving).toBe(0);
+  });
+});
+
+describe('buildNetWorthHistory', () => {
+  const today = new Date();
+  const day = (offset) => iso(addDays(today, offset));
+
+  it('ends at the total the Accounts page shows', () => {
+    const { series, current } = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 600 }, { id: 2, balance: 400 }],
+      days: 10,
+    });
+
+    expect(series.at(-1).assets).toBe(1000);
+    expect(current.assets).toBe(1000);
+  });
+
+  it('walks backwards through spending and income across every account', () => {
+    const { series } = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 900 }, { id: 2, balance: 100 }],
+      transactions: [{ accountId: 1, amount: 100, type: 'expense', date: day(-2) }],
+      incomeEvents: [{ accountId: 2, amount: 50, date: day(-1) }],
+      days: 5,
+    });
+
+    // Each point is the balance at the *end* of that day, as buildBalanceHistory
+    // already does: yesterday closes at 1000 having taken the £50 in, the day
+    // before closes at 950 having paid the £100 out, and the day before that
+    // still held 1050.
+    expect(series.at(-1).assets).toBe(1000);
+    expect(series.at(-2).assets).toBe(1000);
+    expect(series.at(-3).assets).toBe(950);
+    expect(series.at(-4).assets).toBe(1050);
+  });
+
+  it('ignores a transfer between two tracked accounts', () => {
+    const { series } = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 700 }, { id: 2, balance: 300 }],
+      transfers: [{ fromAccountId: 1, toAccountId: 2, amount: 200, date: day(-2) }],
+      days: 5,
+    });
+
+    // Money moved within the estate, so the total never changed.
+    expect(series.every(point => point.assets === 1000)).toBe(true);
+  });
+
+  it('counts a transfer with only one leg inside the estate', () => {
+    const { series } = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 800 }],
+      transfers: [{ fromAccountId: 1, toAccountId: 99, amount: 200, date: day(-2) }],
+      days: 5,
+    });
+
+    expect(series.at(-1).assets).toBe(800);
+    expect(series[0].assets).toBe(1000);
+  });
+
+  it('subtracts open debts from net worth without inventing a debt history', () => {
+    const { current, debtHasHistory, series } = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 1000 }],
+      goals: [
+        { id: 1, kind: 'debt', target: 500, saved: 200 },
+        { id: 2, kind: 'debt', target: 100, saved: 100 },
+      ],
+      days: 5,
+    });
+
+    expect(current.debt).toBe(300);
+    expect(current.netWorth).toBe(700);
+    // Finesse doesn't log when debt payments landed, so no point claims one.
+    expect(debtHasHistory).toBe(false);
+    expect(series[0]).not.toHaveProperty('debt');
+  });
+
+  it('does not count savings goals as assets on top of the balance holding them', () => {
+    const withPot = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 1000 }],
+      goals: [{ id: 1, kind: 'saving', target: 500, saved: 400 }],
+      days: 5,
+    });
+
+    // A goal is an earmark; the money is already in the account balance.
+    expect(withPot.current.assets).toBe(1000);
+    expect(withPot.current.netWorth).toBe(1000);
+  });
+
+  it('reports the change across the window', () => {
+    const { change } = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 1000 }],
+      transactions: [{ accountId: 1, amount: 200, type: 'expense', date: day(-3) }],
+      days: 10,
+    });
+
+    expect(change).toBe(-200);
+  });
+
+  it('handles having no accounts at all', () => {
+    const result = buildNetWorthHistory({ days: 3 });
+    expect(result.current).toEqual({ assets: 0, debt: 0, netWorth: 0 });
+    expect(result.series).toHaveLength(4);
   });
 });

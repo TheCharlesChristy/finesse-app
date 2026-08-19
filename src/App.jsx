@@ -170,7 +170,7 @@ export default function App() {
   const {
     accountsQuery, activeAccountId, accounts, accountTransfers, settings, categories, transactions,
     wishlistItems, wishlistCategories, incomeEvents, subscriptions, incomes, variables,
-    rules, templates, goals,
+    rules, templates, goals, netWorth,
   } = useFinesseData(selectedAccountId);
   const activeAccount = accounts.find(account => Number(account.id) === Number(activeAccountId)) || null;
 
@@ -1136,7 +1136,7 @@ export default function App() {
           {view === 'forecasting' && (
             <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes}
               incomeEvents={incomeEvents} transfers={accountTransfers} subscriptions={subscriptions}
-              account={activeAccount} />
+              account={activeAccount} netWorth={netWorth} accountCount={accounts.length} />
           )}
           {view === 'purchase' && (
             <PurchaseCheck categories={categories} onLogPurchase={handleLogPurchase} />

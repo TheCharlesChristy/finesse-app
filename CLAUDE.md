@@ -81,7 +81,7 @@ useFinesseData (useLiveQuery) → App.jsx → props → views → callbacks → 
                                                         useLiveQuery re-renders automatically
 ```
 
-Do not add `useLiveQuery` calls inside views. New live reads go in `useFinesseData.js` and reach views as props. Every query there must be scoped by `accountId` — `accounts` and `accountTransfers` are the only deliberate exceptions.
+Do not add `useLiveQuery` calls inside views. New live reads go in `useFinesseData.js` and reach views as props. Every query there must be scoped by `accountId` — `accounts`, `accountTransfers` and `netWorth` are the only deliberate exceptions, each being meaningless scoped to a single account. `netWorth` returns a computed summary rather than raw rows, so unscoped transactions and goals can't leak into props where a scoped view might use them by mistake; keep that shape for any future exception.
 
 ### Database helpers
 

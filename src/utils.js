@@ -1668,6 +1668,84 @@ export function buildBalanceHistory(account, { transactions = [], incomeEvents =
 }
 
 /**
+ * Everything you own, across every account, over time — plus what you owe.
+ *
+ * The asset side is real history: the same backwards walk from today's known
+ * balance that `buildBalanceHistory` does, summed across accounts. Nothing is
+ * invented, and the last point always equals the total the Accounts page shows.
+ *
+ * The debt side deliberately isn't a series. Finesse records what remains on a
+ * debt goal, not when each payment landed, so any historical debt line would be
+ * fabricated — and drawing today's balance flat across the last six months
+ * would claim you owed that much all along. So debt is reported as a single
+ * current figure, and `debtHasHistory: false` tells the UI to say so rather
+ * than plot a line it can't stand behind.
+ *
+ * Savings goals are not added as assets: contributing to one is an earmark, not
+ * a transfer, so that money is already inside an account balance. Counting it
+ * again would inflate net worth by the size of every pot.
+ */
+export function buildNetWorthHistory({
+  accounts = [], transactions = [], incomeEvents = [], transfers = [], goals = [], days = 90,
+} = {}) {
+  const today = startOfDay(new Date());
+  const from = addDays(today, -days);
+  const accountIds = new Set(accounts.map(account => Number(account.id)));
+
+  const deltas = new Map();
+  const bump = (date, amount) => {
+    const day = toValidDate(date);
+    if (!day) return;
+    const key = format(startOfDay(day), 'yyyy-MM-dd');
+    deltas.set(key, roundMoney((deltas.get(key) || 0) + amount));
+  };
+
+  for (const tx of transactions) {
+    if (!accountIds.has(Number(tx.accountId))) continue;
+    bump(tx.date, -getSignedAmount(tx));
+  }
+  for (const event of incomeEvents) {
+    if (!accountIds.has(Number(event.accountId))) continue;
+    bump(event.date, Number(event.amount) || 0);
+  }
+  // Transfers between two tracked accounts net to nothing across the whole
+  // estate, so only one leg landing outside it moves the total.
+  for (const transfer of transfers) {
+    const amount = Number(transfer.amount) || 0;
+    const into = accountIds.has(Number(transfer.toAccountId));
+    const outOf = accountIds.has(Number(transfer.fromAccountId));
+    if (into && !outOf) bump(transfer.date, amount);
+    if (outOf && !into) bump(transfer.date, -amount);
+  }
+
+  const debt = roundMoney(goals
+    .filter(goal => goal?.kind === 'debt')
+    .reduce((sum, goal) => sum + getGoalProgress(goal).remaining, 0));
+
+  let assets = roundMoney(accounts.reduce((sum, account) => sum + (Number(account.balance) || 0), 0));
+  const latestAssets = assets;
+  const series = [];
+
+  for (let day = today; day >= from; day = addDays(day, -1)) {
+    const key = format(day, 'yyyy-MM-dd');
+    series.unshift({ date: key, label: format(day, 'd MMM'), assets });
+    assets = roundMoney(assets - (deltas.get(key) || 0));
+  }
+
+  return {
+    series,
+    debtHasHistory: false,
+    current: {
+      assets: latestAssets,
+      debt,
+      netWorth: roundMoney(latestAssets - debt),
+    },
+    // How the estate moved over the window — the figure a trend is actually for.
+    change: series.length ? roundMoney(latestAssets - series[0].assets) : 0,
+  };
+}
+
+/**
  * Transactions that stand out against their category's usual size.
  *
  * Uses a median-based threshold rather than a mean: a single huge outlier drags
