@@ -1,4 +1,4 @@
-import { addDays, addMonths, addWeeks, addYears, getDate, getDaysInMonth, setDate, isAfter, isBefore, differenceInDays, format, startOfDay } from 'date-fns';
+import { addDays, addMonths, addWeeks, addYears, getDate, getDaysInMonth, setDate, isAfter, isBefore, differenceInDays, format, startOfDay, subMonths } from 'date-fns';
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
 
 // ── Schedule helpers ─────────────────────────────────────────────────────────
@@ -1566,6 +1566,153 @@ export function getMerchantBreakdown(transactions = [], { since = null, limit = 
     .filter(entry => entry.total > 0)
     .sort((a, b) => b.total - a.total)
     .slice(0, limit);
+}
+
+/**
+ * A long look back — the retrospective the app never had.
+ *
+ * `getCycleComparison` covers this cycle against the last, and
+ * `buildMonthlyHistory` charts six months of category totals. Neither answers
+ * the questions you ask once a year: where did it all actually go, which months
+ * were the bad ones, and has the subscription pile quietly grown?
+ *
+ * Everything is derived from the transaction log, which is the real record —
+ * the spend counters are per-cycle and reset, so they cannot answer any of this.
+ *
+ * Refunds subtract via `getSignedAmount`, so a category with a big return shows
+ * what it truly cost rather than what passed through it.
+ */
+export function buildReview({
+  transactions = [], categories = [], incomeEvents = [], subscriptions = [],
+  months = 12, now = new Date(),
+} = {}) {
+  const to = startOfDay(now);
+  const from = startOfDay(subMonths(to, months - 1));
+  const fromMonthKey = format(from, 'yyyy-MM');
+  const catMap = new Map(categories.map(category => [Number(category.id), category]));
+  const subscriptionIds = new Set(subscriptions.map(sub => Number(sub.id)));
+
+  // One bucket per month in the window, created up front so a month with no
+  // spending charts as a genuine zero rather than vanishing from the series.
+  const monthly = new Map();
+  for (let i = 0; i < months; i += 1) {
+    const date = subMonths(to, months - 1 - i);
+    monthly.set(format(date, 'yyyy-MM'), {
+      key: format(date, 'yyyy-MM'),
+      label: format(date, 'MMM yy'),
+      spent: 0, income: 0, subscriptions: 0, count: 0,
+    });
+  }
+
+  const byCategory = new Map();
+  let spent = 0;
+  let refunded = 0;
+  let transactionCount = 0;
+  let biggest = null;
+
+  for (const tx of transactions) {
+    const date = toValidDate(tx.date);
+    if (!date) continue;
+    const key = format(date, 'yyyy-MM');
+    if (key < fromMonthKey) continue;
+
+    const bucket = monthly.get(key);
+    if (!bucket) continue;
+
+    const signed = getSignedAmount(tx);
+    const amount = Math.abs(Number(tx.amount) || 0);
+
+    bucket.spent = roundMoney(bucket.spent + signed);
+    bucket.count += 1;
+    if (subscriptionIds.has(Number(tx.subscriptionId))) {
+      bucket.subscriptions = roundMoney(bucket.subscriptions + signed);
+    }
+
+    if (isRefund(tx)) refunded = roundMoney(refunded + amount);
+    else spent = roundMoney(spent + amount);
+    transactionCount += 1;
+
+    const categoryId = Number(tx.categoryId);
+    const entry = byCategory.get(categoryId) || { id: categoryId, total: 0, count: 0 };
+    entry.total = roundMoney(entry.total + signed);
+    entry.count += 1;
+    byCategory.set(categoryId, entry);
+
+    // Biggest single outgoing, refunds excluded — a large refund is good news.
+    if (!isRefund(tx) && (!biggest || amount > Math.abs(Number(biggest.amount) || 0))) biggest = tx;
+  }
+
+  let income = 0;
+  for (const event of incomeEvents) {
+    const date = toValidDate(event.date);
+    if (!date) continue;
+    const key = format(date, 'yyyy-MM');
+    const bucket = monthly.get(key);
+    if (!bucket) continue;
+    const amount = Number(event.amount) || 0;
+    bucket.income = roundMoney(bucket.income + amount);
+    income = roundMoney(income + amount);
+  }
+
+  const series = [...monthly.values()].map(row => ({ ...row, net: roundMoney(row.income - row.spent) }));
+  const net = roundMoney(spent - refunded);
+
+  const categoryRows = [...byCategory.values()]
+    .map(entry => {
+      const category = catMap.get(entry.id);
+      return {
+        id: entry.id,
+        name: category?.name || 'Deleted category',
+        color: category?.color || 'var(--accent-blue)',
+        total: entry.total,
+        count: entry.count,
+        share: net > 0 ? roundMoney((entry.total / net) * 100) : 0,
+        monthlyAverage: roundMoney(entry.total / months),
+      };
+    })
+    .filter(row => row.total > 0)
+    .sort((a, b) => b.total - a.total);
+
+  // Only months that actually happened can be the busiest or the quietest — a
+  // window longer than the history would otherwise crown an empty month.
+  const active = series.filter(row => row.count > 0);
+  const bySpend = [...active].sort((a, b) => b.spent - a.spent);
+
+  // Subscription creep: the first and last months that had any, so a window
+  // starting before the first subscription doesn't report infinite growth.
+  const withSubs = series.filter(row => row.subscriptions > 0);
+  const firstSubs = withSubs[0]?.subscriptions ?? 0;
+  const lastSubs = withSubs.at(-1)?.subscriptions ?? 0;
+
+  return {
+    from,
+    to,
+    months,
+    totals: {
+      spent, refunded, net, income,
+      saved: roundMoney(income - net),
+      transactionCount,
+      monthlyAverage: roundMoney(net / months),
+    },
+    series,
+    categories: categoryRows,
+    merchants: getMerchantBreakdown(transactions, { since: from, limit: 8 }),
+    subscriptionTrend: withSubs.length > 1
+      ? {
+        first: firstSubs,
+        last: lastSubs,
+        firstLabel: withSubs[0].label,
+        lastLabel: withSubs.at(-1).label,
+        change: roundMoney(lastSubs - firstSubs),
+        changePct: firstSubs > 0 ? roundMoney(((lastSubs - firstSubs) / firstSubs) * 100) : null,
+        total: roundMoney(series.reduce((sum, row) => sum + row.subscriptions, 0)),
+      }
+      : null,
+    biggest,
+    busiest: bySpend[0] || null,
+    quietest: bySpend.length > 1 ? bySpend.at(-1) : null,
+    hasData: transactionCount > 0,
+  };
 }
 
 /**

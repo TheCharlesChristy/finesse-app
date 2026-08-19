@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
-import { CalendarDays, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
+import { CalendarDays, CalendarRange, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
   getSettings, saveSettings, addCategory, updateCategory, deleteCategory,
@@ -31,6 +31,7 @@ const SettingsView  = lazy(() => import('./views/Settings'));
 const Variables     = lazy(() => import('./views/Variables'));
 const CategoryDetail = lazy(() => import('./views/CategoryDetail'));
 const Goals         = lazy(() => import('./views/Goals'));
+const Review        = lazy(() => import('./views/Review'));
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
@@ -57,6 +58,7 @@ const GOTO_KEYS = {
   c: 'calendar',
   s: 'subscriptions',
   f: 'forecasting',
+  r: 'review',
   g: 'goals',
   w: 'wishlist',
   v: 'variables',
@@ -73,6 +75,7 @@ const SHORTCUTS = [
   ['G then C', 'Calendar'],
   ['G then F', 'Forecasting'],
   ['G then G', 'Goals'],
+  ['G then R', 'Looking Back'],
   ['G then X', 'Settings'],
   ['Esc', 'Close a dialog'],
   ['?', 'This list'],
@@ -86,6 +89,7 @@ const NAV = [
   { id: 'calendar',    label: 'Calendar',     Icon: CalendarDays },
   { id: 'subscriptions', label: 'Subscriptions', Icon: CreditCard },
   { id: 'forecasting', label: 'Forecasting',  Icon: TrendingUp },
+  { id: 'review',      label: 'Looking Back',  Icon: CalendarRange },
   { id: 'goals',       label: 'Goals',         Icon: PiggyBank },
   { id: 'wishlist',    label: 'Wishlist',      Icon: ShoppingBag },
   { id: 'variables',   label: 'Variables',     Icon: SlidersHorizontal },
@@ -1137,6 +1141,10 @@ export default function App() {
             <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes}
               incomeEvents={incomeEvents} transfers={accountTransfers} subscriptions={subscriptions}
               account={activeAccount} netWorth={netWorth} accountCount={accounts.length} />
+          )}
+          {view === 'review' && (
+            <Review categories={categories} transactions={transactions}
+              incomeEvents={incomeEvents} subscriptions={subscriptions} />
           )}
           {view === 'purchase' && (
             <PurchaseCheck categories={categories} onLogPurchase={handleLogPurchase} />

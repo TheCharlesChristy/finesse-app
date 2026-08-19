@@ -36,6 +36,7 @@ import {
   getCycleComparison,
   buildBalanceHistory,
   buildNetWorthHistory,
+  buildReview,
   flagUnusualSpend,
   getMerchantSuggestions,
   getSignedAmount,
@@ -1206,5 +1207,154 @@ describe('buildNetWorthHistory', () => {
     const result = buildNetWorthHistory({ days: 3 });
     expect(result.current).toEqual({ assets: 0, debt: 0, netWorth: 0 });
     expect(result.series).toHaveLength(4);
+  });
+});
+
+describe('buildReview', () => {
+  const now = new Date('2026-08-15T12:00:00Z');
+  const monthsAgo = (n, day = 10) => iso(new Date(Date.UTC(2026, 7 - n, day, 12)));
+  const categories = [
+    { id: 1, name: 'Food', color: '#aaa' },
+    { id: 2, name: 'Fun', color: '#bbb' },
+  ];
+
+  it('totals spending net of refunds', () => {
+    const { totals } = buildReview({
+      transactions: [
+        { id: 1, categoryId: 1, amount: 100, type: 'expense', date: monthsAgo(0) },
+        { id: 2, categoryId: 1, amount: 30, type: 'refund', date: monthsAgo(0) },
+        { id: 3, categoryId: 2, amount: 50, type: 'expense', date: monthsAgo(1) },
+      ],
+      categories, months: 12, now,
+    });
+
+    expect(totals.spent).toBe(150);
+    expect(totals.refunded).toBe(30);
+    expect(totals.net).toBe(120);
+    expect(totals.transactionCount).toBe(3);
+  });
+
+  it('ignores anything older than the window', () => {
+    const { totals } = buildReview({
+      transactions: [
+        { id: 1, categoryId: 1, amount: 100, type: 'expense', date: monthsAgo(1) },
+        { id: 2, categoryId: 1, amount: 999, type: 'expense', date: monthsAgo(20) },
+      ],
+      categories, months: 6, now,
+    });
+
+    expect(totals.net).toBe(100);
+    expect(totals.transactionCount).toBe(1);
+  });
+
+  it('charts a month with no spending as a real zero', () => {
+    const { series } = buildReview({
+      transactions: [{ id: 1, categoryId: 1, amount: 100, type: 'expense', date: monthsAgo(0) }],
+      categories, months: 4, now,
+    });
+
+    expect(series).toHaveLength(4);
+    expect(series.map(row => row.spent)).toEqual([0, 0, 0, 100]);
+    expect(series.at(-1).label).toBe('Aug 26');
+  });
+
+  it('ranks categories by what they truly cost, after refunds', () => {
+    const { categories: rows } = buildReview({
+      transactions: [
+        { id: 1, categoryId: 1, amount: 200, type: 'expense', date: monthsAgo(0) },
+        { id: 2, categoryId: 1, amount: 150, type: 'refund', date: monthsAgo(0) },
+        { id: 3, categoryId: 2, amount: 120, type: 'expense', date: monthsAgo(0) },
+      ],
+      categories, months: 12, now,
+    });
+
+    // Food passed £200 through but cost £50, so Fun is the bigger spend.
+    expect(rows.map(row => row.name)).toEqual(['Fun', 'Food']);
+    expect(rows[0].total).toBe(120);
+    expect(rows[1].total).toBe(50);
+    expect(rows[0].share).toBeCloseTo(120 / 170 * 100, 1);
+  });
+
+  it('names a category that has since been deleted rather than dropping its spend', () => {
+    const { categories: rows } = buildReview({
+      transactions: [{ id: 1, categoryId: 99, amount: 40, type: 'expense', date: monthsAgo(0) }],
+      categories, months: 12, now,
+    });
+
+    expect(rows[0]).toMatchObject({ name: 'Deleted category', total: 40 });
+  });
+
+  it('counts income and what was kept', () => {
+    const { totals } = buildReview({
+      transactions: [{ id: 1, categoryId: 1, amount: 400, type: 'expense', date: monthsAgo(0) }],
+      incomeEvents: [
+        { id: 1, amount: 1000, date: monthsAgo(0) },
+        { id: 2, amount: 1000, date: monthsAgo(1) },
+        { id: 3, amount: 999, date: monthsAgo(30) },  // outside the window
+      ],
+      categories, months: 12, now,
+    });
+
+    expect(totals.income).toBe(2000);
+    expect(totals.saved).toBe(1600);
+  });
+
+  it('finds the busiest and quietest months that actually happened', () => {
+    const { busiest, quietest } = buildReview({
+      transactions: [
+        { id: 1, categoryId: 1, amount: 500, type: 'expense', date: monthsAgo(1) },
+        { id: 2, categoryId: 1, amount: 50, type: 'expense', date: monthsAgo(2) },
+      ],
+      categories, months: 12, now,
+    });
+
+    // Ten empty months in the window must not be crowned "quietest".
+    expect(busiest.spent).toBe(500);
+    expect(quietest.spent).toBe(50);
+  });
+
+  it('picks the biggest single outgoing, never a refund', () => {
+    const { biggest } = buildReview({
+      transactions: [
+        { id: 1, categoryId: 1, amount: 90, type: 'expense', date: monthsAgo(0) },
+        { id: 2, categoryId: 1, amount: 500, type: 'refund', date: monthsAgo(0) },
+      ],
+      categories, months: 12, now,
+    });
+
+    expect(biggest.id).toBe(1);
+  });
+
+  it('measures subscription creep between the first and last months that had any', () => {
+    const { subscriptionTrend } = buildReview({
+      transactions: [
+        { id: 1, categoryId: 1, amount: 10, type: 'expense', subscriptionId: 7, date: monthsAgo(5) },
+        { id: 2, categoryId: 1, amount: 25, type: 'expense', subscriptionId: 7, date: monthsAgo(0) },
+      ],
+      subscriptions: [{ id: 7, name: 'Streaming' }],
+      categories, months: 12, now,
+    });
+
+    expect(subscriptionTrend).toMatchObject({ first: 10, last: 25, change: 15, changePct: 150, total: 35 });
+  });
+
+  it('reports no subscription trend from a single month', () => {
+    const { subscriptionTrend } = buildReview({
+      transactions: [{ id: 1, categoryId: 1, amount: 10, type: 'expense', subscriptionId: 7, date: monthsAgo(0) }],
+      subscriptions: [{ id: 7, name: 'Streaming' }],
+      categories, months: 12, now,
+    });
+
+    expect(subscriptionTrend).toBeNull();
+  });
+
+  it('says plainly when there is nothing to review', () => {
+    const review = buildReview({ categories, months: 12, now });
+
+    expect(review.hasData).toBe(false);
+    expect(review.totals.net).toBe(0);
+    expect(review.categories).toEqual([]);
+    expect(review.busiest).toBeNull();
+    expect(review.series).toHaveLength(12);
   });
 });
