@@ -927,6 +927,21 @@ export function getGoalEta(goal, incomes = [], now = new Date()) {
   const perCycle = roundMoney(goal?.perCycleContribution);
   if (!(perCycle > 0)) return { cycles: null, date: null, complete: false };
 
+  // A debt charging interest can't be divided out like a savings pot: the
+  // balance grows between payments. Delegating keeps every existing caller —
+  // the Goals view, the off-track nudge — honest without knowing about APR.
+  if (goal?.kind === 'debt' && Number(goal?.apr) > 0) {
+    const payoff = getDebtPayoff(goal, incomes, now);
+    return {
+      cycles: payoff.cycles,
+      date: payoff.date,
+      complete: false,
+      perCycle,
+      totalInterest: payoff.totalInterest,
+      neverClears: payoff.neverClears,
+    };
+  }
+
   const income = incomes.find(item => Number(item.id) === Number(goal?.incomeId));
   const cycleDays = getIncomeCycleAverageDays(income ? getIncomeFrequency(income) : 'monthly');
   const cycles = Math.ceil(remaining / perCycle);
@@ -936,6 +951,220 @@ export function getGoalEta(goal, incomes = [], now = new Date()) {
     date: addDays(startOfDay(now), Math.round(cycles * cycleDays)),
     complete: false,
     perCycle,
+  };
+}
+
+// ── Debt ─────────────────────────────────────────────────────────────────────
+
+// A century of payments. Any debt still running past this is one the payment
+// never clears, and the loop needs a floor under it regardless.
+const MAX_PAYOFF_CYCLES = 1200;
+
+export const DEBT_AVALANCHE = 'avalanche';
+export const DEBT_SNOWBALL = 'snowball';
+
+/**
+ * The interest rate for one payment cycle, from an annual APR.
+ *
+ * Proportional to the cycle length rather than compounded to it, which is how
+ * lenders actually quote it — a 24% APR card charges 2% a month, not
+ * 1.809% (the rate that would compound to 24% over a year).
+ */
+export function getDebtPeriodicRate(apr, cycleDays = AVERAGE_MONTH_DAYS) {
+  const annual = Number(apr);
+  if (!Number.isFinite(annual) || annual <= 0) return 0;
+  return (annual / 100) * (cycleDays / 365.25);
+}
+
+/**
+ * Amortise one debt at its current payment.
+ *
+ * `getGoalEta` divides what's left by the payment, which is right for a savings
+ * pot and wrong for a debt: it ignores the interest still accruing on the
+ * balance, so it under-reports both the date and the true cost — the difference
+ * between a progress bar and a decision.
+ *
+ * Returns `neverClears` when the payment doesn't cover the interest. That is
+ * the single most important thing this function can tell anyone, so it is a
+ * flag rather than an absurdly distant date.
+ */
+export function getDebtPayoff(goal, incomes = [], now = new Date()) {
+  const { remaining, complete } = getGoalProgress(goal);
+  const payment = roundMoney(goal?.perCycleContribution);
+  const income = incomes.find(item => Number(item.id) === Number(goal?.incomeId));
+  const cycleDays = getIncomeCycleAverageDays(income ? getIncomeFrequency(income) : 'monthly');
+  const rate = getDebtPeriodicRate(goal?.apr, cycleDays);
+
+  if (complete || remaining <= 0) {
+    return { cycles: 0, date: null, totalInterest: 0, totalPaid: 0, neverClears: false, complete: true, rate };
+  }
+  if (!(payment > 0)) {
+    return { cycles: null, date: null, totalInterest: null, totalPaid: null, neverClears: false, complete: false, rate };
+  }
+
+  const firstInterest = roundMoney(remaining * rate);
+  if (payment <= firstInterest) {
+    return {
+      cycles: null, date: null, totalInterest: null, totalPaid: null,
+      neverClears: true, complete: false, rate,
+      interestPerCycle: firstInterest,
+    };
+  }
+
+  let balance = remaining;
+  let totalInterest = 0;
+  let totalPaid = 0;
+  let cycles = 0;
+
+  while (balance > 0 && cycles < MAX_PAYOFF_CYCLES) {
+    const interest = roundMoney(balance * rate);
+    // The final payment is only ever what's actually left to clear.
+    const due = Math.min(roundMoney(balance + interest), payment);
+    totalInterest = roundMoney(totalInterest + interest);
+    totalPaid = roundMoney(totalPaid + due);
+    balance = roundMoney(balance + interest - due);
+    cycles += 1;
+  }
+
+  return {
+    cycles,
+    date: addDays(startOfDay(now), Math.round(cycles * cycleDays)),
+    totalInterest,
+    totalPaid,
+    neverClears: false,
+    complete: false,
+    rate,
+  };
+}
+
+/** Debt goals with something still owing, in the order a strategy would clear them. */
+export function orderDebts(goals = [], method = DEBT_AVALANCHE, incomes = []) {
+  const open = goals
+    .filter(goal => goal?.kind === 'debt')
+    .map(goal => ({ goal, ...getGoalProgress(goal) }))
+    .filter(entry => entry.remaining > 0.005);
+
+  return open.sort((a, b) => {
+    if (method === DEBT_SNOWBALL) {
+      // Smallest balance first: the point is the momentum of clearing one.
+      return a.remaining - b.remaining || Number(b.goal.apr || 0) - Number(a.goal.apr || 0);
+    }
+    // Avalanche: dearest money first, which is always the cheaper arithmetic.
+    const aRate = getDebtPeriodicRate(a.goal.apr, 30);
+    const bRate = getDebtPeriodicRate(b.goal.apr, 30);
+    return bRate - aRate || a.remaining - b.remaining;
+  }).map(entry => entry.goal);
+}
+
+/**
+ * Run every debt forward together under one payoff order.
+ *
+ * Each cycle: interest accrues on every balance, the minimum goes to each, and
+ * everything left in the pool is thrown at the first debt in the order. As
+ * balances clear, their payments cascade to the next — which is the whole
+ * mechanism behind both strategies, and the reason the two differ in cost.
+ *
+ * The pool is what the user already commits (the sum of the per-cycle
+ * contributions), so this compares *orderings* of the same money rather than
+ * quietly assuming they can pay more.
+ */
+export function simulateDebtStrategy(goals = [], incomes = [], { method = DEBT_AVALANCHE, now = new Date() } = {}) {
+  const ordered = orderDebts(goals, method, incomes);
+  if (!ordered.length) return { method, cycles: 0, totalInterest: 0, order: [], cleared: [], neverClears: false };
+
+  const income = incomes.find(item => Number(item.id) === Number(ordered[0]?.incomeId));
+  const cycleDays = getIncomeCycleAverageDays(income ? getIncomeFrequency(income) : 'monthly');
+
+  const debts = ordered.map(goal => ({
+    id: goal.id,
+    name: goal.name,
+    balance: getGoalProgress(goal).remaining,
+    rate: getDebtPeriodicRate(goal.apr, cycleDays),
+    minimum: Math.max(0, roundMoney(goal.minimumPayment)),
+    payment: Math.max(0, roundMoney(goal.perCycleContribution)),
+    clearedAtCycle: null,
+  }));
+
+  const pool = roundMoney(debts.reduce((sum, debt) => sum + debt.payment, 0));
+  if (!(pool > 0)) {
+    return { method, cycles: null, totalInterest: null, order: debts.map(d => d.name), cleared: [], neverClears: false };
+  }
+
+  let totalInterest = 0;
+  let cycles = 0;
+
+  while (debts.some(debt => debt.balance > 0.005) && cycles < MAX_PAYOFF_CYCLES) {
+    for (const debt of debts) {
+      if (debt.balance <= 0) continue;
+      const interest = roundMoney(debt.balance * debt.rate);
+      totalInterest = roundMoney(totalInterest + interest);
+      debt.balance = roundMoney(debt.balance + interest);
+    }
+
+    let available = pool;
+    // Minimums first, in order, so a debt is never left unserviced because the
+    // target debt ate the pool.
+    for (const debt of debts) {
+      if (debt.balance <= 0 || available <= 0) continue;
+      const pay = Math.min(debt.minimum, debt.balance, available);
+      debt.balance = roundMoney(debt.balance - pay);
+      available = roundMoney(available - pay);
+    }
+    // Everything left goes at the front of the order, then cascades.
+    for (const debt of debts) {
+      if (debt.balance <= 0 || available <= 0) continue;
+      const pay = Math.min(debt.balance, available);
+      debt.balance = roundMoney(debt.balance - pay);
+      available = roundMoney(available - pay);
+    }
+
+    cycles += 1;
+    for (const debt of debts) {
+      if (debt.balance <= 0.005 && debt.clearedAtCycle == null) debt.clearedAtCycle = cycles;
+    }
+
+    // Nothing moved and nothing is clear: the pool can't outpace the interest.
+    if (available >= pool - 0.005 && debts.every(debt => debt.balance > 0.005)) {
+      return { method, cycles: null, totalInterest: null, order: debts.map(d => d.name), cleared: [], neverClears: true };
+    }
+  }
+
+  const neverClears = cycles >= MAX_PAYOFF_CYCLES && debts.some(debt => debt.balance > 0.005);
+
+  return {
+    method,
+    cycles: neverClears ? null : cycles,
+    totalInterest: neverClears ? null : totalInterest,
+    date: neverClears ? null : addDays(startOfDay(now), Math.round(cycles * cycleDays)),
+    order: debts.map(debt => debt.name),
+    cleared: debts.map(debt => ({
+      id: debt.id,
+      name: debt.name,
+      cycles: debt.clearedAtCycle,
+      date: debt.clearedAtCycle == null ? null : addDays(startOfDay(now), Math.round(debt.clearedAtCycle * cycleDays)),
+    })),
+    neverClears,
+  };
+}
+
+/**
+ * Avalanche against snowball, on the same money.
+ *
+ * Avalanche is always at least as cheap — it is what minimising interest means
+ * — so `saving` is what the cheaper order is worth, and the UI can be honest
+ * that snowball costs more while still being the one some people finish.
+ */
+export function compareDebtStrategies(goals = [], incomes = [], now = new Date()) {
+  const avalanche = simulateDebtStrategy(goals, incomes, { method: DEBT_AVALANCHE, now });
+  const snowball = simulateDebtStrategy(goals, incomes, { method: DEBT_SNOWBALL, now });
+
+  const comparable = avalanche.totalInterest != null && snowball.totalInterest != null;
+  return {
+    avalanche,
+    snowball,
+    saving: comparable ? roundMoney(snowball.totalInterest - avalanche.totalInterest) : null,
+    // Only worth showing a choice when the two orders actually differ.
+    differs: comparable && avalanche.order.join('|') !== snowball.order.join('|'),
   };
 }
 
@@ -949,7 +1178,9 @@ export function isGoalOffTrack(goal, incomes = [], now = new Date()) {
   if (complete) return false;
 
   const eta = getGoalEta(goal, incomes, now);
-  if (!eta.date) return true; // a deadline with no contribution is off track by definition
+  // No date covers both "nothing being contributed" and "the payment never
+  // outpaces the interest" — a deadline is missed either way.
+  if (!eta.date) return true;
   return eta.date > startOfDay(target);
 }
 

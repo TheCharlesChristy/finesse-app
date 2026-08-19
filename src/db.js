@@ -1075,6 +1075,10 @@ export async function addGoal(goal, accountId = null) {
     saved: Math.max(0, roundMoney(goal.saved || 0)),
     targetDate: goal.targetDate || null,
     perCycleContribution: Math.max(0, roundMoney(goal.perCycleContribution || 0)),
+    // Only meaningful on a debt, but stored uniformly so the shape doesn't
+    // depend on `kind` — a saving goal simply leaves them at zero.
+    apr: Math.max(0, Number(goal.apr) || 0),
+    minimumPayment: Math.max(0, roundMoney(goal.minimumPayment || 0)),
     incomeId: goal.incomeId != null ? Number(goal.incomeId) : null,
     wishlistItemId: goal.wishlistItemId != null ? Number(goal.wishlistItemId) : null,
     color: goal.color || ACCOUNT_COLORS[0],
@@ -1087,6 +1091,8 @@ export async function updateGoal(id, data) {
   if (next.target != null) next.target = Math.abs(roundMoney(next.target));
   if (next.saved != null) next.saved = roundMoney(next.saved);
   if (next.perCycleContribution != null) next.perCycleContribution = Math.max(0, roundMoney(next.perCycleContribution));
+  if (next.apr != null) next.apr = Math.max(0, Number(next.apr) || 0);
+  if (next.minimumPayment != null) next.minimumPayment = Math.max(0, roundMoney(next.minimumPayment));
   if (next.incomeId != null) next.incomeId = Number(next.incomeId);
   return db.goals.update(id, next);
 }

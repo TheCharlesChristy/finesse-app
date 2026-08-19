@@ -3,7 +3,9 @@ import { format } from 'date-fns';
 import { AlertTriangle, Check, Landmark, Minus, Pencil, PiggyBank, Plus, Trash2 } from 'lucide-react';
 
 import {
+  compareDebtStrategies,
   fmt,
+  getDebtPayoff,
   getGoalEta,
   getGoalProgress,
   isGoalOffTrack,
@@ -20,6 +22,7 @@ function GoalCard({ goal, incomes, onContribute, onEdit, onDelete }) {
   const eta = getGoalEta(goal, incomes);
   const offTrack = isGoalOffTrack(goal, incomes);
   const isDebt = goal.kind === GOAL_DEBT;
+  const payoff = isDebt && Number(goal.apr) > 0 ? getDebtPayoff(goal, incomes) : null;
   const income = incomes.find(item => Number(item.id) === Number(goal.incomeId));
 
   const move = (sign) => {
@@ -97,6 +100,21 @@ function GoalCard({ goal, incomes, onContribute, onEdit, onDelete }) {
         </span>
       </div>
 
+      {/* What the interest actually costs. A debt with an APR and no payment
+          big enough to cover it is the single most important thing this page
+          can say, so it is stated outright rather than left to the ETA. */}
+      {payoff && !progress.complete && (
+        <div style={{
+          marginTop: 9, fontSize: 11, lineHeight: 1.6, borderRadius: 8, padding: '7px 10px',
+          background: payoff.neverClears ? 'rgba(255,107,138,0.1)' : 'rgba(255,255,255,0.04)',
+          color: payoff.neverClears ? 'var(--danger)' : 'var(--text-muted)',
+        }}>
+          {payoff.neverClears
+            ? `At ${fmt(goal.perCycleContribution || 0)} a cycle this never clears — interest alone is about ${fmt(payoff.interestPerCycle)} each time.`
+            : `${goal.apr}% APR · ${fmt(payoff.totalInterest)} of interest before it's gone.`}
+        </div>
+      )}
+
       {!progress.complete && (
         <div className="mobile-row-stack" style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center', flexWrap: 'wrap' }}>
           <input className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
@@ -146,6 +164,15 @@ export default function Goals({
     };
   }, [goals, incomes]);
 
+  // Only worth computing — and only worth showing — when there are at least two
+  // debts to order. With one, the two strategies are the same plan.
+  const strategies = useMemo(
+    () => (goals.filter(g => g.kind === GOAL_DEBT && (g.target || 0) > (g.saved || 0)).length > 1
+      ? compareDebtStrategies(goals, incomes)
+      : null),
+    [goals, incomes],
+  );
+
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div className="glass mobile-card-pad mobile-row-stack" style={{ borderRadius: 18, padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -174,6 +201,46 @@ export default function Goals({
               <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 3 }}>{hint}</div>
             </div>
           ))}
+        </div>
+      )}
+
+      {strategies?.differs && (
+        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+            <Landmark size={16} color="var(--accent-purple)" aria-hidden="true" />
+            <CardTitle as="h2">Which debt to clear first</CardTitle>
+          </div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 14, lineHeight: 1.6 }}>
+            Both orders use the {fmt(totals.perCycle)} you already put aside each
+            cycle — minimums on everything, then everything left over aimed at one
+            debt, moving to the next as each clears.
+          </div>
+
+          <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+            {[
+              ['Highest rate first', strategies.avalanche, 'Costs the least interest.'],
+              ['Smallest balance first', strategies.snowball, 'Clears one sooner, for the momentum.'],
+            ].map(([label, result, hint]) => (
+              <div key={label} style={{
+                borderRadius: 12, padding: '14px 15px',
+                background: result === strategies.avalanche ? 'rgba(79,255,176,0.06)' : 'rgba(255,255,255,0.04)',
+                border: `1px solid ${result === strategies.avalanche ? 'rgba(79,255,176,0.22)' : 'transparent'}`,
+              }}>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 5 }}>{label}</div>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>{fmt(result.totalInterest)}</div>
+                <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 3, lineHeight: 1.6 }}>
+                  interest in total · debt-free {result.date ? format(result.date, 'MMM yyyy') : 'never'}
+                  <span style={{ display: 'block', marginTop: 3 }}>{hint}</span>
+                  <span style={{ display: 'block', marginTop: 3 }}>Order: {result.order.join(' → ')}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 12, lineHeight: 1.6 }}>
+            Paying the dearest debt first saves you <strong style={{ color: 'var(--good)' }}>{fmt(strategies.saving)}</strong>.
+            {strategies.saving < 25 && ' That’s a small enough gap that whichever you’ll actually stick to is the better plan.'}
+          </div>
         </div>
       )}
 

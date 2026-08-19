@@ -4,6 +4,13 @@ import { addDays, format, subMonths } from 'date-fns';
 import {
   AVERAGE_MONTH_DAYS,
   buildNudges,
+  compareDebtStrategies,
+  DEBT_AVALANCHE,
+  DEBT_SNOWBALL,
+  getDebtPayoff,
+  getDebtPeriodicRate,
+  orderDebts,
+  simulateDebtStrategy,
   buildCashFlowForecast,
   filterDismissedNudges,
   buildMonthlyHistory,
@@ -952,5 +959,151 @@ describe('cash-flow forecast', () => {
     });
 
     expect(series.every(point => point.events.length === 0)).toBe(true);
+  });
+});
+
+describe('debt amortisation', () => {
+  const debt = (overrides = {}) => ({
+    id: 1, name: 'Card', kind: 'debt', target: 1000, saved: 0,
+    apr: 24, perCycleContribution: 100, minimumPayment: 25, incomeId: 1,
+    ...overrides,
+  });
+  const monthly = [{ id: 1, name: 'Salary', amount: 2000, resetFrequency: 'monthly' }];
+
+  it('converts an APR to the rate lenders actually charge per month', () => {
+    // 24% APR is quoted as 2% a month, not the rate that compounds to 24%.
+    expect(getDebtPeriodicRate(24, 365.25 / 12)).toBeCloseTo(0.02, 6);
+    expect(getDebtPeriodicRate(0)).toBe(0);
+    expect(getDebtPeriodicRate(null)).toBe(0);
+    expect(getDebtPeriodicRate(-5)).toBe(0);
+  });
+
+  it('takes longer than dividing the balance by the payment', () => {
+    const payoff = getDebtPayoff(debt(), monthly);
+
+    // £1000 at £100/month is 10 payments with no interest; at 24% APR it isn't.
+    expect(payoff.cycles).toBeGreaterThan(10);
+    expect(payoff.totalInterest).toBeGreaterThan(0);
+    expect(payoff.totalPaid).toBeCloseTo(1000 + payoff.totalInterest, 2);
+  });
+
+  it('charges no interest when the APR is zero', () => {
+    const payoff = getDebtPayoff(debt({ apr: 0 }), monthly);
+
+    expect(payoff.cycles).toBe(10);
+    expect(payoff.totalInterest).toBe(0);
+    expect(payoff.totalPaid).toBeCloseTo(1000, 2);
+  });
+
+  it('flags a payment that never clears the balance', () => {
+    // £1000 at 24% accrues £20 a month; £15 never gets there.
+    const payoff = getDebtPayoff(debt({ perCycleContribution: 15 }), monthly);
+
+    expect(payoff.neverClears).toBe(true);
+    expect(payoff.cycles).toBeNull();
+    expect(payoff.date).toBeNull();
+    expect(payoff.interestPerCycle).toBeCloseTo(20, 2);
+  });
+
+  it('counts only what is left after what has been paid off', () => {
+    const payoff = getDebtPayoff(debt({ saved: 900 }), monthly);
+    expect(payoff.cycles).toBe(2);
+  });
+
+  it('reports a cleared debt as complete', () => {
+    const payoff = getDebtPayoff(debt({ saved: 1000 }), monthly);
+    expect(payoff).toMatchObject({ complete: true, cycles: 0, totalInterest: 0 });
+  });
+
+  it('says nothing rather than guessing when no payment is set', () => {
+    const payoff = getDebtPayoff(debt({ perCycleContribution: 0 }), monthly);
+    expect(payoff).toMatchObject({ cycles: null, date: null, neverClears: false });
+  });
+
+  it('routes a debt goal ETA through the interest maths', () => {
+    const withInterest = getGoalEta(debt(), monthly);
+    const withoutInterest = getGoalEta(debt({ apr: 0 }), monthly);
+
+    expect(withInterest.cycles).toBeGreaterThan(withoutInterest.cycles);
+    expect(withInterest.totalInterest).toBeGreaterThan(0);
+    // A savings goal is unaffected — no interest to model.
+    expect(getGoalEta({ kind: 'saving', target: 1000, saved: 0, perCycleContribution: 100, incomeId: 1 }, monthly).cycles).toBe(10);
+  });
+
+  it('calls a debt that never clears off track, deadline or not', () => {
+    const stuck = debt({ perCycleContribution: 15, targetDate: '2027-01-01' });
+    expect(isGoalOffTrack(stuck, monthly, new Date('2026-01-01'))).toBe(true);
+  });
+});
+
+describe('debt payoff strategies', () => {
+  const monthly = [{ id: 1, name: 'Salary', amount: 3000, resetFrequency: 'monthly' }];
+  // A small cheap debt and a large dear one: the case where the two orders
+  // genuinely disagree.
+  const goals = [
+    { id: 1, name: 'Store card', kind: 'debt', target: 500, saved: 0, apr: 5, perCycleContribution: 60, minimumPayment: 25, incomeId: 1 },
+    { id: 2, name: 'Credit card', kind: 'debt', target: 3000, saved: 0, apr: 29, perCycleContribution: 150, minimumPayment: 60, incomeId: 1 },
+  ];
+
+  it('orders by rate for avalanche and by balance for snowball', () => {
+    expect(orderDebts(goals, DEBT_AVALANCHE).map(g => g.name)).toEqual(['Credit card', 'Store card']);
+    expect(orderDebts(goals, DEBT_SNOWBALL).map(g => g.name)).toEqual(['Store card', 'Credit card']);
+  });
+
+  it('ignores savings goals and debts already cleared', () => {
+    const mixed = [
+      ...goals,
+      { id: 3, name: 'Holiday', kind: 'saving', target: 800, saved: 0, incomeId: 1 },
+      { id: 4, name: 'Paid off', kind: 'debt', target: 200, saved: 200, apr: 40, incomeId: 1 },
+    ];
+    expect(orderDebts(mixed, DEBT_AVALANCHE).map(g => g.name)).toEqual(['Credit card', 'Store card']);
+  });
+
+  it('clears everything and costs interest along the way', () => {
+    const result = simulateDebtStrategy(goals, monthly, { method: DEBT_AVALANCHE });
+
+    expect(result.neverClears).toBe(false);
+    expect(result.cycles).toBeGreaterThan(0);
+    expect(result.totalInterest).toBeGreaterThan(0);
+    expect(result.cleared.every(entry => entry.cycles != null)).toBe(true);
+  });
+
+  it('cascades a cleared debt’s payment into the next one', () => {
+    const result = simulateDebtStrategy(goals, monthly, { method: DEBT_SNOWBALL });
+    const [first, second] = result.cleared;
+
+    // The small debt goes first under snowball, and the big one finishes
+    // sooner than its own £150/month could manage alone.
+    expect(first.cycles).toBeLessThan(second.cycles);
+    expect(result.cycles).toBe(second.cycles);
+  });
+
+  it('makes avalanche at least as cheap as snowball', () => {
+    const { avalanche, snowball, saving, differs } = compareDebtStrategies(goals, monthly);
+
+    expect(differs).toBe(true);
+    expect(avalanche.totalInterest).toBeLessThanOrEqual(snowball.totalInterest);
+    expect(saving).toBeCloseTo(snowball.totalInterest - avalanche.totalInterest, 2);
+    expect(saving).toBeGreaterThan(0);
+  });
+
+  it('reports no difference when one order matches the other', () => {
+    const single = [goals[0]];
+    expect(compareDebtStrategies(single, monthly).differs).toBe(false);
+  });
+
+  it('flags a pool that cannot outpace the interest', () => {
+    const hopeless = [
+      { id: 1, name: 'Card', kind: 'debt', target: 5000, saved: 0, apr: 30, perCycleContribution: 20, minimumPayment: 20, incomeId: 1 },
+    ];
+    const result = simulateDebtStrategy(hopeless, monthly, { method: DEBT_AVALANCHE });
+
+    expect(result.neverClears).toBe(true);
+    expect(result.totalInterest).toBeNull();
+  });
+
+  it('handles having no debts at all', () => {
+    expect(simulateDebtStrategy([], monthly)).toMatchObject({ cycles: 0, totalInterest: 0 });
+    expect(compareDebtStrategies([], monthly).saving).toBe(0);
   });
 });
