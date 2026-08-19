@@ -4,6 +4,13 @@ import { addDays, format, subMonths } from 'date-fns';
 import {
   AVERAGE_MONTH_DAYS,
   buildNudges,
+  compareDebtStrategies,
+  DEBT_AVALANCHE,
+  DEBT_SNOWBALL,
+  getDebtPayoff,
+  getDebtPeriodicRate,
+  orderDebts,
+  simulateDebtStrategy,
   buildCashFlowForecast,
   filterDismissedNudges,
   buildMonthlyHistory,
@@ -28,6 +35,8 @@ import {
   getMerchantBreakdown,
   getCycleComparison,
   buildBalanceHistory,
+  buildNetWorthHistory,
+  buildReview,
   flagUnusualSpend,
   getMerchantSuggestions,
   getSignedAmount,
@@ -789,6 +798,23 @@ describe('nudges', () => {
     expect(find(fresh, 'backup-')).toHaveLength(0);
   });
 
+  it('warns about evictable storage, but stays quiet until the state is known', () => {
+    const categories = [{ id: 1, name: 'Food', allowance: 100, spent: 0 }];
+
+    // null is "not checked yet" — alarming on a race would be worse than late.
+    expect(find(buildNudges({ categories, storageState: null }), 'storage-evictable-')).toHaveLength(0);
+    expect(find(buildNudges({ categories, storageState: 'persisted' }), 'storage-evictable-')).toHaveLength(0);
+    expect(find(buildNudges({ categories, storageState: 'unsupported' }), 'storage-evictable-')).toHaveLength(0);
+
+    const evictable = find(buildNudges({ categories, storageState: 'best-effort' }), 'storage-evictable-');
+    expect(evictable).toHaveLength(1);
+    expect(evictable[0].severity).toBe('warn');
+    expect(evictable[0].view).toBe('settings');
+
+    // Nothing stored yet means nothing to lose.
+    expect(find(buildNudges({ storageState: 'best-effort' }), 'storage-evictable-')).toHaveLength(0);
+  });
+
   it('spots a subscription price change from its charge history', () => {
     const nudges = buildNudges({
       subscriptions: [{ id: 1, name: 'Netflix', amount: 12, active: true, nextDueAt: day(20) }],
@@ -935,5 +961,400 @@ describe('cash-flow forecast', () => {
     });
 
     expect(series.every(point => point.events.length === 0)).toBe(true);
+  });
+});
+
+describe('debt amortisation', () => {
+  const debt = (overrides = {}) => ({
+    id: 1, name: 'Card', kind: 'debt', target: 1000, saved: 0,
+    apr: 24, perCycleContribution: 100, minimumPayment: 25, incomeId: 1,
+    ...overrides,
+  });
+  const monthly = [{ id: 1, name: 'Salary', amount: 2000, resetFrequency: 'monthly' }];
+
+  it('converts an APR to the rate lenders actually charge per month', () => {
+    // 24% APR is quoted as 2% a month, not the rate that compounds to 24%.
+    expect(getDebtPeriodicRate(24, 365.25 / 12)).toBeCloseTo(0.02, 6);
+    expect(getDebtPeriodicRate(0)).toBe(0);
+    expect(getDebtPeriodicRate(null)).toBe(0);
+    expect(getDebtPeriodicRate(-5)).toBe(0);
+  });
+
+  it('takes longer than dividing the balance by the payment', () => {
+    const payoff = getDebtPayoff(debt(), monthly);
+
+    // £1000 at £100/month is 10 payments with no interest; at 24% APR it isn't.
+    expect(payoff.cycles).toBeGreaterThan(10);
+    expect(payoff.totalInterest).toBeGreaterThan(0);
+    expect(payoff.totalPaid).toBeCloseTo(1000 + payoff.totalInterest, 2);
+  });
+
+  it('charges no interest when the APR is zero', () => {
+    const payoff = getDebtPayoff(debt({ apr: 0 }), monthly);
+
+    expect(payoff.cycles).toBe(10);
+    expect(payoff.totalInterest).toBe(0);
+    expect(payoff.totalPaid).toBeCloseTo(1000, 2);
+  });
+
+  it('flags a payment that never clears the balance', () => {
+    // £1000 at 24% accrues £20 a month; £15 never gets there.
+    const payoff = getDebtPayoff(debt({ perCycleContribution: 15 }), monthly);
+
+    expect(payoff.neverClears).toBe(true);
+    expect(payoff.cycles).toBeNull();
+    expect(payoff.date).toBeNull();
+    expect(payoff.interestPerCycle).toBeCloseTo(20, 2);
+  });
+
+  it('counts only what is left after what has been paid off', () => {
+    const payoff = getDebtPayoff(debt({ saved: 900 }), monthly);
+    expect(payoff.cycles).toBe(2);
+  });
+
+  it('reports a cleared debt as complete', () => {
+    const payoff = getDebtPayoff(debt({ saved: 1000 }), monthly);
+    expect(payoff).toMatchObject({ complete: true, cycles: 0, totalInterest: 0 });
+  });
+
+  it('says nothing rather than guessing when no payment is set', () => {
+    const payoff = getDebtPayoff(debt({ perCycleContribution: 0 }), monthly);
+    expect(payoff).toMatchObject({ cycles: null, date: null, neverClears: false });
+  });
+
+  it('routes a debt goal ETA through the interest maths', () => {
+    const withInterest = getGoalEta(debt(), monthly);
+    const withoutInterest = getGoalEta(debt({ apr: 0 }), monthly);
+
+    expect(withInterest.cycles).toBeGreaterThan(withoutInterest.cycles);
+    expect(withInterest.totalInterest).toBeGreaterThan(0);
+    // A savings goal is unaffected — no interest to model.
+    expect(getGoalEta({ kind: 'saving', target: 1000, saved: 0, perCycleContribution: 100, incomeId: 1 }, monthly).cycles).toBe(10);
+  });
+
+  it('calls a debt that never clears off track, deadline or not', () => {
+    const stuck = debt({ perCycleContribution: 15, targetDate: '2027-01-01' });
+    expect(isGoalOffTrack(stuck, monthly, new Date('2026-01-01'))).toBe(true);
+  });
+});
+
+describe('debt payoff strategies', () => {
+  const monthly = [{ id: 1, name: 'Salary', amount: 3000, resetFrequency: 'monthly' }];
+  // A small cheap debt and a large dear one: the case where the two orders
+  // genuinely disagree.
+  const goals = [
+    { id: 1, name: 'Store card', kind: 'debt', target: 500, saved: 0, apr: 5, perCycleContribution: 60, minimumPayment: 25, incomeId: 1 },
+    { id: 2, name: 'Credit card', kind: 'debt', target: 3000, saved: 0, apr: 29, perCycleContribution: 150, minimumPayment: 60, incomeId: 1 },
+  ];
+
+  it('orders by rate for avalanche and by balance for snowball', () => {
+    expect(orderDebts(goals, DEBT_AVALANCHE).map(g => g.name)).toEqual(['Credit card', 'Store card']);
+    expect(orderDebts(goals, DEBT_SNOWBALL).map(g => g.name)).toEqual(['Store card', 'Credit card']);
+  });
+
+  it('ignores savings goals and debts already cleared', () => {
+    const mixed = [
+      ...goals,
+      { id: 3, name: 'Holiday', kind: 'saving', target: 800, saved: 0, incomeId: 1 },
+      { id: 4, name: 'Paid off', kind: 'debt', target: 200, saved: 200, apr: 40, incomeId: 1 },
+    ];
+    expect(orderDebts(mixed, DEBT_AVALANCHE).map(g => g.name)).toEqual(['Credit card', 'Store card']);
+  });
+
+  it('clears everything and costs interest along the way', () => {
+    const result = simulateDebtStrategy(goals, monthly, { method: DEBT_AVALANCHE });
+
+    expect(result.neverClears).toBe(false);
+    expect(result.cycles).toBeGreaterThan(0);
+    expect(result.totalInterest).toBeGreaterThan(0);
+    expect(result.cleared.every(entry => entry.cycles != null)).toBe(true);
+  });
+
+  it('cascades a cleared debt’s payment into the next one', () => {
+    const result = simulateDebtStrategy(goals, monthly, { method: DEBT_SNOWBALL });
+    const [first, second] = result.cleared;
+
+    // The small debt goes first under snowball, and the big one finishes
+    // sooner than its own £150/month could manage alone.
+    expect(first.cycles).toBeLessThan(second.cycles);
+    expect(result.cycles).toBe(second.cycles);
+  });
+
+  it('makes avalanche at least as cheap as snowball', () => {
+    const { avalanche, snowball, saving, differs } = compareDebtStrategies(goals, monthly);
+
+    expect(differs).toBe(true);
+    expect(avalanche.totalInterest).toBeLessThanOrEqual(snowball.totalInterest);
+    expect(saving).toBeCloseTo(snowball.totalInterest - avalanche.totalInterest, 2);
+    expect(saving).toBeGreaterThan(0);
+  });
+
+  it('reports no difference when one order matches the other', () => {
+    const single = [goals[0]];
+    expect(compareDebtStrategies(single, monthly).differs).toBe(false);
+  });
+
+  it('flags a pool that cannot outpace the interest', () => {
+    const hopeless = [
+      { id: 1, name: 'Card', kind: 'debt', target: 5000, saved: 0, apr: 30, perCycleContribution: 20, minimumPayment: 20, incomeId: 1 },
+    ];
+    const result = simulateDebtStrategy(hopeless, monthly, { method: DEBT_AVALANCHE });
+
+    expect(result.neverClears).toBe(true);
+    expect(result.totalInterest).toBeNull();
+  });
+
+  it('handles having no debts at all', () => {
+    expect(simulateDebtStrategy([], monthly)).toMatchObject({ cycles: 0, totalInterest: 0 });
+    expect(compareDebtStrategies([], monthly).saving).toBe(0);
+  });
+});
+
+describe('buildNetWorthHistory', () => {
+  const today = new Date();
+  const day = (offset) => iso(addDays(today, offset));
+
+  it('ends at the total the Accounts page shows', () => {
+    const { series, current } = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 600 }, { id: 2, balance: 400 }],
+      days: 10,
+    });
+
+    expect(series.at(-1).assets).toBe(1000);
+    expect(current.assets).toBe(1000);
+  });
+
+  it('walks backwards through spending and income across every account', () => {
+    const { series } = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 900 }, { id: 2, balance: 100 }],
+      transactions: [{ accountId: 1, amount: 100, type: 'expense', date: day(-2) }],
+      incomeEvents: [{ accountId: 2, amount: 50, date: day(-1) }],
+      days: 5,
+    });
+
+    // Each point is the balance at the *end* of that day, as buildBalanceHistory
+    // already does: yesterday closes at 1000 having taken the £50 in, the day
+    // before closes at 950 having paid the £100 out, and the day before that
+    // still held 1050.
+    expect(series.at(-1).assets).toBe(1000);
+    expect(series.at(-2).assets).toBe(1000);
+    expect(series.at(-3).assets).toBe(950);
+    expect(series.at(-4).assets).toBe(1050);
+  });
+
+  it('ignores a transfer between two tracked accounts', () => {
+    const { series } = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 700 }, { id: 2, balance: 300 }],
+      transfers: [{ fromAccountId: 1, toAccountId: 2, amount: 200, date: day(-2) }],
+      days: 5,
+    });
+
+    // Money moved within the estate, so the total never changed.
+    expect(series.every(point => point.assets === 1000)).toBe(true);
+  });
+
+  it('counts a transfer with only one leg inside the estate', () => {
+    const { series } = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 800 }],
+      transfers: [{ fromAccountId: 1, toAccountId: 99, amount: 200, date: day(-2) }],
+      days: 5,
+    });
+
+    expect(series.at(-1).assets).toBe(800);
+    expect(series[0].assets).toBe(1000);
+  });
+
+  it('subtracts open debts from net worth without inventing a debt history', () => {
+    const { current, debtHasHistory, series } = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 1000 }],
+      goals: [
+        { id: 1, kind: 'debt', target: 500, saved: 200 },
+        { id: 2, kind: 'debt', target: 100, saved: 100 },
+      ],
+      days: 5,
+    });
+
+    expect(current.debt).toBe(300);
+    expect(current.netWorth).toBe(700);
+    // Finesse doesn't log when debt payments landed, so no point claims one.
+    expect(debtHasHistory).toBe(false);
+    expect(series[0]).not.toHaveProperty('debt');
+  });
+
+  it('does not count savings goals as assets on top of the balance holding them', () => {
+    const withPot = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 1000 }],
+      goals: [{ id: 1, kind: 'saving', target: 500, saved: 400 }],
+      days: 5,
+    });
+
+    // A goal is an earmark; the money is already in the account balance.
+    expect(withPot.current.assets).toBe(1000);
+    expect(withPot.current.netWorth).toBe(1000);
+  });
+
+  it('reports the change across the window', () => {
+    const { change } = buildNetWorthHistory({
+      accounts: [{ id: 1, balance: 1000 }],
+      transactions: [{ accountId: 1, amount: 200, type: 'expense', date: day(-3) }],
+      days: 10,
+    });
+
+    expect(change).toBe(-200);
+  });
+
+  it('handles having no accounts at all', () => {
+    const result = buildNetWorthHistory({ days: 3 });
+    expect(result.current).toEqual({ assets: 0, debt: 0, netWorth: 0 });
+    expect(result.series).toHaveLength(4);
+  });
+});
+
+describe('buildReview', () => {
+  const now = new Date('2026-08-15T12:00:00Z');
+  const monthsAgo = (n, day = 10) => iso(new Date(Date.UTC(2026, 7 - n, day, 12)));
+  const categories = [
+    { id: 1, name: 'Food', color: '#aaa' },
+    { id: 2, name: 'Fun', color: '#bbb' },
+  ];
+
+  it('totals spending net of refunds', () => {
+    const { totals } = buildReview({
+      transactions: [
+        { id: 1, categoryId: 1, amount: 100, type: 'expense', date: monthsAgo(0) },
+        { id: 2, categoryId: 1, amount: 30, type: 'refund', date: monthsAgo(0) },
+        { id: 3, categoryId: 2, amount: 50, type: 'expense', date: monthsAgo(1) },
+      ],
+      categories, months: 12, now,
+    });
+
+    expect(totals.spent).toBe(150);
+    expect(totals.refunded).toBe(30);
+    expect(totals.net).toBe(120);
+    expect(totals.transactionCount).toBe(3);
+  });
+
+  it('ignores anything older than the window', () => {
+    const { totals } = buildReview({
+      transactions: [
+        { id: 1, categoryId: 1, amount: 100, type: 'expense', date: monthsAgo(1) },
+        { id: 2, categoryId: 1, amount: 999, type: 'expense', date: monthsAgo(20) },
+      ],
+      categories, months: 6, now,
+    });
+
+    expect(totals.net).toBe(100);
+    expect(totals.transactionCount).toBe(1);
+  });
+
+  it('charts a month with no spending as a real zero', () => {
+    const { series } = buildReview({
+      transactions: [{ id: 1, categoryId: 1, amount: 100, type: 'expense', date: monthsAgo(0) }],
+      categories, months: 4, now,
+    });
+
+    expect(series).toHaveLength(4);
+    expect(series.map(row => row.spent)).toEqual([0, 0, 0, 100]);
+    expect(series.at(-1).label).toBe('Aug 26');
+  });
+
+  it('ranks categories by what they truly cost, after refunds', () => {
+    const { categories: rows } = buildReview({
+      transactions: [
+        { id: 1, categoryId: 1, amount: 200, type: 'expense', date: monthsAgo(0) },
+        { id: 2, categoryId: 1, amount: 150, type: 'refund', date: monthsAgo(0) },
+        { id: 3, categoryId: 2, amount: 120, type: 'expense', date: monthsAgo(0) },
+      ],
+      categories, months: 12, now,
+    });
+
+    // Food passed £200 through but cost £50, so Fun is the bigger spend.
+    expect(rows.map(row => row.name)).toEqual(['Fun', 'Food']);
+    expect(rows[0].total).toBe(120);
+    expect(rows[1].total).toBe(50);
+    expect(rows[0].share).toBeCloseTo(120 / 170 * 100, 1);
+  });
+
+  it('names a category that has since been deleted rather than dropping its spend', () => {
+    const { categories: rows } = buildReview({
+      transactions: [{ id: 1, categoryId: 99, amount: 40, type: 'expense', date: monthsAgo(0) }],
+      categories, months: 12, now,
+    });
+
+    expect(rows[0]).toMatchObject({ name: 'Deleted category', total: 40 });
+  });
+
+  it('counts income and what was kept', () => {
+    const { totals } = buildReview({
+      transactions: [{ id: 1, categoryId: 1, amount: 400, type: 'expense', date: monthsAgo(0) }],
+      incomeEvents: [
+        { id: 1, amount: 1000, date: monthsAgo(0) },
+        { id: 2, amount: 1000, date: monthsAgo(1) },
+        { id: 3, amount: 999, date: monthsAgo(30) },  // outside the window
+      ],
+      categories, months: 12, now,
+    });
+
+    expect(totals.income).toBe(2000);
+    expect(totals.saved).toBe(1600);
+  });
+
+  it('finds the busiest and quietest months that actually happened', () => {
+    const { busiest, quietest } = buildReview({
+      transactions: [
+        { id: 1, categoryId: 1, amount: 500, type: 'expense', date: monthsAgo(1) },
+        { id: 2, categoryId: 1, amount: 50, type: 'expense', date: monthsAgo(2) },
+      ],
+      categories, months: 12, now,
+    });
+
+    // Ten empty months in the window must not be crowned "quietest".
+    expect(busiest.spent).toBe(500);
+    expect(quietest.spent).toBe(50);
+  });
+
+  it('picks the biggest single outgoing, never a refund', () => {
+    const { biggest } = buildReview({
+      transactions: [
+        { id: 1, categoryId: 1, amount: 90, type: 'expense', date: monthsAgo(0) },
+        { id: 2, categoryId: 1, amount: 500, type: 'refund', date: monthsAgo(0) },
+      ],
+      categories, months: 12, now,
+    });
+
+    expect(biggest.id).toBe(1);
+  });
+
+  it('measures subscription creep between the first and last months that had any', () => {
+    const { subscriptionTrend } = buildReview({
+      transactions: [
+        { id: 1, categoryId: 1, amount: 10, type: 'expense', subscriptionId: 7, date: monthsAgo(5) },
+        { id: 2, categoryId: 1, amount: 25, type: 'expense', subscriptionId: 7, date: monthsAgo(0) },
+      ],
+      subscriptions: [{ id: 7, name: 'Streaming' }],
+      categories, months: 12, now,
+    });
+
+    expect(subscriptionTrend).toMatchObject({ first: 10, last: 25, change: 15, changePct: 150, total: 35 });
+  });
+
+  it('reports no subscription trend from a single month', () => {
+    const { subscriptionTrend } = buildReview({
+      transactions: [{ id: 1, categoryId: 1, amount: 10, type: 'expense', subscriptionId: 7, date: monthsAgo(0) }],
+      subscriptions: [{ id: 7, name: 'Streaming' }],
+      categories, months: 12, now,
+    });
+
+    expect(subscriptionTrend).toBeNull();
+  });
+
+  it('says plainly when there is nothing to review', () => {
+    const review = buildReview({ categories, months: 12, now });
+
+    expect(review.hasData).toBe(false);
+    expect(review.totals.net).toBe(0);
+    expect(review.categories).toEqual([]);
+    expect(review.busiest).toBeNull();
+    expect(review.series).toHaveLength(12);
   });
 });

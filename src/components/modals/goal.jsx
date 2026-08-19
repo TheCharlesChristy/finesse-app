@@ -3,7 +3,7 @@ import { format } from 'date-fns';
 
 import DateInput from '../DateInput';
 import { Modal, Field } from '../ui';
-import { fmt, getIncomeFrequency, roundMoney } from '../../utils';
+import { fmt, getDebtPayoff, getIncomeFrequency, roundMoney } from '../../utils';
 import { ColourPicker, PALETTE } from './shared';
 
 const FREQ_NOUN = {
@@ -22,6 +22,8 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
   const [saved, setSaved] = useState(goal?.saved != null ? String(goal.saved) : '');
   const [perCycle, setPerCycle] = useState(goal?.perCycleContribution ? String(goal.perCycleContribution) : '');
   const [incomeId, setIncomeId] = useState(goal?.incomeId != null ? String(goal.incomeId) : (incomes[0]?.id ? String(incomes[0].id) : ''));
+  const [apr, setApr] = useState(goal?.apr ? String(goal.apr) : '');
+  const [minimumPayment, setMinimumPayment] = useState(goal?.minimumPayment ? String(goal.minimumPayment) : '');
   const [targetDate, setTargetDate] = useState(goal?.targetDate ? format(new Date(goal.targetDate), 'yyyy-MM-dd') : '');
   const [useTargetDate, setUseTargetDate] = useState(Boolean(goal?.targetDate));
   const [color, setColor] = useState(goal?.color || PALETTE[0]);
@@ -32,10 +34,20 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
   const savedValue = parseFloat(saved) || 0;
   const canSubmit = name.trim() && targetValue > 0;
 
+  const aprValue = parseFloat(apr) || 0;
   const linkedIncome = incomes.find(item => String(item.id) === String(incomeId));
   const cycleNoun = linkedIncome ? (FREQ_NOUN[getIncomeFrequency(linkedIncome)] || 'month') : 'month';
   const cyclesNeeded = perCycleValue > 0
     ? Math.ceil(Math.max(0, targetValue - savedValue) / perCycleValue)
+    : null;
+
+  // Live preview of what the interest actually costs, built from the same
+  // function the Goals page uses — so the modal can never disagree with it.
+  const payoff = (isDebt && aprValue > 0 && targetValue > 0 && perCycleValue > 0)
+    ? getDebtPayoff(
+      { kind: 'debt', target: targetValue, saved: savedValue, apr: aprValue, perCycleContribution: perCycleValue, incomeId: incomeId ? Number(incomeId) : null },
+      incomes,
+    )
     : null;
 
   const handleSubmit = () => {
@@ -46,6 +58,8 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
       target: targetValue,
       saved: savedValue,
       perCycleContribution: perCycleValue,
+      apr: isDebt ? aprValue : 0,
+      minimumPayment: isDebt ? (parseFloat(minimumPayment) || 0) : 0,
       incomeId: perCycleValue > 0 && incomeId ? Number(incomeId) : null,
       targetDate: useTargetDate && targetDate ? new Date(`${targetDate}T00:00:00`).toISOString() : null,
       color,
@@ -91,6 +105,23 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
           )}
         </Field>
 
+        {isDebt && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Field label="Interest rate (APR %)" hint="Leave blank if it charges none.">
+              {id => (
+                <input id={id} className="glass-input" type="number" min="0" step="0.1" placeholder="0.0"
+                  value={apr} onChange={e => setApr(e.target.value)} />
+              )}
+            </Field>
+            <Field label="Minimum payment (£)" hint="Used when ordering payoffs.">
+              {id => (
+                <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
+                  value={minimumPayment} onChange={e => setMinimumPayment(e.target.value)} />
+              )}
+            </Field>
+          </div>
+        )}
+
         {incomes.length > 0 && (
           <>
             <Field label="Set aside automatically (£)"
@@ -115,7 +146,29 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
           </>
         )}
 
-        {cyclesNeeded != null && targetValue > 0 && (
+        {payoff ? (
+          <div style={{
+            fontSize: 12, borderRadius: 8, padding: '9px 12px', lineHeight: 1.6,
+            background: payoff.neverClears ? 'rgba(255,107,138,0.1)' : 'rgba(255,255,255,0.04)',
+            color: payoff.neverClears ? 'var(--danger)' : 'var(--text-muted)',
+          }}>
+            {payoff.neverClears ? (
+              <>
+                At {fmt(perCycleValue)} every {cycleNoun} this debt never clears —
+                interest alone is about {fmt(payoff.interestPerCycle)} per {cycleNoun}.
+                Pay more than that and it starts coming down.
+              </>
+            ) : (
+              <>
+                {payoff.cycles} × {cycleNoun} to clear, costing {fmt(payoff.totalInterest)} in
+                interest on top of the {fmt(Math.max(0, targetValue - savedValue))} owed.
+                <span style={{ display: 'block', marginTop: 3 }}>
+                  Pending payments are held back from your safe-to-spend figure.
+                </span>
+              </>
+            )}
+          </div>
+        ) : cyclesNeeded != null && targetValue > 0 && (
           <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '9px 12px', lineHeight: 1.6 }}>
             {fmt(perCycleValue)} every {cycleNoun} — {cyclesNeeded} {cyclesNeeded === 1 ? cycleNoun : `× ${cycleNoun}`} to reach {fmt(targetValue)}.
             <span style={{ display: 'block', marginTop: 3 }}>

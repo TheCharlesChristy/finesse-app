@@ -84,13 +84,13 @@ for (const expected of ['£2,000.00', '£400.00 allocated', '£1,600.00 unalloca
 step('dashboard totals reconcile (2000 income − 400 allocated, 374.50 left of 400)');
 
 for (const name of ['Accounts', 'Transactions', 'Can I Purchase It', 'Calendar', 'Subscriptions',
-                    'Forecasting', 'Goals', 'Wishlist', 'Variables', 'Settings', 'Dashboard']) {
+                    'Forecasting', 'Looking Back', 'Goals', 'Wishlist', 'Variables', 'Settings', 'Dashboard']) {
   await page.getByRole('button', { name, exact: true }).click();
   await page.waitForTimeout(350);
   const heading = await page.locator('h1').innerText();
   if (!heading.includes(name)) errors.push(`view "${name}" did not render (h1 was "${heading}")`);
 }
-step('all 11 views render');
+step('all 12 views render');
 
 await page.getByRole('button', { name: 'Adjust Groceries' }).click();
 await page.getByRole('dialog').waitFor();
@@ -375,6 +375,142 @@ if (!/counters match the transaction log/.test(integrity)) {
   errors.push(`integrity check did not report a clean result: ${detail}`);
 }
 step('integrity check verifies counters against the log');
+
+// ── Storage, privacy and import ──────────────────────────────────────────
+
+// Still on Settings. The two cards guarding the data have to render, and the
+// storage one has to say something definite rather than sit on "Checking…".
+const settingsText = await page.locator('body').innerText();
+for (const expected of ['Storage', 'Privacy', 'Import Bank Statement']) {
+  if (!settingsText.includes(expected)) errors.push(`settings missing: ${expected}`);
+}
+if (/Checking…/.test(settingsText)) errors.push('storage state never resolved');
+if (!/(persistent|evictable|doesn’t expose storage persistence)/i.test(settingsText)) {
+  errors.push('storage card reports no persistence state');
+}
+step('storage and privacy cards render with a resolved state');
+
+// A default expense category, so imported rows that match no rule still have
+// somewhere to go — and so this exercises the defaultCategoryId path.
+await page.getByRole('combobox', { name: 'Default expense category' }).click();
+await page.getByRole('option', { name: /Groceries/ }).first().click();
+await page.waitForTimeout(400);
+if (!/Groceries/.test(await page.locator('body').innerText())) {
+  errors.push('default expense category was not set');
+}
+step('default expense category set');
+
+// The statement importer is the longest new flow, so at minimum it must open,
+// parse a file, and reach the review step with rows in it.
+await page.getByRole('button', { name: /Import Bank Statement/ }).click();
+await page.getByRole('dialog').waitFor({ timeout: 5000 });
+await page.setInputFiles('input[type="file"][accept*="csv"]', {
+  name: 'statement.csv',
+  mimeType: 'text/csv',
+  buffer: Buffer.from(
+    'Date,Description,Amount,Balance\n'
+    + '01/07/2026,COFFEE HUT,-3.20,996.80\n'
+    + '02/07/2026,TESCO STORES,-41.05,955.75\n'
+    + '03/07/2026,REFUND ASOS,18.99,974.74\n',
+  ),
+});
+await page.waitForTimeout(600);
+
+const mapText = await page.getByRole('dialog').innerText();
+if (!/Which column is which/i.test(mapText)) errors.push(`importer did not reach the mapping step:\n${mapText}`);
+// The guess has to be right on an ordinary statement, or every import is manual.
+if (!/2026-07-01/.test(mapText) || !/3\.20/.test(mapText)) {
+  errors.push(`column mapping preview wrong:\n${mapText}`);
+}
+await page.getByRole('button', { name: /Review 3 rows/ }).click();
+await page.waitForTimeout(500);
+
+const reviewText = await page.getByRole('dialog').innerText();
+if (!/Review before importing/i.test(reviewText)) errors.push('importer did not reach the review step');
+if (!/COFFEE HUT/.test(reviewText)) errors.push('review step lists no rows');
+// £3.20 + £41.05 out, £18.99 back.
+if (!/£44\.25/.test(reviewText)) errors.push(`review totals wrong:\n${reviewText}`);
+if (!/£18\.99/.test(reviewText)) errors.push('refund row not recognised as money in');
+// The balance column is present, so reconciliation must have an opinion.
+if (!/statement closes at/i.test(reviewText)) errors.push('reconciliation not reported');
+step('statement importer maps columns, reviews rows and reconciles');
+
+await page.getByRole('button', { name: /^Import 3 transactions$/ }).click();
+await page.waitForTimeout(900);
+
+await page.getByRole('button', { name: 'Transactions', exact: true }).click();
+await page.waitForTimeout(600);
+const imported = await page.locator('body').innerText();
+for (const expected of ['COFFEE HUT', 'TESCO STORES', 'REFUND ASOS']) {
+  if (!imported.includes(expected)) errors.push(`imported transaction missing: ${expected}`);
+}
+step('imported rows land in the ledger');
+
+// Re-importing the same file must find them all as duplicates.
+await page.getByRole('button', { name: /Import CSV/ }).click();
+await page.getByRole('dialog').waitFor({ timeout: 5000 });
+await page.setInputFiles('input[type="file"][accept*="csv"]', {
+  name: 'statement.csv',
+  mimeType: 'text/csv',
+  buffer: Buffer.from(
+    'Date,Description,Amount,Balance\n'
+    + '01/07/2026,COFFEE HUT,-3.20,996.80\n'
+    + '02/07/2026,TESCO STORES,-41.05,955.75\n'
+    + '03/07/2026,REFUND ASOS,18.99,974.74\n',
+  ),
+});
+await page.waitForTimeout(600);
+await page.getByRole('button', { name: /Review 3 rows/ }).click();
+await page.waitForTimeout(500);
+const secondPass = await page.getByRole('dialog').innerText();
+if (!/Already logged/.test(secondPass)) errors.push('re-import did not flag duplicates');
+if (await page.getByRole('button', { name: /^Import \d+ transactions?$/ }).isEnabled()) {
+  errors.push('re-import still offers to import already-logged rows');
+}
+await page.getByRole('button', { name: 'Close dialog' }).click();
+await page.waitForTimeout(300);
+step('re-importing the same statement imports nothing twice');
+
+// ── Looking back ─────────────────────────────────────────────────────────
+
+await page.getByRole('button', { name: 'Looking Back', exact: true }).click();
+await page.waitForTimeout(700);
+const review = await page.locator('body').innerText();
+for (const expected of ['Month by month', 'Where it went', 'Who got it', 'Spent', 'Kept']) {
+  if (!review.includes(expected)) errors.push(`review view missing: ${expected}`);
+}
+// Switching the window must not blank the page.
+await page.getByRole('button', { name: '3 months', exact: true }).click();
+await page.waitForTimeout(500);
+if (!/Month by month/.test(await page.locator('body').innerText())) {
+  errors.push('review view broke when the window changed');
+}
+step('looking-back view renders and survives a window change');
+
+// ── Debt interest ────────────────────────────────────────────────────────
+
+await page.getByRole('button', { name: 'Goals', exact: true }).click();
+await page.waitForTimeout(500);
+await page.getByRole('button', { name: '+ Add Goal' }).click();
+await page.getByRole('dialog').waitFor({ timeout: 5000 });
+await page.getByRole('button', { name: 'Paying off' }).click();
+await page.getByLabel('Name').fill('Credit card');
+await page.getByLabel('Total owed (£)').fill('1000');
+await page.getByLabel('Interest rate (APR %)').fill('24');
+await page.getByLabel('Set aside automatically (£)').fill('100');
+await page.waitForTimeout(400);
+
+const debtModal = await page.getByRole('dialog').innerText();
+// £1000 at £100/month is 10 payments without interest; with 24% APR it is more.
+if (!/interest/i.test(debtModal)) errors.push(`debt modal shows no interest preview:\n${debtModal}`);
+if (/\b10 × month\b/.test(debtModal)) errors.push('debt preview ignored the interest');
+await page.getByRole('button', { name: 'Add Debt', exact: true }).click();
+await page.getByRole('dialog').waitFor({ state: 'detached' });
+await page.waitForTimeout(600);
+
+const goalsAfter = await page.locator('body').innerText();
+if (!/24% APR/.test(goalsAfter)) errors.push('debt card does not show its APR and interest cost');
+step('debt goal models interest rather than dividing the balance');
 
 await browser.close();
 

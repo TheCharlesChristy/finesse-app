@@ -408,9 +408,22 @@ export async function updateCategory(id, data) {
   return db.categories.update(id, nextData);
 }
 
+/**
+ * Delete a category, its transactions and its subscriptions.
+ *
+ * Returns everything it removed, with ids intact, so `restoreCategory` can put
+ * it back exactly — this is the most destructive single action in the app, and
+ * an undo that restores a lookalike copy would be worse than none at all.
+ * Callers that don't want the snapshot can simply ignore the return value.
+ */
 export async function deleteCategory(id) {
+  const snapshot = { category: null, transactions: [], subscriptions: [] };
+
   await db.transaction('rw', db.categories, db.transactions, db.accounts, db.subscriptions, async () => {
     const transactions = await db.transactions.where('categoryId').equals(id).toArray();
+    snapshot.category = await db.categories.get(id);
+    snapshot.transactions = transactions;
+    snapshot.subscriptions = await db.subscriptions.where('categoryId').equals(id).toArray();
     // Signed, so deleting a category that contains refunds doesn't credit the
     // account for money that was never spent.
     const refundByAccount = transactions.reduce((acc, tx) => {
@@ -433,6 +446,52 @@ export async function deleteCategory(id) {
     await db.subscriptions.where('categoryId').equals(id).delete();
     await db.categories.delete(id);
   });
+
+  return snapshot;
+}
+
+/**
+ * Put back what `deleteCategory` removed.
+ *
+ * The account correction is recomputed from the restored transactions rather
+ * than stored alongside them, so it is always the exact inverse of what the
+ * delete applied — one signed sum, one sign flip, no second source of truth to
+ * drift. `spent` rides along on the category row untouched, since the
+ * transactions going back are precisely the ones it already counted.
+ *
+ * Safe to call twice: `put` is idempotent on a fixed id, and the balance is
+ * only adjusted when the category was actually missing.
+ */
+export async function restoreCategory(snapshot) {
+  const { category, transactions = [], subscriptions = [] } = snapshot || {};
+  if (!category?.id) return 0;
+
+  await db.transaction('rw', db.categories, db.transactions, db.accounts, db.subscriptions, async () => {
+    const alreadyPresent = await db.categories.get(category.id);
+
+    await db.categories.put(category);
+    if (transactions.length) await db.transactions.bulkPut(transactions);
+    if (subscriptions.length) await db.subscriptions.bulkPut(subscriptions);
+    if (alreadyPresent) return;
+
+    const deltaByAccount = transactions.reduce((acc, tx) => {
+      if (tx.accountId == null) return acc;
+      const key = Number(tx.accountId);
+      acc[key] = roundMoney((acc[key] || 0) + getSignedAmount(tx));
+      return acc;
+    }, {});
+
+    for (const [accountId, amount] of Object.entries(deltaByAccount)) {
+      const account = await db.accounts.get(Number(accountId));
+      if (account) {
+        await db.accounts.update(Number(accountId), {
+          balance: roundMoney((account.balance || 0) - amount),
+        });
+      }
+    }
+  });
+
+  return category.id;
 }
 
 // ── Transaction helpers ──────────────────────────────────────────────────────
@@ -1016,6 +1075,10 @@ export async function addGoal(goal, accountId = null) {
     saved: Math.max(0, roundMoney(goal.saved || 0)),
     targetDate: goal.targetDate || null,
     perCycleContribution: Math.max(0, roundMoney(goal.perCycleContribution || 0)),
+    // Only meaningful on a debt, but stored uniformly so the shape doesn't
+    // depend on `kind` — a saving goal simply leaves them at zero.
+    apr: Math.max(0, Number(goal.apr) || 0),
+    minimumPayment: Math.max(0, roundMoney(goal.minimumPayment || 0)),
     incomeId: goal.incomeId != null ? Number(goal.incomeId) : null,
     wishlistItemId: goal.wishlistItemId != null ? Number(goal.wishlistItemId) : null,
     color: goal.color || ACCOUNT_COLORS[0],
@@ -1028,6 +1091,8 @@ export async function updateGoal(id, data) {
   if (next.target != null) next.target = Math.abs(roundMoney(next.target));
   if (next.saved != null) next.saved = roundMoney(next.saved);
   if (next.perCycleContribution != null) next.perCycleContribution = Math.max(0, roundMoney(next.perCycleContribution));
+  if (next.apr != null) next.apr = Math.max(0, Number(next.apr) || 0);
+  if (next.minimumPayment != null) next.minimumPayment = Math.max(0, roundMoney(next.minimumPayment));
   if (next.incomeId != null) next.incomeId = Number(next.incomeId);
   return db.goals.update(id, next);
 }
@@ -1353,6 +1418,24 @@ export async function clearAllData() {
   );
 }
 
+// Receipt photos are Blobs. JSON.stringify turns a Blob into `{}`, so leaving
+// them in an export would write a field that looks present, imports as garbage,
+// and tells the user nothing went wrong. They are dropped deliberately instead,
+// and the export says how many it left behind.
+const RECEIPT_FIELDS = ['receipt', 'receiptThumb', 'receiptMeta'];
+
+function stripReceipts(transactions = []) {
+  let receiptsOmitted = 0;
+  const rows = transactions.map(tx => {
+    if (!tx.receipt && !tx.receiptThumb) return tx;
+    receiptsOmitted += 1;
+    const copy = { ...tx };
+    for (const field of RECEIPT_FIELDS) delete copy[field];
+    return copy;
+  });
+  return { rows, receiptsOmitted };
+}
+
 export async function exportData() {
   const [accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, subscriptions, variables, rules, templates, goals] = await Promise.all([
     db.accounts.toArray(),
@@ -1370,7 +1453,15 @@ export async function exportData() {
     db.templates.toArray(),
     db.goals.toArray(),
   ]);
-  return { accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, subscriptions, variables, rules, templates, goals, exportedAt: new Date().toISOString(), version: 8 };
+  const { rows: transactionRows, receiptsOmitted } = stripReceipts(transactions);
+  return {
+    accounts, accountTransfers, incomeEvents, settings, categories,
+    transactions: transactionRows,
+    wishlist, wishlistCategories, incomes, subscriptions, variables, rules, templates, goals,
+    receiptsOmitted,
+    exportedAt: new Date().toISOString(),
+    version: 8,
+  };
 }
 
 // Lightweight snapshot for the "share URL" feature: high-level setup only,
@@ -1402,8 +1493,12 @@ const EXPORT_TABLE_NAMES = ['categories', 'transactions', 'incomes', 'incomeEven
   'rules', 'templates', 'goals'];
 // Structural identifiers, always kept and never user-toggleable.
 const EXPORT_ALWAYS_INCLUDED_KEYS = new Set(['id', 'accountId']);
-// Pure linking/dedupe plumbing with no analytical meaning to a reader.
-const EXPORT_NEVER_INCLUDED_KEYS = new Set(['subscriptionRunKey', 'receiptKey']);
+// Pure linking/dedupe plumbing with no analytical meaning to a reader, plus the
+// receipt blobs — binary, unreadable as JSON, and far larger than everything
+// else in the file put together.
+const EXPORT_NEVER_INCLUDED_KEYS = new Set([
+  'subscriptionRunKey', 'receiptKey', ...RECEIPT_FIELDS,
+]);
 const EXPORT_SENSITIVE_FIELD_PATTERN = /note|memo|description|comment|url/i;
 
 export async function getExportableSchema() {

@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react';
-import { Bell, Download, Upload, FileText, RefreshCcw, RefreshCw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap, Info } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Bell, Download, Upload, FileText, FileUp, RefreshCcw, RefreshCw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap, Info, HardDrive, ShieldCheck, Lock } from 'lucide-react';
 import { fmt } from '../utils';
 import { notificationPermission, notificationsSupported, requestNotificationPermission } from '../notifications';
+import { formatBytes, getStorageEstimate, STORAGE_BEST_EFFORT, STORAGE_PERSISTED, STORAGE_UNSUPPORTED } from '../storage';
+import { buildPinSettings, isValidPin, lockSupported, DEFAULT_LOCK_DELAY_MS, LOCK_DELAYS, MAX_PIN_LENGTH, MIN_PIN_LENGTH } from '../lock';
 import { APP_COMMIT, APP_VERSION, formatBuiltAt } from '../buildInfo';
 import { isUpdatePending, updateApp } from '../pwa';
 import CategorySelect from '../components/CategorySelect';
@@ -37,6 +39,9 @@ export default function Settings({
   onDeleteTemplate,
   nudgeCount = 0,
   onRecalculate,
+  storageState = null,
+  onRequestPersistence,
+  onImportStatement,
   showConfirm,
   showAlert,
   showPrompt,
@@ -48,6 +53,12 @@ export default function Settings({
   const [templateCategoryId, setTemplateCategoryId] = useState('');
   const [permission, setPermission] = useState(() => notificationPermission());
   const [integrityStatus, setIntegrityStatus] = useState(null);
+  const [estimate, setEstimate] = useState(null);
+  const [isRequestingPersistence, setIsRequestingPersistence] = useState(false);
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [pinError, setPinError] = useState('');
+  const [isSavingPin, setIsSavingPin] = useState(false);
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [isUpdatingApp, setIsUpdatingApp] = useState(false);
   const [updateReady, setUpdateReady] = useState(() => isUpdatePending());
@@ -60,6 +71,68 @@ export default function Settings({
     } finally {
       setIsRecalculating(false);
     }
+  };
+
+  // The estimate is only read here, where it is shown — it costs a promise and
+  // nothing outside this card uses it. Re-read after a persistence request so
+  // the figures and the state never disagree.
+  useEffect(() => {
+    let cancelled = false;
+    getStorageEstimate().then(result => { if (!cancelled) setEstimate(result); });
+    return () => { cancelled = true; };
+  }, [storageState]);
+
+  const handleRequestPersistence = async () => {
+    if (!onRequestPersistence) return;
+    setIsRequestingPersistence(true);
+    try {
+      const state = await onRequestPersistence();
+      if (state === STORAGE_BEST_EFFORT) {
+        await showAlert(
+          'The browser declined for now. This usually changes once the app has been used a few times, or added to your home screen — try again later.\n\nIn the meantime, an exported backup is the reliable protection.',
+          { title: 'Not granted yet' },
+        );
+      }
+    } finally {
+      setIsRequestingPersistence(false);
+    }
+  };
+
+  const pinIsSet = Boolean(settings?.pinHash && settings?.pinSalt);
+
+  const handleSetPin = async () => {
+    setPinError('');
+    if (!isValidPin(newPin)) {
+      setPinError(`Use ${MIN_PIN_LENGTH} to ${MAX_PIN_LENGTH} digits.`);
+      return;
+    }
+    if (newPin !== confirmPin) {
+      setPinError('The two PINs don’t match.');
+      return;
+    }
+
+    setIsSavingPin(true);
+    try {
+      const patch = await buildPinSettings(newPin);
+      if (!patch) {
+        setPinError('This browser can’t derive a PIN securely.');
+        return;
+      }
+      onSaveSettings?.({ ...(settings || {}), ...patch });
+      setNewPin('');
+      setConfirmPin('');
+    } finally {
+      setIsSavingPin(false);
+    }
+  };
+
+  const handleRemovePin = async () => {
+    const ok = await showConfirm(
+      'Remove the PIN? The app will open straight to your finances again.',
+      { title: 'Remove PIN', confirmText: 'Remove', danger: true },
+    );
+    if (!ok) return;
+    onSaveSettings?.({ ...(settings || {}), pinHash: null, pinSalt: null });
   };
 
   const handleUpdateApp = async () => {
@@ -265,6 +338,7 @@ export default function Settings({
               value={settings?.defaultCategoryId ? String(settings.defaultCategoryId) : ''}
               onChange={handleDefaultCategoryChange}
               placeholder="No default selected"
+              aria-label="Default expense category"
               showAmounts
             />
           </div>
@@ -472,6 +546,164 @@ export default function Settings({
         )}
       </div>
 
+      {/* Privacy */}
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+          <Lock size={16} color="var(--accent-purple)" aria-hidden="true" />
+          <CardTitle as="h2">Privacy</CardTitle>
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>
+          Hides your finances from whoever is holding the phone. Neither option
+          encrypts anything &mdash; the data on this device stays readable to
+          anyone who knows where to look, so treat this as a curtain, not a safe.
+        </div>
+
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', marginBottom: 18 }}>
+          <input
+            type="checkbox"
+            checked={settings?.privacyScreenEnabled !== false}
+            onChange={e => onSaveSettings?.({ ...(settings || {}), privacyScreenEnabled: e.target.checked })}
+            style={{ marginTop: 2, width: 16, height: 16, accentColor: 'var(--accent-mint)' }}
+          />
+          <span>
+            <span style={{ fontSize: 13, fontWeight: 600, display: 'block' }}>Cover the screen in the app switcher</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+              Blanks the app the moment it goes to the background, so the preview
+              your phone keeps doesn&rsquo;t show your balances.
+            </span>
+          </span>
+        </label>
+
+        {!lockSupported() ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 12, borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 16 }}>
+            A PIN needs a secure connection (https), which this page isn&rsquo;t using — so it isn&rsquo;t offered here.
+          </div>
+        ) : pinIsSet ? (
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--good)', fontSize: 13, marginBottom: 12 }}>
+              <ShieldCheck size={15} aria-hidden="true" /> A PIN is set.
+            </div>
+            <div className="field" style={{ marginBottom: 14 }}>
+              <label className="field-label" htmlFor="lock-delay">Ask for it again</label>
+              <select id="lock-delay" className="glass-input"
+                value={String(settings?.lockDelayMs ?? DEFAULT_LOCK_DELAY_MS)}
+                onChange={e => onSaveSettings?.({ ...(settings || {}), lockDelayMs: Number(e.target.value) })}>
+                {LOCK_DELAYS.map(([ms, label]) => (
+                  <option key={ms} value={ms}>{label} in the background</option>
+                ))}
+              </select>
+            </div>
+            <button className="btn-secondary" onClick={handleRemovePin}
+              style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Trash2 size={14} /> Remove PIN
+            </button>
+          </div>
+        ) : (
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 16 }}>
+            <div className="mobile-actions" style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div className="field" style={{ flex: 1, minWidth: 140 }}>
+                <label className="field-label" htmlFor="new-pin">New PIN</label>
+                <input
+                  id="new-pin"
+                  className="glass-input"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="new-password"
+                  placeholder={`${MIN_PIN_LENGTH}–${MAX_PIN_LENGTH} digits`}
+                  value={newPin}
+                  onChange={e => setNewPin(e.target.value.replace(/\D/g, '').slice(0, MAX_PIN_LENGTH))}
+                />
+              </div>
+              <div className="field" style={{ flex: 1, minWidth: 140 }}>
+                <label className="field-label" htmlFor="confirm-pin">Confirm</label>
+                <input
+                  id="confirm-pin"
+                  className="glass-input"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="new-password"
+                  placeholder="Repeat it"
+                  value={confirmPin}
+                  onChange={e => setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, MAX_PIN_LENGTH))}
+                />
+              </div>
+              <button className="btn-primary mobile-full" onClick={handleSetPin}
+                disabled={!isValidPin(newPin) || isSavingPin}
+                style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Lock size={14} /> {isSavingPin ? 'Saving…' : 'Set PIN'}
+              </button>
+            </div>
+            {pinError && (
+              <div style={{ color: 'var(--danger)', fontSize: 11, marginTop: 10 }}>{pinError}</div>
+            )}
+            <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10, lineHeight: 1.6 }}>
+              Stored as a salted hash, never as the digits themselves. Forgetting it
+              costs you nothing but the lock &mdash; clear the PIN by importing a
+              backup, or by clearing this site&rsquo;s data.
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Storage durability */}
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+          <HardDrive size={16} color="var(--accent-purple)" aria-hidden="true" />
+          <CardTitle as="h2">Storage</CardTitle>
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>
+          By default a browser treats app data as disposable and may clear it to
+          reclaim space, or after a long enough gap between visits. Persistent
+          storage asks it not to &mdash; then only you can clear it.
+        </div>
+
+        {storageState === STORAGE_UNSUPPORTED ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            This browser doesn&rsquo;t expose storage persistence, so there is nothing to ask for.
+            Keep exporting backups.
+          </div>
+        ) : storageState === STORAGE_PERSISTED ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--good)', fontSize: 13 }}>
+            <ShieldCheck size={15} aria-hidden="true" /> Storage is persistent — this browser won&rsquo;t evict your data.
+          </div>
+        ) : (
+          <>
+            <button className="btn-primary" onClick={handleRequestPersistence}
+              disabled={isRequestingPersistence || storageState === null}
+              style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <ShieldCheck size={14} /> {isRequestingPersistence ? 'Asking…' : 'Keep my data'}
+            </button>
+            <div style={{ color: 'var(--warn)', fontSize: 11, marginTop: 10, lineHeight: 1.6 }}>
+              {storageState === null
+                ? 'Checking…'
+                : 'Your data is currently evictable. Browsers decide this themselves — being installed to your home screen and using the app regularly both make a yes more likely.'}
+            </div>
+          </>
+        )}
+
+        {estimate && (
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 16, paddingTop: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 7 }}>
+              <span style={{ color: 'var(--text-muted)' }}>Used</span>
+              <span style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                {formatBytes(estimate.usage)} of {formatBytes(estimate.quota)}
+              </span>
+            </div>
+            <div style={{ height: 6, borderRadius: 4, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
+              <div style={{
+                width: `${Math.max(1, Math.min(100, estimate.percent))}%`, height: '100%',
+                background: estimate.percent > 85 ? 'var(--danger)' : 'var(--accent-purple)',
+                borderRadius: 4,
+              }} />
+            </div>
+            <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 8, lineHeight: 1.6 }}>
+              Browsers round these figures deliberately, so treat them as a rough guide.
+              Receipt photos are by far the largest thing Finesse stores.
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Data management */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
         <CardTitle as="h2" style={{ marginBottom: 8 }}>Data &amp; Sync</CardTitle>
@@ -489,12 +721,17 @@ export default function Settings({
             <Upload size={14} /> Import Backup
             <input type="file" accept=".json" onChange={handleFileImport} style={{ display: 'none' }} />
           </label>
+          <button className="btn-secondary" onClick={onImportStatement} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <FileUp size={14} /> Import Bank Statement (.csv)
+          </button>
         </div>
         <div style={{ color: settings?.lastBackupAt ? 'var(--text-muted)' : 'var(--warn)', fontSize: 11, marginTop: 10 }}>
           {settings?.lastBackupAt
             ? `Last backup ${new Date(settings.lastBackupAt).toLocaleDateString('en-GB')}. `
             : 'You have never exported a backup. Your data exists only in this browser. '}
-          Import will ask whether to replace or merge existing data.
+          Where your device supports it, exporting opens the share sheet so the file can go
+          straight to Files, iCloud or another device. Import will ask whether to replace or
+          merge existing data.
         </div>
 
         <div className="mobile-actions mobile-actions-full" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 16 }}>

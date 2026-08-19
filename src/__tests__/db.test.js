@@ -9,6 +9,8 @@ import {
   updateTransaction,
   deleteTransaction,
   deleteCategory,
+  restoreCategory,
+  exportData,
   borrowBudgetBetweenCategories,
   topUpCategoryFromIncome,
   recalculateSpendCounters,
@@ -140,6 +142,112 @@ describe('spend counter invariants', () => {
 
     expect(await db.transactions.count()).toBe(0);
     expect((await getAccount(accountId)).balance).toBe(1000);
+  });
+});
+
+describe('receipts stay out of the JSON export', () => {
+  it('drops the blobs and reports how many it left behind', async () => {
+    const catId = await makeCategory();
+    await addTransaction({
+      accountId, categoryId: catId, amount: 12, note: 'Lunch',
+      receipt: new Blob(['full']), receiptThumb: new Blob(['thumb']),
+      receiptMeta: { bytes: 9 },
+    });
+    await addTransaction({ accountId, categoryId: catId, amount: 8, note: 'Coffee' });
+
+    const exported = await exportData();
+    const withPhoto = exported.transactions.find(tx => tx.note === 'Lunch');
+
+    expect(exported.receiptsOmitted).toBe(1);
+    expect(withPhoto).not.toHaveProperty('receipt');
+    expect(withPhoto).not.toHaveProperty('receiptThumb');
+    expect(withPhoto).not.toHaveProperty('receiptMeta');
+    // Everything else about the row is untouched.
+    expect(withPhoto.amount).toBe(12);
+
+    // A JSON round trip is the thing that would otherwise silently corrupt.
+    expect(() => JSON.stringify(exported)).not.toThrow();
+    expect(JSON.parse(JSON.stringify(exported)).transactions).toHaveLength(2);
+  });
+
+  it('reports nothing omitted when no receipts exist', async () => {
+    const catId = await makeCategory();
+    await addTransaction({ accountId, categoryId: catId, amount: 8 });
+
+    expect((await exportData()).receiptsOmitted).toBe(0);
+  });
+});
+
+describe('category delete is reversible', () => {
+  it('hands back everything it removed', async () => {
+    const catId = await makeCategory();
+    await addTransaction({ accountId, categoryId: catId, amount: 75 });
+    await addTransaction({ accountId, categoryId: catId, amount: 25 });
+    await db.subscriptions.add({ accountId, categoryId: catId, name: 'Netflix', amount: 10 });
+
+    const snapshot = await deleteCategory(catId);
+
+    expect(snapshot.category.id).toBe(catId);
+    expect(snapshot.transactions).toHaveLength(2);
+    expect(snapshot.subscriptions).toHaveLength(1);
+  });
+
+  it('restores the rows with their original ids, not lookalike copies', async () => {
+    const catId = await makeCategory();
+    const txId = await addTransaction({ accountId, categoryId: catId, amount: 75, note: 'Milk' });
+    const subId = await db.subscriptions.add({ accountId, categoryId: catId, name: 'Netflix', amount: 10 });
+
+    const snapshot = await deleteCategory(catId);
+    await restoreCategory(snapshot);
+
+    expect((await getCategory(catId)).name).toBe('Groceries');
+    expect((await db.transactions.get(txId)).note).toBe('Milk');
+    expect((await db.subscriptions.get(subId)).name).toBe('Netflix');
+    expect(await db.transactions.count()).toBe(1);
+  });
+
+  it('puts the account balance back exactly, including refunds', async () => {
+    const catId = await makeCategory();
+    await addTransaction({ accountId, categoryId: catId, amount: 75 });
+    await addTransaction({ accountId, categoryId: catId, amount: 20, type: 'refund' });
+
+    const before = (await getAccount(accountId)).balance;
+    const snapshot = await deleteCategory(catId);
+    expect((await getAccount(accountId)).balance).not.toBe(before);
+
+    await restoreCategory(snapshot);
+    expect((await getAccount(accountId)).balance).toBe(before);
+  });
+
+  it('leaves the spend counter matching the restored transaction log', async () => {
+    const catId = await makeCategory();
+    await addTransaction({ accountId, categoryId: catId, amount: 75 });
+    await addTransaction({ accountId, categoryId: catId, amount: 20, type: 'refund' });
+    const spentBefore = (await getCategory(catId)).spent;
+
+    await restoreCategory(await deleteCategory(catId));
+
+    expect((await getCategory(catId)).spent).toBe(spentBefore);
+    const report = await recalculateSpendCounters(accountId);
+    expect(report.repaired).toBe(0);
+  });
+
+  it('is idempotent — a double undo does not credit the account twice', async () => {
+    const catId = await makeCategory();
+    await addTransaction({ accountId, categoryId: catId, amount: 75 });
+
+    const before = (await getAccount(accountId)).balance;
+    const snapshot = await deleteCategory(catId);
+    await restoreCategory(snapshot);
+    await restoreCategory(snapshot);
+
+    expect((await getAccount(accountId)).balance).toBe(before);
+    expect(await db.transactions.count()).toBe(1);
+  });
+
+  it('ignores an empty snapshot rather than throwing', async () => {
+    await expect(restoreCategory(null)).resolves.toBe(0);
+    await expect(restoreCategory({})).resolves.toBe(0);
   });
 });
 

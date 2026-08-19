@@ -526,7 +526,7 @@ function StatCard({ label, value, hint, color }) {
   );
 }
 
-export default function Forecasting({ categories, settings, transactions, incomes = [], incomeEvents = [], transfers = [], subscriptions = [], account = null }) {
+export default function Forecasting({ categories, settings, transactions, incomes = [], incomeEvents = [], transfers = [], subscriptions = [], account = null, netWorth = null, accountCount = 1 }) {
   const [tab, setTab] = useState('outlook');
   const [horizonDays, setHorizonDays] = useState(DEFAULT_HORIZON_DAYS);
 
@@ -964,6 +964,61 @@ export default function Forecasting({ categories, settings, transactions, income
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
+            </div>
+          )}
+
+          {/* The account chart above says how one account is doing. This says
+              whether the whole estate is actually growing — the figure that
+              answers "am I better off than I was?". */}
+          {netWorth && netWorth.series.length > 1 && (
+            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+              <CardTitle as="h2" style={{ marginBottom: 6 }}>Net Worth</CardTitle>
+              <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>
+                Everything across {accountCount === 1 ? 'your account' : `all ${accountCount} accounts`}, over the last 90 days
+              </div>
+
+              <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 12, marginBottom: 18 }}>
+                {[
+                  ['Net worth', fmt(netWorth.current.netWorth), netWorth.current.netWorth >= 0 ? 'var(--good)' : 'var(--danger)'],
+                  ['Held', fmt(netWorth.current.assets), 'var(--text-primary)'],
+                  ['Owed', fmt(netWorth.current.debt), netWorth.current.debt > 0 ? 'var(--danger)' : 'var(--text-muted)'],
+                  ['90-day change', `${netWorth.change >= 0 ? '+' : '−'}${fmt(Math.abs(netWorth.change))}`,
+                    netWorth.change >= 0 ? 'var(--good)' : 'var(--warn)'],
+                ].map(([label, value, color]) => (
+                  <div key={label}>
+                    <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 4 }}>{label}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mobile-chart-scroll">
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={netWorth.series}>
+                    <defs>
+                      <linearGradient id="grad-networth" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#c084fc" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="#c084fc" stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid vertical={false} />
+                    <XAxis dataKey="label" interval={Math.max(0, Math.floor(netWorth.series.length / 6) - 1)} />
+                    <YAxis tickFormatter={v => `£${Math.round(v)}`} />
+                    <Tooltip content={<GlassTooltip />} />
+                    <Area type="monotone" dataKey="assets" name="Held"
+                      stroke="#c084fc" strokeWidth={2} fill="url(#grad-networth)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+
+              {netWorth.current.debt > 0 && !netWorth.debtHasHistory && (
+                <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 12, lineHeight: 1.6 }}>
+                  The line tracks what you hold. Finesse records what&rsquo;s left on a debt,
+                  not when each payment landed, so plotting {fmt(netWorth.current.debt)} of
+                  debt across these 90 days would claim you owed it all along — the net
+                  worth figure above is today&rsquo;s.
+                </div>
+              )}
             </div>
           )}
 

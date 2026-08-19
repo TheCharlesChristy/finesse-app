@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
-import { CalendarDays, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
+import { CalendarDays, CalendarRange, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
   getSettings, saveSettings, addCategory, updateCategory, deleteCategory,
-  addTransaction, addTransactionsBulk, updateTransaction, deleteTransaction,
+  addTransaction, addTransactionsBulk, updateTransaction, deleteTransaction, restoreCategory,
   addWishlistItem, updateWishlistItem, deleteWishlistItem,
   addWishlistCategory, updateWishlistCategory, deleteWishlistCategory, exportData, importData,
   exportSnapshot, exportChatSummary, getExportableSchema,
@@ -31,10 +31,11 @@ const SettingsView  = lazy(() => import('./views/Settings'));
 const Variables     = lazy(() => import('./views/Variables'));
 const CategoryDetail = lazy(() => import('./views/CategoryDetail'));
 const Goals         = lazy(() => import('./views/Goals'));
+const Review        = lazy(() => import('./views/Review'));
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
-  AdjustBudgetModal, ExportChatSummaryOptionsModal,
+  AdjustBudgetModal, ExportChatSummaryOptionsModal, ImportStatementModal,
   AddGoalModal, SaveForItemModal } from './components/modals';
 import { Modal } from './components/ui';
 import { useDialog } from './components/useDialog';
@@ -43,6 +44,10 @@ import QuickAdd from './components/QuickAdd';
 import CommandPalette from './components/CommandPalette';
 import NudgeCenter from './components/NudgeCenter';
 import { notifyNudges } from './notifications';
+import { getPersistenceState, requestPersistence, STORAGE_PERSISTED } from './storage';
+import { shareCsv, shareJson, SHARE_CANCELLED, SHARE_SHARED } from './share';
+import { DEFAULT_LOCK_DELAY_MS, shouldRelock } from './lock';
+import LockScreen from './components/LockScreen';
 
 // "g then <key>" navigation targets.
 const GOTO_KEYS = {
@@ -53,6 +58,7 @@ const GOTO_KEYS = {
   c: 'calendar',
   s: 'subscriptions',
   f: 'forecasting',
+  r: 'review',
   g: 'goals',
   w: 'wishlist',
   v: 'variables',
@@ -69,6 +75,7 @@ const SHORTCUTS = [
   ['G then C', 'Calendar'],
   ['G then F', 'Forecasting'],
   ['G then G', 'Goals'],
+  ['G then R', 'Looking Back'],
   ['G then X', 'Settings'],
   ['Esc', 'Close a dialog'],
   ['?', 'This list'],
@@ -82,6 +89,7 @@ const NAV = [
   { id: 'calendar',    label: 'Calendar',     Icon: CalendarDays },
   { id: 'subscriptions', label: 'Subscriptions', Icon: CreditCard },
   { id: 'forecasting', label: 'Forecasting',  Icon: TrendingUp },
+  { id: 'review',      label: 'Looking Back',  Icon: CalendarRange },
   { id: 'goals',       label: 'Goals',         Icon: PiggyBank },
   { id: 'wishlist',    label: 'Wishlist',      Icon: ShoppingBag },
   { id: 'variables',   label: 'Variables',     Icon: SlidersHorizontal },
@@ -155,11 +163,18 @@ export default function App() {
     const stored = Number(localStorage.getItem('finesse.activeAccountId'));
     return Number.isFinite(stored) && stored > 0 ? stored : null;
   });
+  // Whether the browser has promised to keep the database. Async, so it can't
+  // be derived during render — it starts null ("not yet known"), which the
+  // nudge builder treats as "say nothing" rather than "not protected".
+  const [storageState, setStorageState] = useState(null);
+  const [unlocked, setUnlocked] = useState(false);
+  const [obscured, setObscured] = useState(false);
+  const hiddenSince = useRef(null);
 
   const {
     accountsQuery, activeAccountId, accounts, accountTransfers, settings, categories, transactions,
     wishlistItems, wishlistCategories, incomeEvents, subscriptions, incomes, variables,
-    rules, templates, goals,
+    rules, templates, goals, netWorth,
   } = useFinesseData(selectedAccountId);
   const activeAccount = accounts.find(account => Number(account.id) === Number(activeAccountId)) || null;
 
@@ -171,6 +186,61 @@ export default function App() {
   useEffect(() => {
     if (activeAccountId) localStorage.setItem('finesse.activeAccountId', String(activeAccountId));
   }, [activeAccountId]);
+
+  // Read-only on load. Requesting persistence can prompt in some browsers, so
+  // that only ever happens from the button in Settings.
+  useEffect(() => {
+    let cancelled = false;
+    getPersistenceState().then(state => { if (!cancelled) setStorageState(state); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleRequestPersistence = useCallback(async () => {
+    const state = await requestPersistence();
+    setStorageState(state);
+    return state;
+  }, []);
+
+  // ── Privacy ──────────────────────────────────────────────────────────────
+  // `settings` is undefined until the query resolves, which is what tells a
+  // brand-new install ("no settings row", null) apart from "we don't know yet".
+  // Nothing financial renders in the meantime, or a PIN-protected app would
+  // flash its balances for a frame on every launch.
+  const settingsLoaded = settings !== undefined;
+  const pinSet = Boolean(settings?.pinHash && settings?.pinSalt);
+  const privacyScreenOn = settings?.privacyScreenEnabled !== false;
+
+  useEffect(() => {
+    if (!privacyScreenOn && !pinSet) return undefined;
+
+    const hide = () => {
+      hiddenSince.current = Date.now();
+      if (privacyScreenOn) setObscured(true);
+    };
+    const show = () => {
+      setObscured(false);
+      // Re-lock only after enough time away: asking for the PIN again because
+      // you glanced at a notification is how people turn this off.
+      if (pinSet && shouldRelock(hiddenSince.current, settings?.lockDelayMs ?? DEFAULT_LOCK_DELAY_MS)) {
+        setUnlocked(false);
+      }
+      hiddenSince.current = null;
+    };
+    const onVisibilityChange = () => (document.visibilityState === 'hidden' ? hide() : show());
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    // iOS fires pagehide where visibilitychange can be unreliable, and blur
+    // catches the app switcher being summoned without a full background.
+    window.addEventListener('pagehide', hide);
+    window.addEventListener('blur', hide);
+    window.addEventListener('focus', show);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', hide);
+      window.removeEventListener('blur', hide);
+      window.removeEventListener('focus', show);
+    };
+  }, [privacyScreenOn, pinSet, settings?.lockDelayMs]);
 
   // The action and snapshot have been consumed into state above; scrub them
   // from the URL so a refresh doesn't replay them.
@@ -297,28 +367,42 @@ export default function App() {
   // ── Settings / data handlers ─────────────────────────────────────────────
   const handleExport = useCallback(async () => {
     const data = await exportData();
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `finance-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const result = await shareJson({
+      data,
+      filename: `finance-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      title: 'Finesse backup',
+      text: 'Finesse backup — keep this somewhere off-device.',
+    });
+
+    // A dismissed share sheet means no backup was taken. Recording one anyway
+    // would silence the "no backup for N days" nudge on the strength of
+    // something the user actively cancelled.
+    if (result === SHARE_CANCELLED) return result;
 
     // Remember it, so "no backup for N days" can be honest about N.
     const current = await getSettings(activeAccountId);
     await saveSettings({ ...(current || {}), lastBackupAt: new Date().toISOString() }, activeAccountId);
-  }, [activeAccountId]);
+    // Receipt photos can't travel in a JSON backup. Saying so is the whole
+    // point — a backup you believe is complete is worse than one you know isn't.
+    const omitted = data.receiptsOmitted || 0;
+    showToast(result === SHARE_SHARED ? 'Backup shared' : 'Backup downloaded', {
+      detail: omitted > 0
+        ? `${omitted} receipt photo${omitted === 1 ? '' : 's'} not included — images can’t travel in a JSON backup.`
+        : result === SHARE_SHARED
+          ? 'Keep a copy somewhere other than this device.'
+          : 'Saved to your downloads.',
+      severity: omitted > 0 ? 'warn' : undefined,
+    });
+    return result;
+  }, [activeAccountId, showToast]);
 
   const handleExportCSV = useCallback(async () => {
     const csv = await exportTransactionsCSV(activeAccountId);
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `transactions-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    return shareCsv({
+      csv,
+      filename: `transactions-${new Date().toISOString().slice(0, 10)}.csv`,
+      title: 'Finesse transactions',
+    });
   }, [activeAccountId]);
 
   const handleOpenExportChatSummary = useCallback(async () => {
@@ -329,13 +413,11 @@ export default function App() {
 
   const handleExportChatSummary = useCallback(async (selection) => {
     const data = await exportChatSummary(selection);
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `finesse-chat-summary-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    await shareJson({
+      data,
+      filename: `finesse-chat-summary-${new Date().toISOString().slice(0, 10)}.json`,
+      title: 'Finesse summary',
+    });
     setModal(null);
   }, []);
 
@@ -554,6 +636,21 @@ export default function App() {
     addTransactionsBulk(rows, activeAccountId)
   ), [activeAccountId]);
 
+  const handleImportStatement = useCallback(async (rows, { fileName, reconciliation } = {}) => {
+    const ids = await addTransactionsBulk(rows, activeAccountId);
+    // The reconciliation result is worth repeating here: the review screen is
+    // gone by now, and a balance that disagrees with the statement is the whole
+    // reason to have imported one.
+    const drift = reconciliation && !reconciliation.matches
+      ? ` Account balance is ${fmt(Math.abs(reconciliation.difference))} off your statement.`
+      : '';
+    showToast(`Imported ${ids.length} transaction${ids.length === 1 ? '' : 's'}`, {
+      detail: `${fileName || 'Statement'}.${drift}`,
+      severity: drift ? 'warn' : undefined,
+    });
+    return ids;
+  }, [activeAccountId, showToast]);
+
   const handleDeleteWishlistItem = useCallback(async (id) => {
     const item = wishlistItems.find(entry => Number(entry.id) === Number(id));
     if (!item) return;
@@ -623,13 +720,30 @@ export default function App() {
     });
   }, [categories, showToast]);
 
+  // A category takes its transactions and subscriptions with it, so this used
+  // to be the one delete guarded by a confirm dialog. The snapshot makes it
+  // properly reversible instead, which is a better answer than a dialog: the
+  // undo restores every row with its original id, and the account balance with
+  // it. The count goes in the toast so "and all its transactions" is a number
+  // rather than a warning to skim past.
   const handleDeleteCategory = useCallback(async (catId) => {
     const cat = categories.find(c => c.id === catId);
-    const ok = await showConfirm(`Delete "${cat?.name || 'category'}" and all its transactions?`, {
-      title: 'Delete Category', confirmText: 'Delete', danger: true,
+    const snapshot = await deleteCategory(catId);
+    if (!snapshot?.category) return;
+
+    const removed = snapshot.transactions.length;
+    const subs = snapshot.subscriptions.length;
+    const parts = [
+      removed > 0 ? `${removed} transaction${removed === 1 ? '' : 's'}` : null,
+      subs > 0 ? `${subs} subscription${subs === 1 ? '' : 's'}` : null,
+    ].filter(Boolean);
+
+    showToast(`Deleted ${cat?.name || 'category'}`, {
+      detail: parts.length ? `${parts.join(' and ')} removed with it.` : 'No transactions were attached.',
+      severity: 'warn',
+      action: { label: 'Undo', onClick: () => restoreCategory(snapshot) },
     });
-    if (ok) deleteCategory(catId);
-  }, [categories, showConfirm]);
+  }, [categories, showToast]);
 
   // ── Variable handlers ────────────────────────────────────────────────────
   const handleAddVariable    = useCallback(v    => addVariable(v, activeAccountId), [activeAccountId]);
@@ -774,9 +888,9 @@ export default function App() {
 
   // ── Nudges ───────────────────────────────────────────────────────────────
   const nudges = useMemo(() => filterDismissedNudges(
-    buildNudges({ categories, incomes, subscriptions, goals, transactions, settings }),
+    buildNudges({ categories, incomes, subscriptions, goals, transactions, settings, storageState }),
     settings?.dismissedNudges,
-  ), [categories, incomes, subscriptions, goals, transactions, settings]);
+  ), [categories, incomes, subscriptions, goals, transactions, settings, storageState]);
 
   const handleDismissNudge = useCallback(async (nudge) => {
     const current = await getSettings(activeAccountId);
@@ -817,6 +931,7 @@ export default function App() {
     { id: 'log-expense', label: 'Log an expense', keywords: 'add spend transaction new', run: () => setModal('addTx') },
     { id: 'log-refund', label: 'Log a refund', keywords: 'return money back credit', run: () => setModal('addTx') },
     { id: 'bulk-add', label: 'Bulk add expenses', keywords: 'many multiple paste import', run: () => setModal('bulkAddTx') },
+    { id: 'import-statement', label: 'Import a bank statement', keywords: 'csv statement bank import reconcile', run: () => setModal('importStatement') },
     { id: 'one-off-income', label: 'Add one-off income', keywords: 'gift refund bonus paid', run: () => setModal('addOneOffIncome') },
     { id: 'add-income', label: 'Add an income source', keywords: 'salary wage pay', run: () => setModal('addIncome') },
     { id: 'add-category', label: 'Add a budget category', keywords: 'budget allowance', run: () => setModal('addCategory') },
@@ -840,9 +955,31 @@ export default function App() {
     })),
   ], [navigate, templates, handleLogTemplate, handleOpenAdjust]);
 
+  // Both gates sit below every hook, so the hook order never changes between
+  // renders — they swap what is rendered, not what runs.
+  if (!settingsLoaded) {
+    return (
+      <div style={{ minHeight: '100vh', position: 'relative' }}>
+        <div className="bg-mesh" />
+        <div style={{
+          position: 'relative', zIndex: 1, minHeight: '100vh',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+          color: 'var(--text-muted)', fontSize: 14,
+        }} aria-busy="true">
+          Loading your finances…
+        </div>
+      </div>
+    );
+  }
+
+  if (pinSet && !unlocked) {
+    return <LockScreen settings={settings} onUnlock={() => setUnlocked(true)} />;
+  }
+
   return (
     <div style={{ minHeight: '100vh', position: 'relative' }}>
       <div className="bg-mesh" />
+      {obscured && <div className="privacy-veil" aria-hidden="true" />}
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', minHeight: '100vh' }}>
         <aside id="app-sidebar" className="sidebar" aria-label="Sidebar" style={{
           width: 220, flexShrink: 0,
@@ -876,7 +1013,13 @@ export default function App() {
               )}
             </div>
           )}
-          <nav aria-label="Primary" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {/* Scrolls once the list outgrows the viewport. Without this the last
+              few items are simply unreachable on a short window — the sidebar is
+              fixed to the full height, so overflow has nowhere to go. */}
+          <nav aria-label="Primary" style={{
+            display: 'flex', flexDirection: 'column', gap: 4,
+            flex: 1, minHeight: 0, overflowY: 'auto',
+          }}>
             {NAV.map(({ id, label, Icon }) => (
               <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} onClick={() => navigate(id)} type="button"
                 aria-current={view === id ? 'page' : undefined}>
@@ -997,12 +1140,17 @@ export default function App() {
               onDelete={handleDeleteTransaction} onEdit={handleEditTransaction} onAdd={() => setModal('addTx')}
               onRepeat={handleRepeatTransaction}
               onBulkAdd={() => setModal('bulkAddTx')}
+              onImportStatement={() => setModal('importStatement')}
               onAddSubscription={() => setModal('addSubscription')} />
           )}
           {view === 'forecasting' && (
             <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes}
               incomeEvents={incomeEvents} transfers={accountTransfers} subscriptions={subscriptions}
-              account={activeAccount} />
+              account={activeAccount} netWorth={netWorth} accountCount={accounts.length} />
+          )}
+          {view === 'review' && (
+            <Review categories={categories} transactions={transactions}
+              incomeEvents={incomeEvents} subscriptions={subscriptions} />
           )}
           {view === 'purchase' && (
             <PurchaseCheck categories={categories} onLogPurchase={handleLogPurchase} />
@@ -1064,6 +1212,9 @@ export default function App() {
               templates={templates} onAddTemplate={handleAddTemplate} onDeleteTemplate={handleDeleteTemplate}
               nudgeCount={nudges.length}
               onRecalculate={handleRecalculateCounters}
+              storageState={storageState}
+              onRequestPersistence={handleRequestPersistence}
+              onImportStatement={() => setModal('importStatement')}
               showConfirm={showConfirm} showAlert={showAlert} showPrompt={showPrompt} />
           )}
           </Suspense>)}
@@ -1184,6 +1335,17 @@ export default function App() {
           wishlistCategories={wishlistCategories}
           onSave={(id, data) => { updateWishlistCategory(id, data); setModal(null); setEditingWishlistList(null); }}
           onClose={() => { setModal(null); setEditingWishlistList(null); }}
+        />
+      )}
+      {modal === 'importStatement' && (
+        <ImportStatementModal
+          categories={categories}
+          transactions={transactions}
+          rules={rules}
+          account={activeAccount}
+          defaultCategoryId={settings?.defaultCategoryId}
+          onImport={handleImportStatement}
+          onClose={() => setModal(null)}
         />
       )}
       {modal === 'importMode' && (

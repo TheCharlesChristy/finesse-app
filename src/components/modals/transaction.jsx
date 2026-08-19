@@ -3,6 +3,8 @@ import { Plus, Split, Undo2, X } from 'lucide-react';
 import { format } from 'date-fns';
 import CategorySelect from '../CategorySelect';
 import DateInput from '../DateInput';
+import ReceiptField from '../ReceiptField';
+import { EMPTY_RECEIPT } from '../../receipts';
 import { Modal, IconButton, Field } from '../ui';
 import {
   dateOnlyToISO,
@@ -104,6 +106,17 @@ export function AddTransactionModal({
   const [splitOpen, setSplitOpen] = useState(false);
   const [splitParts, setSplitParts] = useState([{ categoryId: '', amount: '' }]);
   const [suggestion, setSuggestion] = useState(null);
+  // Held as the same shape `buildReceipt` returns, so an existing receipt and a
+  // freshly-taken one are indistinguishable from here on. null means "remove".
+  const [receipt, setReceipt] = useState(() => (
+    transaction?.receipt || transaction?.receiptThumb
+      ? {
+        receipt: transaction.receipt,
+        receiptThumb: transaction.receiptThumb,
+        receiptMeta: transaction.receiptMeta || null,
+      }
+      : null
+  ));
 
   const isEditing = Boolean(transaction);
   const isRefundMode = type === TX_REFUND;
@@ -170,6 +183,9 @@ export function AddTransactionModal({
       tags,
       type,
       date: dateOnlyToISO(date),
+      // Always written, never merged: EMPTY_RECEIPT is what makes "remove"
+      // reach the database rather than leaving the old blobs in place.
+      ...(receipt || EMPTY_RECEIPT),
     };
     if (isEditing && onSave) onSave(transaction.id, data);
     else onAdd(data);
@@ -283,6 +299,10 @@ export function AddTransactionModal({
               onChange={e => setTagInput(e.target.value)} />
           )}
         </Field>
+
+        {/* Not offered on a split: the parts become separate transactions, and
+            silently copying one photo onto each would multiply the storage. */}
+        {!splitOpen && <ReceiptField value={receipt} onChange={setReceipt} />}
 
         <DateInput value={date} onChange={setDate} />
 

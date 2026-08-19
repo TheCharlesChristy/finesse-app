@@ -1,4 +1,4 @@
-import { addDays, addMonths, addWeeks, addYears, getDate, getDaysInMonth, setDate, isAfter, isBefore, differenceInDays, format, startOfDay } from 'date-fns';
+import { addDays, addMonths, addWeeks, addYears, getDate, getDaysInMonth, setDate, isAfter, isBefore, differenceInDays, format, startOfDay, subMonths } from 'date-fns';
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
 
 // ── Schedule helpers ─────────────────────────────────────────────────────────
@@ -927,6 +927,21 @@ export function getGoalEta(goal, incomes = [], now = new Date()) {
   const perCycle = roundMoney(goal?.perCycleContribution);
   if (!(perCycle > 0)) return { cycles: null, date: null, complete: false };
 
+  // A debt charging interest can't be divided out like a savings pot: the
+  // balance grows between payments. Delegating keeps every existing caller —
+  // the Goals view, the off-track nudge — honest without knowing about APR.
+  if (goal?.kind === 'debt' && Number(goal?.apr) > 0) {
+    const payoff = getDebtPayoff(goal, incomes, now);
+    return {
+      cycles: payoff.cycles,
+      date: payoff.date,
+      complete: false,
+      perCycle,
+      totalInterest: payoff.totalInterest,
+      neverClears: payoff.neverClears,
+    };
+  }
+
   const income = incomes.find(item => Number(item.id) === Number(goal?.incomeId));
   const cycleDays = getIncomeCycleAverageDays(income ? getIncomeFrequency(income) : 'monthly');
   const cycles = Math.ceil(remaining / perCycle);
@@ -936,6 +951,220 @@ export function getGoalEta(goal, incomes = [], now = new Date()) {
     date: addDays(startOfDay(now), Math.round(cycles * cycleDays)),
     complete: false,
     perCycle,
+  };
+}
+
+// ── Debt ─────────────────────────────────────────────────────────────────────
+
+// A century of payments. Any debt still running past this is one the payment
+// never clears, and the loop needs a floor under it regardless.
+const MAX_PAYOFF_CYCLES = 1200;
+
+export const DEBT_AVALANCHE = 'avalanche';
+export const DEBT_SNOWBALL = 'snowball';
+
+/**
+ * The interest rate for one payment cycle, from an annual APR.
+ *
+ * Proportional to the cycle length rather than compounded to it, which is how
+ * lenders actually quote it — a 24% APR card charges 2% a month, not
+ * 1.809% (the rate that would compound to 24% over a year).
+ */
+export function getDebtPeriodicRate(apr, cycleDays = AVERAGE_MONTH_DAYS) {
+  const annual = Number(apr);
+  if (!Number.isFinite(annual) || annual <= 0) return 0;
+  return (annual / 100) * (cycleDays / 365.25);
+}
+
+/**
+ * Amortise one debt at its current payment.
+ *
+ * `getGoalEta` divides what's left by the payment, which is right for a savings
+ * pot and wrong for a debt: it ignores the interest still accruing on the
+ * balance, so it under-reports both the date and the true cost — the difference
+ * between a progress bar and a decision.
+ *
+ * Returns `neverClears` when the payment doesn't cover the interest. That is
+ * the single most important thing this function can tell anyone, so it is a
+ * flag rather than an absurdly distant date.
+ */
+export function getDebtPayoff(goal, incomes = [], now = new Date()) {
+  const { remaining, complete } = getGoalProgress(goal);
+  const payment = roundMoney(goal?.perCycleContribution);
+  const income = incomes.find(item => Number(item.id) === Number(goal?.incomeId));
+  const cycleDays = getIncomeCycleAverageDays(income ? getIncomeFrequency(income) : 'monthly');
+  const rate = getDebtPeriodicRate(goal?.apr, cycleDays);
+
+  if (complete || remaining <= 0) {
+    return { cycles: 0, date: null, totalInterest: 0, totalPaid: 0, neverClears: false, complete: true, rate };
+  }
+  if (!(payment > 0)) {
+    return { cycles: null, date: null, totalInterest: null, totalPaid: null, neverClears: false, complete: false, rate };
+  }
+
+  const firstInterest = roundMoney(remaining * rate);
+  if (payment <= firstInterest) {
+    return {
+      cycles: null, date: null, totalInterest: null, totalPaid: null,
+      neverClears: true, complete: false, rate,
+      interestPerCycle: firstInterest,
+    };
+  }
+
+  let balance = remaining;
+  let totalInterest = 0;
+  let totalPaid = 0;
+  let cycles = 0;
+
+  while (balance > 0 && cycles < MAX_PAYOFF_CYCLES) {
+    const interest = roundMoney(balance * rate);
+    // The final payment is only ever what's actually left to clear.
+    const due = Math.min(roundMoney(balance + interest), payment);
+    totalInterest = roundMoney(totalInterest + interest);
+    totalPaid = roundMoney(totalPaid + due);
+    balance = roundMoney(balance + interest - due);
+    cycles += 1;
+  }
+
+  return {
+    cycles,
+    date: addDays(startOfDay(now), Math.round(cycles * cycleDays)),
+    totalInterest,
+    totalPaid,
+    neverClears: false,
+    complete: false,
+    rate,
+  };
+}
+
+/** Debt goals with something still owing, in the order a strategy would clear them. */
+export function orderDebts(goals = [], method = DEBT_AVALANCHE, incomes = []) {
+  const open = goals
+    .filter(goal => goal?.kind === 'debt')
+    .map(goal => ({ goal, ...getGoalProgress(goal) }))
+    .filter(entry => entry.remaining > 0.005);
+
+  return open.sort((a, b) => {
+    if (method === DEBT_SNOWBALL) {
+      // Smallest balance first: the point is the momentum of clearing one.
+      return a.remaining - b.remaining || Number(b.goal.apr || 0) - Number(a.goal.apr || 0);
+    }
+    // Avalanche: dearest money first, which is always the cheaper arithmetic.
+    const aRate = getDebtPeriodicRate(a.goal.apr, 30);
+    const bRate = getDebtPeriodicRate(b.goal.apr, 30);
+    return bRate - aRate || a.remaining - b.remaining;
+  }).map(entry => entry.goal);
+}
+
+/**
+ * Run every debt forward together under one payoff order.
+ *
+ * Each cycle: interest accrues on every balance, the minimum goes to each, and
+ * everything left in the pool is thrown at the first debt in the order. As
+ * balances clear, their payments cascade to the next — which is the whole
+ * mechanism behind both strategies, and the reason the two differ in cost.
+ *
+ * The pool is what the user already commits (the sum of the per-cycle
+ * contributions), so this compares *orderings* of the same money rather than
+ * quietly assuming they can pay more.
+ */
+export function simulateDebtStrategy(goals = [], incomes = [], { method = DEBT_AVALANCHE, now = new Date() } = {}) {
+  const ordered = orderDebts(goals, method, incomes);
+  if (!ordered.length) return { method, cycles: 0, totalInterest: 0, order: [], cleared: [], neverClears: false };
+
+  const income = incomes.find(item => Number(item.id) === Number(ordered[0]?.incomeId));
+  const cycleDays = getIncomeCycleAverageDays(income ? getIncomeFrequency(income) : 'monthly');
+
+  const debts = ordered.map(goal => ({
+    id: goal.id,
+    name: goal.name,
+    balance: getGoalProgress(goal).remaining,
+    rate: getDebtPeriodicRate(goal.apr, cycleDays),
+    minimum: Math.max(0, roundMoney(goal.minimumPayment)),
+    payment: Math.max(0, roundMoney(goal.perCycleContribution)),
+    clearedAtCycle: null,
+  }));
+
+  const pool = roundMoney(debts.reduce((sum, debt) => sum + debt.payment, 0));
+  if (!(pool > 0)) {
+    return { method, cycles: null, totalInterest: null, order: debts.map(d => d.name), cleared: [], neverClears: false };
+  }
+
+  let totalInterest = 0;
+  let cycles = 0;
+
+  while (debts.some(debt => debt.balance > 0.005) && cycles < MAX_PAYOFF_CYCLES) {
+    for (const debt of debts) {
+      if (debt.balance <= 0) continue;
+      const interest = roundMoney(debt.balance * debt.rate);
+      totalInterest = roundMoney(totalInterest + interest);
+      debt.balance = roundMoney(debt.balance + interest);
+    }
+
+    let available = pool;
+    // Minimums first, in order, so a debt is never left unserviced because the
+    // target debt ate the pool.
+    for (const debt of debts) {
+      if (debt.balance <= 0 || available <= 0) continue;
+      const pay = Math.min(debt.minimum, debt.balance, available);
+      debt.balance = roundMoney(debt.balance - pay);
+      available = roundMoney(available - pay);
+    }
+    // Everything left goes at the front of the order, then cascades.
+    for (const debt of debts) {
+      if (debt.balance <= 0 || available <= 0) continue;
+      const pay = Math.min(debt.balance, available);
+      debt.balance = roundMoney(debt.balance - pay);
+      available = roundMoney(available - pay);
+    }
+
+    cycles += 1;
+    for (const debt of debts) {
+      if (debt.balance <= 0.005 && debt.clearedAtCycle == null) debt.clearedAtCycle = cycles;
+    }
+
+    // Nothing moved and nothing is clear: the pool can't outpace the interest.
+    if (available >= pool - 0.005 && debts.every(debt => debt.balance > 0.005)) {
+      return { method, cycles: null, totalInterest: null, order: debts.map(d => d.name), cleared: [], neverClears: true };
+    }
+  }
+
+  const neverClears = cycles >= MAX_PAYOFF_CYCLES && debts.some(debt => debt.balance > 0.005);
+
+  return {
+    method,
+    cycles: neverClears ? null : cycles,
+    totalInterest: neverClears ? null : totalInterest,
+    date: neverClears ? null : addDays(startOfDay(now), Math.round(cycles * cycleDays)),
+    order: debts.map(debt => debt.name),
+    cleared: debts.map(debt => ({
+      id: debt.id,
+      name: debt.name,
+      cycles: debt.clearedAtCycle,
+      date: debt.clearedAtCycle == null ? null : addDays(startOfDay(now), Math.round(debt.clearedAtCycle * cycleDays)),
+    })),
+    neverClears,
+  };
+}
+
+/**
+ * Avalanche against snowball, on the same money.
+ *
+ * Avalanche is always at least as cheap — it is what minimising interest means
+ * — so `saving` is what the cheaper order is worth, and the UI can be honest
+ * that snowball costs more while still being the one some people finish.
+ */
+export function compareDebtStrategies(goals = [], incomes = [], now = new Date()) {
+  const avalanche = simulateDebtStrategy(goals, incomes, { method: DEBT_AVALANCHE, now });
+  const snowball = simulateDebtStrategy(goals, incomes, { method: DEBT_SNOWBALL, now });
+
+  const comparable = avalanche.totalInterest != null && snowball.totalInterest != null;
+  return {
+    avalanche,
+    snowball,
+    saving: comparable ? roundMoney(snowball.totalInterest - avalanche.totalInterest) : null,
+    // Only worth showing a choice when the two orders actually differ.
+    differs: comparable && avalanche.order.join('|') !== snowball.order.join('|'),
   };
 }
 
@@ -949,7 +1178,9 @@ export function isGoalOffTrack(goal, incomes = [], now = new Date()) {
   if (complete) return false;
 
   const eta = getGoalEta(goal, incomes, now);
-  if (!eta.date) return true; // a deadline with no contribution is off track by definition
+  // No date covers both "nothing being contributed" and "the payment never
+  // outpaces the interest" — a deadline is missed either way.
+  if (!eta.date) return true;
   return eta.date > startOfDay(target);
 }
 
@@ -1117,6 +1348,7 @@ export function buildNudges({
   goals = [],
   transactions = [],
   settings = null,
+  storageState = null,
   now = new Date(),
 } = {}) {
   const today = startOfDay(now);
@@ -1282,6 +1514,21 @@ export function buildNudges({
     }
   }
 
+  // ── Evictable storage ──
+  // Stronger than the backup nudge and deliberately separate: a stale backup
+  // means an out-of-date copy exists, whereas evictable storage means the
+  // browser is free to delete the original without asking. `null` is "not
+  // checked yet", which must stay silent rather than alarm on a race.
+  if (hasData && storageState === 'best-effort') {
+    nudges.push({
+      id: `storage-evictable-${format(today, 'yyyy-MM')}`,
+      severity: NUDGE_WARN,
+      title: 'Your data can be evicted',
+      body: 'This browser has not promised to keep it. Turn on persistent storage in Settings.',
+      view: 'settings',
+    });
+  }
+
   const order = { [NUDGE_DANGER]: 0, [NUDGE_WARN]: 1, [NUDGE_INFO]: 2 };
   return nudges.sort((a, b) => order[a.severity] - order[b.severity]);
 }
@@ -1319,6 +1566,153 @@ export function getMerchantBreakdown(transactions = [], { since = null, limit = 
     .filter(entry => entry.total > 0)
     .sort((a, b) => b.total - a.total)
     .slice(0, limit);
+}
+
+/**
+ * A long look back — the retrospective the app never had.
+ *
+ * `getCycleComparison` covers this cycle against the last, and
+ * `buildMonthlyHistory` charts six months of category totals. Neither answers
+ * the questions you ask once a year: where did it all actually go, which months
+ * were the bad ones, and has the subscription pile quietly grown?
+ *
+ * Everything is derived from the transaction log, which is the real record —
+ * the spend counters are per-cycle and reset, so they cannot answer any of this.
+ *
+ * Refunds subtract via `getSignedAmount`, so a category with a big return shows
+ * what it truly cost rather than what passed through it.
+ */
+export function buildReview({
+  transactions = [], categories = [], incomeEvents = [], subscriptions = [],
+  months = 12, now = new Date(),
+} = {}) {
+  const to = startOfDay(now);
+  const from = startOfDay(subMonths(to, months - 1));
+  const fromMonthKey = format(from, 'yyyy-MM');
+  const catMap = new Map(categories.map(category => [Number(category.id), category]));
+  const subscriptionIds = new Set(subscriptions.map(sub => Number(sub.id)));
+
+  // One bucket per month in the window, created up front so a month with no
+  // spending charts as a genuine zero rather than vanishing from the series.
+  const monthly = new Map();
+  for (let i = 0; i < months; i += 1) {
+    const date = subMonths(to, months - 1 - i);
+    monthly.set(format(date, 'yyyy-MM'), {
+      key: format(date, 'yyyy-MM'),
+      label: format(date, 'MMM yy'),
+      spent: 0, income: 0, subscriptions: 0, count: 0,
+    });
+  }
+
+  const byCategory = new Map();
+  let spent = 0;
+  let refunded = 0;
+  let transactionCount = 0;
+  let biggest = null;
+
+  for (const tx of transactions) {
+    const date = toValidDate(tx.date);
+    if (!date) continue;
+    const key = format(date, 'yyyy-MM');
+    if (key < fromMonthKey) continue;
+
+    const bucket = monthly.get(key);
+    if (!bucket) continue;
+
+    const signed = getSignedAmount(tx);
+    const amount = Math.abs(Number(tx.amount) || 0);
+
+    bucket.spent = roundMoney(bucket.spent + signed);
+    bucket.count += 1;
+    if (subscriptionIds.has(Number(tx.subscriptionId))) {
+      bucket.subscriptions = roundMoney(bucket.subscriptions + signed);
+    }
+
+    if (isRefund(tx)) refunded = roundMoney(refunded + amount);
+    else spent = roundMoney(spent + amount);
+    transactionCount += 1;
+
+    const categoryId = Number(tx.categoryId);
+    const entry = byCategory.get(categoryId) || { id: categoryId, total: 0, count: 0 };
+    entry.total = roundMoney(entry.total + signed);
+    entry.count += 1;
+    byCategory.set(categoryId, entry);
+
+    // Biggest single outgoing, refunds excluded — a large refund is good news.
+    if (!isRefund(tx) && (!biggest || amount > Math.abs(Number(biggest.amount) || 0))) biggest = tx;
+  }
+
+  let income = 0;
+  for (const event of incomeEvents) {
+    const date = toValidDate(event.date);
+    if (!date) continue;
+    const key = format(date, 'yyyy-MM');
+    const bucket = monthly.get(key);
+    if (!bucket) continue;
+    const amount = Number(event.amount) || 0;
+    bucket.income = roundMoney(bucket.income + amount);
+    income = roundMoney(income + amount);
+  }
+
+  const series = [...monthly.values()].map(row => ({ ...row, net: roundMoney(row.income - row.spent) }));
+  const net = roundMoney(spent - refunded);
+
+  const categoryRows = [...byCategory.values()]
+    .map(entry => {
+      const category = catMap.get(entry.id);
+      return {
+        id: entry.id,
+        name: category?.name || 'Deleted category',
+        color: category?.color || 'var(--accent-blue)',
+        total: entry.total,
+        count: entry.count,
+        share: net > 0 ? roundMoney((entry.total / net) * 100) : 0,
+        monthlyAverage: roundMoney(entry.total / months),
+      };
+    })
+    .filter(row => row.total > 0)
+    .sort((a, b) => b.total - a.total);
+
+  // Only months that actually happened can be the busiest or the quietest — a
+  // window longer than the history would otherwise crown an empty month.
+  const active = series.filter(row => row.count > 0);
+  const bySpend = [...active].sort((a, b) => b.spent - a.spent);
+
+  // Subscription creep: the first and last months that had any, so a window
+  // starting before the first subscription doesn't report infinite growth.
+  const withSubs = series.filter(row => row.subscriptions > 0);
+  const firstSubs = withSubs[0]?.subscriptions ?? 0;
+  const lastSubs = withSubs.at(-1)?.subscriptions ?? 0;
+
+  return {
+    from,
+    to,
+    months,
+    totals: {
+      spent, refunded, net, income,
+      saved: roundMoney(income - net),
+      transactionCount,
+      monthlyAverage: roundMoney(net / months),
+    },
+    series,
+    categories: categoryRows,
+    merchants: getMerchantBreakdown(transactions, { since: from, limit: 8 }),
+    subscriptionTrend: withSubs.length > 1
+      ? {
+        first: firstSubs,
+        last: lastSubs,
+        firstLabel: withSubs[0].label,
+        lastLabel: withSubs.at(-1).label,
+        change: roundMoney(lastSubs - firstSubs),
+        changePct: firstSubs > 0 ? roundMoney(((lastSubs - firstSubs) / firstSubs) * 100) : null,
+        total: roundMoney(series.reduce((sum, row) => sum + row.subscriptions, 0)),
+      }
+      : null,
+    biggest,
+    busiest: bySpend[0] || null,
+    quietest: bySpend.length > 1 ? bySpend.at(-1) : null,
+    hasData: transactionCount > 0,
+  };
 }
 
 /**
@@ -1418,6 +1812,84 @@ export function buildBalanceHistory(account, { transactions = [], incomeEvents =
   }
 
   return series;
+}
+
+/**
+ * Everything you own, across every account, over time — plus what you owe.
+ *
+ * The asset side is real history: the same backwards walk from today's known
+ * balance that `buildBalanceHistory` does, summed across accounts. Nothing is
+ * invented, and the last point always equals the total the Accounts page shows.
+ *
+ * The debt side deliberately isn't a series. Finesse records what remains on a
+ * debt goal, not when each payment landed, so any historical debt line would be
+ * fabricated — and drawing today's balance flat across the last six months
+ * would claim you owed that much all along. So debt is reported as a single
+ * current figure, and `debtHasHistory: false` tells the UI to say so rather
+ * than plot a line it can't stand behind.
+ *
+ * Savings goals are not added as assets: contributing to one is an earmark, not
+ * a transfer, so that money is already inside an account balance. Counting it
+ * again would inflate net worth by the size of every pot.
+ */
+export function buildNetWorthHistory({
+  accounts = [], transactions = [], incomeEvents = [], transfers = [], goals = [], days = 90,
+} = {}) {
+  const today = startOfDay(new Date());
+  const from = addDays(today, -days);
+  const accountIds = new Set(accounts.map(account => Number(account.id)));
+
+  const deltas = new Map();
+  const bump = (date, amount) => {
+    const day = toValidDate(date);
+    if (!day) return;
+    const key = format(startOfDay(day), 'yyyy-MM-dd');
+    deltas.set(key, roundMoney((deltas.get(key) || 0) + amount));
+  };
+
+  for (const tx of transactions) {
+    if (!accountIds.has(Number(tx.accountId))) continue;
+    bump(tx.date, -getSignedAmount(tx));
+  }
+  for (const event of incomeEvents) {
+    if (!accountIds.has(Number(event.accountId))) continue;
+    bump(event.date, Number(event.amount) || 0);
+  }
+  // Transfers between two tracked accounts net to nothing across the whole
+  // estate, so only one leg landing outside it moves the total.
+  for (const transfer of transfers) {
+    const amount = Number(transfer.amount) || 0;
+    const into = accountIds.has(Number(transfer.toAccountId));
+    const outOf = accountIds.has(Number(transfer.fromAccountId));
+    if (into && !outOf) bump(transfer.date, amount);
+    if (outOf && !into) bump(transfer.date, -amount);
+  }
+
+  const debt = roundMoney(goals
+    .filter(goal => goal?.kind === 'debt')
+    .reduce((sum, goal) => sum + getGoalProgress(goal).remaining, 0));
+
+  let assets = roundMoney(accounts.reduce((sum, account) => sum + (Number(account.balance) || 0), 0));
+  const latestAssets = assets;
+  const series = [];
+
+  for (let day = today; day >= from; day = addDays(day, -1)) {
+    const key = format(day, 'yyyy-MM-dd');
+    series.unshift({ date: key, label: format(day, 'd MMM'), assets });
+    assets = roundMoney(assets - (deltas.get(key) || 0));
+  }
+
+  return {
+    series,
+    debtHasHistory: false,
+    current: {
+      assets: latestAssets,
+      debt,
+      netWorth: roundMoney(latestAssets - debt),
+    },
+    // How the estate moved over the window — the figure a trend is actually for.
+    change: series.length ? roundMoney(latestAssets - series[0].assets) : 0,
+  };
 }
 
 /**
