@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { AlertTriangle, CopyPlus, CreditCard, Layers3, Pencil, Trash2, Search, Undo2 } from 'lucide-react';
+import { AlertTriangle, CopyPlus, CreditCard, FileUp, Layers3, Pencil, Trash2, Search, Undo2 } from 'lucide-react';
 import { flagUnusualSpend, fmt, getAllTags, getSignedAmount, isRefund } from '../utils';
 import { format, isSameDay, isSameMonth, startOfDay, subDays } from 'date-fns';
 import CategorySelect from '../components/CategorySelect';
@@ -97,7 +97,7 @@ function compareText(a, b) {
   return String(a || '').localeCompare(String(b || ''), undefined, { sensitivity: 'base' });
 }
 
-export default function Transactions({ transactions, categories, onDelete, onEdit, onAdd, onRepeat, onBulkAdd, onAddSubscription }) {
+export default function Transactions({ transactions, categories, onDelete, onEdit, onAdd, onRepeat, onBulkAdd, onImportStatement, onAddSubscription }) {
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState('all');
   const [dateFilter, setDateFilter] = useState('all');
@@ -218,6 +218,10 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
           style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 7 }}>
           <Layers3 size={14} /> Bulk Add
         </button>
+        <button className="btn-secondary mobile-full" onClick={onImportStatement} disabled={categories.length === 0}
+          style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 7 }}>
+          <FileUp size={14} /> Import CSV
+        </button>
         <button className="btn-secondary mobile-full" onClick={onAddSubscription} disabled={categories.length === 0}
           style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 7 }}>
           <CreditCard size={14} /> Subscription
@@ -273,6 +277,10 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
               <button className="btn-secondary" onClick={onBulkAdd} disabled={categories.length === 0}
                 style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                 <Layers3 size={14} /> Bulk Add Expenses
+              </button>
+              <button className="btn-secondary" onClick={onImportStatement} disabled={categories.length === 0}
+                style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <FileUp size={14} /> Import a Statement
               </button>
               <button className="btn-secondary" onClick={onAddSubscription} disabled={categories.length === 0}
                 style={{ display: 'flex', alignItems: 'center', gap: 7 }}>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, Download, Upload, FileText, RefreshCcw, RefreshCw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap, Info, HardDrive, ShieldCheck, Lock } from 'lucide-react';
+import { Bell, Download, Upload, FileText, FileUp, RefreshCcw, RefreshCw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap, Info, HardDrive, ShieldCheck, Lock } from 'lucide-react';
 import { fmt } from '../utils';
 import { notificationPermission, notificationsSupported, requestNotificationPermission } from '../notifications';
 import { formatBytes, getStorageEstimate, STORAGE_BEST_EFFORT, STORAGE_PERSISTED, STORAGE_UNSUPPORTED } from '../storage';
@@ -41,6 +41,7 @@ export default function Settings({
   onRecalculate,
   storageState = null,
   onRequestPersistence,
+  onImportStatement,
   showConfirm,
   showAlert,
   showPrompt,
@@ -719,6 +720,9 @@ export default function Settings({
             <Upload size={14} /> Import Backup
             <input type="file" accept=".json" onChange={handleFileImport} style={{ display: 'none' }} />
           </label>
+          <button className="btn-secondary" onClick={onImportStatement} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <FileUp size={14} /> Import Bank Statement (.csv)
+          </button>
         </div>
         <div style={{ color: settings?.lastBackupAt ? 'var(--text-muted)' : 'var(--warn)', fontSize: 11, marginTop: 10 }}>
           {settings?.lastBackupAt

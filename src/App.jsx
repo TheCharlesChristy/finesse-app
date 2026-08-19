@@ -34,7 +34,7 @@ const Goals         = lazy(() => import('./views/Goals'));
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
-  AdjustBudgetModal, ExportChatSummaryOptionsModal,
+  AdjustBudgetModal, ExportChatSummaryOptionsModal, ImportStatementModal,
   AddGoalModal, SaveForItemModal } from './components/modals';
 import { Modal } from './components/ui';
 import { useDialog } from './components/useDialog';
@@ -632,6 +632,21 @@ export default function App() {
     addTransactionsBulk(rows, activeAccountId)
   ), [activeAccountId]);
 
+  const handleImportStatement = useCallback(async (rows, { fileName, reconciliation } = {}) => {
+    const ids = await addTransactionsBulk(rows, activeAccountId);
+    // The reconciliation result is worth repeating here: the review screen is
+    // gone by now, and a balance that disagrees with the statement is the whole
+    // reason to have imported one.
+    const drift = reconciliation && !reconciliation.matches
+      ? ` Account balance is ${fmt(Math.abs(reconciliation.difference))} off your statement.`
+      : '';
+    showToast(`Imported ${ids.length} transaction${ids.length === 1 ? '' : 's'}`, {
+      detail: `${fileName || 'Statement'}.${drift}`,
+      severity: drift ? 'warn' : undefined,
+    });
+    return ids;
+  }, [activeAccountId, showToast]);
+
   const handleDeleteWishlistItem = useCallback(async (id) => {
     const item = wishlistItems.find(entry => Number(entry.id) === Number(id));
     if (!item) return;
@@ -912,6 +927,7 @@ export default function App() {
     { id: 'log-expense', label: 'Log an expense', keywords: 'add spend transaction new', run: () => setModal('addTx') },
     { id: 'log-refund', label: 'Log a refund', keywords: 'return money back credit', run: () => setModal('addTx') },
     { id: 'bulk-add', label: 'Bulk add expenses', keywords: 'many multiple paste import', run: () => setModal('bulkAddTx') },
+    { id: 'import-statement', label: 'Import a bank statement', keywords: 'csv statement bank import reconcile', run: () => setModal('importStatement') },
     { id: 'one-off-income', label: 'Add one-off income', keywords: 'gift refund bonus paid', run: () => setModal('addOneOffIncome') },
     { id: 'add-income', label: 'Add an income source', keywords: 'salary wage pay', run: () => setModal('addIncome') },
     { id: 'add-category', label: 'Add a budget category', keywords: 'budget allowance', run: () => setModal('addCategory') },
@@ -1114,6 +1130,7 @@ export default function App() {
               onDelete={handleDeleteTransaction} onEdit={handleEditTransaction} onAdd={() => setModal('addTx')}
               onRepeat={handleRepeatTransaction}
               onBulkAdd={() => setModal('bulkAddTx')}
+              onImportStatement={() => setModal('importStatement')}
               onAddSubscription={() => setModal('addSubscription')} />
           )}
           {view === 'forecasting' && (
@@ -1183,6 +1200,7 @@ export default function App() {
               onRecalculate={handleRecalculateCounters}
               storageState={storageState}
               onRequestPersistence={handleRequestPersistence}
+              onImportStatement={() => setModal('importStatement')}
               showConfirm={showConfirm} showAlert={showAlert} showPrompt={showPrompt} />
           )}
           </Suspense>)}
@@ -1303,6 +1321,17 @@ export default function App() {
           wishlistCategories={wishlistCategories}
           onSave={(id, data) => { updateWishlistCategory(id, data); setModal(null); setEditingWishlistList(null); }}
           onClose={() => { setModal(null); setEditingWishlistList(null); }}
+        />
+      )}
+      {modal === 'importStatement' && (
+        <ImportStatementModal
+          categories={categories}
+          transactions={transactions}
+          rules={rules}
+          account={activeAccount}
+          defaultCategoryId={settings?.defaultCategoryId}
+          onImport={handleImportStatement}
+          onClose={() => setModal(null)}
         />
       )}
       {modal === 'importMode' && (
