@@ -378,10 +378,16 @@ export default function App() {
     // Remember it, so "no backup for N days" can be honest about N.
     const current = await getSettings(activeAccountId);
     await saveSettings({ ...(current || {}), lastBackupAt: new Date().toISOString() }, activeAccountId);
+    // Receipt photos can't travel in a JSON backup. Saying so is the whole
+    // point — a backup you believe is complete is worse than one you know isn't.
+    const omitted = data.receiptsOmitted || 0;
     showToast(result === SHARE_SHARED ? 'Backup shared' : 'Backup downloaded', {
-      detail: result === SHARE_SHARED
-        ? 'Keep a copy somewhere other than this device.'
-        : 'Saved to your downloads.',
+      detail: omitted > 0
+        ? `${omitted} receipt photo${omitted === 1 ? '' : 's'} not included — images can’t travel in a JSON backup.`
+        : result === SHARE_SHARED
+          ? 'Keep a copy somewhere other than this device.'
+          : 'Saved to your downloads.',
+      severity: omitted > 0 ? 'warn' : undefined,
     });
     return result;
   }, [activeAccountId, showToast]);

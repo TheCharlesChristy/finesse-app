@@ -13,6 +13,7 @@ import {
 } from '../storage';
 import { canShareFile, shareFile, SHARE_CANCELLED, SHARE_DOWNLOADED, SHARE_SHARED } from '../share';
 import { buildPinSettings, isValidPin, safeEqual, shouldRelock, verifyPin } from '../lock';
+import { EMPTY_RECEIPT, hasReceipt, scaleToFit } from '../receipts';
 
 // The test environment is Node, so both `navigator` and the DOM are absent
 // until a test installs one. Each helper puts back exactly what it replaced.
@@ -252,5 +253,38 @@ describe('PIN lock', () => {
     expect(shouldRelock(hidden, 60_000, hidden + 60_000)).toBe(true);
     // "Immediately" must not be defeated by a zero-length background trip.
     expect(shouldRelock(hidden, 0, hidden)).toBe(true);
+  });
+});
+
+describe('receipt sizing', () => {
+  it('never upscales an image that already fits', () => {
+    expect(scaleToFit(800, 600, 1600)).toEqual({ width: 800, height: 600 });
+    expect(scaleToFit(1600, 1200, 1600)).toEqual({ width: 1600, height: 1200 });
+  });
+
+  it('bounds the longest edge, preserving aspect ratio', () => {
+    expect(scaleToFit(4000, 3000, 1600)).toEqual({ width: 1600, height: 1200 });
+    // Portrait: the bound applies to the height instead.
+    expect(scaleToFit(3000, 4000, 1600)).toEqual({ width: 1200, height: 1600 });
+  });
+
+  it('keeps an extreme aspect ratio at least one pixel wide', () => {
+    expect(scaleToFit(10000, 5, 320).height).toBe(1);
+  });
+
+  it('handles a degenerate image without producing NaN', () => {
+    expect(scaleToFit(0, 0, 320)).toEqual({ width: 0, height: 0 });
+  });
+
+  it('recognises which transactions carry a receipt', () => {
+    expect(hasReceipt(null)).toBe(false);
+    expect(hasReceipt({ amount: 5 })).toBe(false);
+    expect(hasReceipt({ receipt: new Blob(['x']) })).toBe(true);
+    // A row whose thumbnail encoded but whose full image didn't still counts.
+    expect(hasReceipt({ receiptThumb: new Blob(['x']) })).toBe(true);
+  });
+
+  it('spells out every field that clearing a receipt must null', () => {
+    expect(EMPTY_RECEIPT).toEqual({ receipt: null, receiptThumb: null, receiptMeta: null });
   });
 });

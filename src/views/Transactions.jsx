@@ -3,6 +3,7 @@ import { AlertTriangle, CopyPlus, CreditCard, Layers3, Pencil, Trash2, Search, U
 import { flagUnusualSpend, fmt, getAllTags, getSignedAmount, isRefund } from '../utils';
 import { format, isSameDay, isSameMonth, startOfDay, subDays } from 'date-fns';
 import CategorySelect from '../components/CategorySelect';
+import { ReceiptThumb, ReceiptViewer } from '../components/ReceiptViewer';
 import { IconButton } from '../components/ui';
 
 const dateFilterOptions = [
@@ -104,6 +105,7 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
   const [typeFilter, setTypeFilter] = useState('all');
   const [sortBy, setSortBy] = useState('date-desc');
   const [tagFilter, setTagFilter] = useState('all');
+  const [viewingReceipt, setViewingReceipt] = useState(null);
 
   const catMap = useMemo(() => Object.fromEntries(categories.map(c => [c.id, c])), [categories]);
   const allTags = useMemo(() => getAllTags(transactions), [transactions]);
@@ -342,6 +344,7 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
                       {refund && <Undo2 size={12} aria-hidden="true" />}
                       {refund ? '+' : '-'}{fmt(tx.amount)}
                     </div>
+                    <ReceiptThumb transaction={tx} onOpen={setViewingReceipt} />
                     {onRepeat && (
                       <IconButton onClick={() => onRepeat(tx)} style={{ opacity: 0.62 }}
                         label={`Log ${tx.note || cat?.name || 'this'} again`}>
@@ -363,6 +366,10 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
           </div>
           );
         })
+      )}
+
+      {viewingReceipt && (
+        <ReceiptViewer transaction={viewingReceipt} onClose={() => setViewingReceipt(null)} />
       )}
     </div>
   );

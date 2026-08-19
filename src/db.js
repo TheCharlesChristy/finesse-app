@@ -1412,6 +1412,24 @@ export async function clearAllData() {
   );
 }
 
+// Receipt photos are Blobs. JSON.stringify turns a Blob into `{}`, so leaving
+// them in an export would write a field that looks present, imports as garbage,
+// and tells the user nothing went wrong. They are dropped deliberately instead,
+// and the export says how many it left behind.
+const RECEIPT_FIELDS = ['receipt', 'receiptThumb', 'receiptMeta'];
+
+function stripReceipts(transactions = []) {
+  let receiptsOmitted = 0;
+  const rows = transactions.map(tx => {
+    if (!tx.receipt && !tx.receiptThumb) return tx;
+    receiptsOmitted += 1;
+    const copy = { ...tx };
+    for (const field of RECEIPT_FIELDS) delete copy[field];
+    return copy;
+  });
+  return { rows, receiptsOmitted };
+}
+
 export async function exportData() {
   const [accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, subscriptions, variables, rules, templates, goals] = await Promise.all([
     db.accounts.toArray(),
@@ -1429,7 +1447,15 @@ export async function exportData() {
     db.templates.toArray(),
     db.goals.toArray(),
   ]);
-  return { accounts, accountTransfers, incomeEvents, settings, categories, transactions, wishlist, wishlistCategories, incomes, subscriptions, variables, rules, templates, goals, exportedAt: new Date().toISOString(), version: 8 };
+  const { rows: transactionRows, receiptsOmitted } = stripReceipts(transactions);
+  return {
+    accounts, accountTransfers, incomeEvents, settings, categories,
+    transactions: transactionRows,
+    wishlist, wishlistCategories, incomes, subscriptions, variables, rules, templates, goals,
+    receiptsOmitted,
+    exportedAt: new Date().toISOString(),
+    version: 8,
+  };
 }
 
 // Lightweight snapshot for the "share URL" feature: high-level setup only,
@@ -1461,8 +1487,12 @@ const EXPORT_TABLE_NAMES = ['categories', 'transactions', 'incomes', 'incomeEven
   'rules', 'templates', 'goals'];
 // Structural identifiers, always kept and never user-toggleable.
 const EXPORT_ALWAYS_INCLUDED_KEYS = new Set(['id', 'accountId']);
-// Pure linking/dedupe plumbing with no analytical meaning to a reader.
-const EXPORT_NEVER_INCLUDED_KEYS = new Set(['subscriptionRunKey', 'receiptKey']);
+// Pure linking/dedupe plumbing with no analytical meaning to a reader, plus the
+// receipt blobs — binary, unreadable as JSON, and far larger than everything
+// else in the file put together.
+const EXPORT_NEVER_INCLUDED_KEYS = new Set([
+  'subscriptionRunKey', 'receiptKey', ...RECEIPT_FIELDS,
+]);
 const EXPORT_SENSITIVE_FIELD_PATTERN = /note|memo|description|comment|url/i;
 
 export async function getExportableSchema() {

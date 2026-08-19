@@ -10,6 +10,7 @@ import {
   deleteTransaction,
   deleteCategory,
   restoreCategory,
+  exportData,
   borrowBudgetBetweenCategories,
   topUpCategoryFromIncome,
   recalculateSpendCounters,
@@ -141,6 +142,39 @@ describe('spend counter invariants', () => {
 
     expect(await db.transactions.count()).toBe(0);
     expect((await getAccount(accountId)).balance).toBe(1000);
+  });
+});
+
+describe('receipts stay out of the JSON export', () => {
+  it('drops the blobs and reports how many it left behind', async () => {
+    const catId = await makeCategory();
+    await addTransaction({
+      accountId, categoryId: catId, amount: 12, note: 'Lunch',
+      receipt: new Blob(['full']), receiptThumb: new Blob(['thumb']),
+      receiptMeta: { bytes: 9 },
+    });
+    await addTransaction({ accountId, categoryId: catId, amount: 8, note: 'Coffee' });
+
+    const exported = await exportData();
+    const withPhoto = exported.transactions.find(tx => tx.note === 'Lunch');
+
+    expect(exported.receiptsOmitted).toBe(1);
+    expect(withPhoto).not.toHaveProperty('receipt');
+    expect(withPhoto).not.toHaveProperty('receiptThumb');
+    expect(withPhoto).not.toHaveProperty('receiptMeta');
+    // Everything else about the row is untouched.
+    expect(withPhoto.amount).toBe(12);
+
+    // A JSON round trip is the thing that would otherwise silently corrupt.
+    expect(() => JSON.stringify(exported)).not.toThrow();
+    expect(JSON.parse(JSON.stringify(exported)).transactions).toHaveLength(2);
+  });
+
+  it('reports nothing omitted when no receipts exist', async () => {
+    const catId = await makeCategory();
+    await addTransaction({ accountId, categoryId: catId, amount: 8 });
+
+    expect((await exportData()).receiptsOmitted).toBe(0);
   });
 });
 
