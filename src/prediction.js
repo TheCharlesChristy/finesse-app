@@ -40,6 +40,7 @@ import { addDays, differenceInDays, format, getDay, startOfDay } from 'date-fns'
 import {
   addRecurringInterval,
   getCategoryCycle,
+  getEffectiveAllowance,
   getSignedAmount,
   isRefund,
   roundMoney,
@@ -543,9 +544,13 @@ function drawSeverity(severity, rng, normal) {
  * every category's marginal behaviour is untouched while the *aggregate* picks
  * up the correlation a real expensive weekend has.
  *
- * Storage is deliberately asymmetric: per-day quantiles are kept only for the
- * aggregate (one sims × days matrix), and per category only the horizon total.
- * Keeping the full cube would cost megabytes for numbers nothing renders.
+ * Storage is deliberately asymmetric. Per-day *quantiles* are kept only for the
+ * aggregate (one sims × days matrix); per category only the horizon total and a
+ * running per-day mean. Keeping the full sims × days × categories cube would
+ * cost megabytes to answer a question nothing asks — and the per-category
+ * per-day *median* would be £0 for most categories anyway, since on any given
+ * day most categories are not spent in at all. The mean is the statistic that
+ * carries information at that resolution.
  */
 export function simulateSpend({
   models = [],
@@ -555,6 +560,7 @@ export function simulateSpend({
   cycles = null,
   rng = makeRng(1),
   correlation = DEFAULT_CORRELATION,
+  horizonByCategory = null,
 } = {}) {
   const days = Math.max(1, Math.floor(horizonDays));
   const runs = Math.max(1, Math.floor(sims));
@@ -580,10 +586,24 @@ export function simulateSpend({
 
   const cumulative = new Float64Array(runs * days);
   const categoryTotals = [];
-  for (let c = 0; c < count; c += 1) categoryTotals.push(new Float64Array(runs));
+  const categoryDaily = [];
+  for (let c = 0; c < count; c += 1) {
+    categoryTotals.push(new Float64Array(runs));
+    categoryDaily.push(new Float64Array(days));
+  }
 
   const stateWet = new Uint8Array(count);
   const wetBase = DOW_BUCKETS * CYCLE_PHASES;
+
+  // Each category can stop accumulating at its own day — budget cycles end on
+  // different dates, so "what will I have spent by the end of this cycle" is a
+  // different horizon per category. The chain still runs the full length so the
+  // Markov state stays correct; only the tallying stops.
+  const stopAt = new Int32Array(count);
+  for (let c = 0; c < count; c += 1) {
+    const limit = horizonByCategory ? Math.floor(horizonByCategory[c]) : days;
+    stopAt[c] = Math.max(0, Math.min(days, Number.isFinite(limit) ? limit : days));
+  }
 
   for (let sim = 0; sim < runs; sim += 1) {
     for (let c = 0; c < count; c += 1) stateWet[c] = models[c].lastStateWet ? 1 : 0;
@@ -601,8 +621,10 @@ export function simulateSpend({
         stateWet[c] = wet ? 1 : 0;
         if (!wet) continue;
         const amount = drawSeverity(model.severity, rng, normal);
+        if (d >= stopAt[c]) continue;
         dayTotal += amount;
         categoryTotals[c][sim] += amount;
+        categoryDaily[c][d] += amount;
       }
 
       running += dayTotal;
@@ -626,6 +648,10 @@ export function simulateSpend({
     });
   }
 
+  for (const daily of categoryDaily) {
+    for (let d = 0; d < days; d += 1) daily[d] /= runs;
+  }
+
   const byCategory = categoryTotals.map(totals => {
     const sorted = totals.slice().sort();
     let sum = 0;
@@ -647,6 +673,10 @@ export function simulateSpend({
   return {
     daily,
     byCategory,
+    byCategoryDaily: categoryDaily,
+    // Raw per-sim totals, so callers can ask questions quantiles cannot answer
+    // — "what fraction of futures blow the allowance?" chief among them.
+    byCategorySamples: categoryTotals,
     total: {
       p10: quantileSorted(sortedTotals, 0.1),
       p50: quantileSorted(sortedTotals, 0.5),
@@ -672,6 +702,7 @@ export function projectSubscriptions(subscriptions = [], { from = new Date(), da
   const end = addDays(start, days);
   const items = [];
   const byCategory = new Map();
+  const byCategoryDay = new Map();
   const byDay = new Float64Array(days);
   let total = 0;
 
@@ -708,6 +739,8 @@ export function projectSubscriptions(subscriptions = [], { from = new Date(), da
         total += amount;
         const key = sub.categoryId != null ? Number(sub.categoryId) : null;
         byCategory.set(key, (byCategory.get(key) || 0) + amount);
+        if (!byCategoryDay.has(key)) byCategoryDay.set(key, new Float64Array(days));
+        byCategoryDay.get(key)[dayIndex] += amount;
       }
       next = startOfDay(addRecurringInterval(next, unit, interval));
       guard += 1;
@@ -715,13 +748,87 @@ export function projectSubscriptions(subscriptions = [], { from = new Date(), da
   }
 
   items.sort((a, b) => a.dayIndex - b.dayIndex);
-  return { total: roundMoney(total), items, byCategory, byDay };
+  return { total: roundMoney(total), items, byCategory, byCategoryDay, byDay };
 }
 
 // ── Public entry point ───────────────────────────────────────────────────────
 
 /** History older than this contributes almost nothing after decay anyway. */
 const MAX_HISTORY_DAYS = 730;
+
+/**
+ * Fit every category against a shared history window and pooled prior.
+ *
+ * Shared by the horizon forecast and the end-of-cycle projection so the two
+ * can never disagree about what the model thinks — they differ only in how far
+ * forward they tally, not in what they learned.
+ */
+export function fitAccountModels({
+  transactions = [],
+  categories = [],
+  incomes = [],
+  settings = null,
+  halfLifeDays = DEFAULT_HALF_LIFE_DAYS,
+  now = new Date(),
+} = {}) {
+  const today = startOfDay(now);
+  const spine = buildDailySeries(transactions, { to: today });
+  const cappedStart = spine.dayCount > MAX_HISTORY_DAYS
+    ? addDays(today, -(MAX_HISTORY_DAYS - 1))
+    : spine.start;
+  const observedDays = Math.max(0, differenceInDays(today, cappedStart) + 1);
+
+  if (!categories.length) {
+    return { ready: false, reason: 'no-categories', observedDays, modelled: [], skipped: [] };
+  }
+  if (observedDays < MIN_HISTORY_DAYS) {
+    return {
+      ready: false,
+      reason: `Needs about ${MIN_HISTORY_DAYS} days of history — there are ${observedDays}.`,
+      observedDays,
+      modelled: [],
+      skipped: [],
+    };
+  }
+
+  const seriesByCategory = categories.map(category => buildDailySeries(transactions, {
+    categoryId: category.id,
+    from: cappedStart,
+    to: today,
+  }));
+  const prior = buildPooledPrior(seriesByCategory);
+  const cycles = categories.map(category => getCategoryCycle(category, incomes, settings, now));
+
+  const modelled = [];
+  const skipped = [];
+  categories.forEach((category, index) => {
+    const model = fitCategoryModel({
+      series: seriesByCategory[index],
+      cycle: cycles[index],
+      prior,
+      halfLifeDays,
+    });
+    // A category that has never been spent in has nothing to predict. Letting
+    // the pooled prior speak for it would invent spending with no basis.
+    if (model.wetDays < 1) skipped.push({ category, model, cycle: cycles[index] });
+    else modelled.push({ category, model, cycle: cycles[index] });
+  });
+
+  if (!modelled.length) {
+    return { ready: false, reason: 'No category has any spending history yet.', observedDays, modelled, skipped };
+  }
+
+  return { ready: true, reason: null, observedDays, modelled, skipped };
+}
+
+/** Stable seed derived from the data the forecast describes. */
+function seedFor(transactions, ...parts) {
+  const digest = transactions.reduce(
+    (acc, tx) => acc + (Number(tx?.id) || 0) + Math.round(Math.abs(Number(tx?.amount) || 0) * 100),
+    transactions.length,
+  );
+  return hashSeed(...parts, transactions.length, digest);
+}
 
 /**
  * The whole pipeline: fit, simulate, add the deterministic layer, report.
@@ -747,11 +854,8 @@ export function buildSpendPrediction({
   const forecastStart = addDays(today, 1);
   const days = Math.max(1, Math.floor(horizonDays));
 
-  const spine = buildDailySeries(transactions, { to: today });
-  const cappedStart = spine.dayCount > MAX_HISTORY_DAYS
-    ? addDays(today, -(MAX_HISTORY_DAYS - 1))
-    : spine.start;
-  const observedDays = Math.max(0, differenceInDays(today, cappedStart) + 1);
+  const fit = fitAccountModels({ transactions, categories, incomes, settings, halfLifeDays, now });
+  const { observedDays, modelled, skipped } = fit;
 
   const subscriptionPlan = projectSubscriptions(subscriptions, { from: forecastStart, days });
 
@@ -770,44 +874,11 @@ export function buildSpendPrediction({
     categories: [],
   });
 
-  if (!categories.length) return empty('no-categories');
-  if (observedDays < MIN_HISTORY_DAYS) {
-    return empty(`Needs about ${MIN_HISTORY_DAYS} days of history — there are ${observedDays}.`);
-  }
+  if (!fit.ready) return empty(fit.reason);
 
-  const seriesByCategory = categories.map(category => buildDailySeries(transactions, {
-    categoryId: category.id,
-    from: cappedStart,
-    to: today,
-  }));
-
-  const prior = buildPooledPrior(seriesByCategory);
-  const cycles = categories.map(category => getCategoryCycle(category, incomes, settings, now));
-
-  const modelled = [];
-  const skipped = [];
-  categories.forEach((category, index) => {
-    const model = fitCategoryModel({
-      series: seriesByCategory[index],
-      cycle: cycles[index],
-      prior,
-      halfLifeDays,
-    });
-    // A category that has never been spent in has nothing to predict. Letting
-    // the pooled prior speak for it would invent spending that has no basis.
-    if (model.wetDays < 1) skipped.push({ category, model });
-    else modelled.push({ category, model, cycle: cycles[index] });
-  });
-
-  if (!modelled.length) return empty('No category has any spending history yet.');
-
-  const digest = transactions.reduce(
-    (acc, tx) => acc + (Number(tx?.id) || 0) + Math.round(Math.abs(Number(tx?.amount) || 0) * 100),
-    transactions.length,
-  );
   const resolvedSeed = seed != null
     ? (Number(seed) >>> 0)
-    : hashSeed(days, sims, transactions.length, digest, format(today, 'yyyy-MM-dd'));
+    : seedFor(transactions, days, sims, format(today, 'yyyy-MM-dd'));
 
   const simulation = simulateSpend({
     models: modelled.map(entry => entry.model),
@@ -840,8 +911,24 @@ export function buildSpendPrediction({
 
   const categoryRows = modelled.map((entry, index) => {
     const stochastic = simulation.byCategory[index];
-    const subs = subscriptionPlan.byCategory.get(Number(entry.category.id)) || 0;
+    const categoryId = Number(entry.category.id);
+    const subs = subscriptionPlan.byCategory.get(categoryId) || 0;
+    // Expected spend on each day of the horizon, deterministic charges
+    // included, so a subscription shows up as the spike it actually is.
+    const subsByDay = subscriptionPlan.byCategoryDay.get(categoryId);
+    const stochasticDaily = simulation.byCategoryDaily[index];
+    const daily = [];
+    let runningDaily = 0;
+    const cumulative = [];
+    for (let d = 0; d < days; d += 1) {
+      const value = roundMoney(stochasticDaily[d] + (subsByDay ? subsByDay[d] : 0));
+      daily.push(value);
+      runningDaily = roundMoney(runningDaily + value);
+      cumulative.push(runningDaily);
+    }
     return {
+      daily,
+      cumulative,
       id: entry.category.id,
       name: entry.category.name,
       color: entry.category.color,
@@ -858,11 +945,24 @@ export function buildSpendPrediction({
   }).sort((a, b) => b.p50 - a.p50);
 
   for (const entry of skipped) {
-    const subs = subscriptionPlan.byCategory.get(Number(entry.category.id)) || 0;
+    const categoryId = Number(entry.category.id);
+    const subs = subscriptionPlan.byCategory.get(categoryId) || 0;
     if (subs <= 0) continue;
+    const subsByDay = subscriptionPlan.byCategoryDay.get(categoryId);
+    const daily = [];
+    const cumulative = [];
+    let running = 0;
+    for (let d = 0; d < days; d += 1) {
+      const value = roundMoney(subsByDay ? subsByDay[d] : 0);
+      daily.push(value);
+      running = roundMoney(running + value);
+      cumulative.push(running);
+    }
     // No spend history, but a subscription still lands here — report the
     // deterministic part with a zero-width band, because that part is known.
     categoryRows.push({
+      daily,
+      cumulative,
       id: entry.category.id,
       name: entry.category.name,
       color: entry.category.color,
@@ -906,6 +1006,110 @@ export function buildSpendPrediction({
     subscriptions: { ...subscriptionPlan, unassigned: roundMoney(unassignedSubs) },
     series,
     categories: categoryRows,
+  };
+}
+
+/**
+ * Where each category lands by the end of its *own* budget cycle.
+ *
+ * This is the question the app exists to answer — "am I going to blow this
+ * budget?" — answered with a range and an explicit probability rather than a
+ * straight-line extrapolation of the current burn rate.
+ *
+ * Every category is simulated to its own cycle end, because a weekly-funded
+ * category and a monthly-funded one do not share a deadline. The simulator
+ * runs the whole chain and simply stops tallying each category at its own day,
+ * which keeps the cross-category correlation intact.
+ */
+export function buildCycleProjection({
+  transactions = [],
+  categories = [],
+  incomes = [],
+  subscriptions = [],
+  settings = null,
+  sims = DEFAULT_SIMS,
+  halfLifeDays = DEFAULT_HALF_LIFE_DAYS,
+  correlation = DEFAULT_CORRELATION,
+  now = new Date(),
+  seed = null,
+} = {}) {
+  const today = startOfDay(now);
+  const forecastStart = addDays(today, 1);
+
+  const fit = fitAccountModels({ transactions, categories, incomes, settings, halfLifeDays, now });
+  if (!fit.ready) {
+    return { ready: false, reason: fit.reason, observedDays: fit.observedDays, categories: [] };
+  }
+
+  const { modelled } = fit;
+  const remaining = modelled.map(entry => Math.max(0, Math.min(400, entry.cycle?.remaining ?? 0)));
+  const horizon = Math.max(1, ...remaining);
+  const plan = projectSubscriptions(subscriptions, { from: forecastStart, days: horizon });
+
+  const resolvedSeed = seed != null
+    ? (Number(seed) >>> 0)
+    : seedFor(transactions, 'cycle', sims, format(today, 'yyyy-MM-dd'));
+
+  const simulation = simulateSpend({
+    models: modelled.map(entry => entry.model),
+    cycles: modelled.map(entry => entry.cycle),
+    horizonDays: horizon,
+    sims,
+    startDate: forecastStart,
+    rng: makeRng(resolvedSeed),
+    correlation,
+    horizonByCategory: remaining,
+  });
+
+  const rows = modelled.map((entry, index) => {
+    const { category } = entry;
+    const categoryId = Number(category.id);
+    // Effective, not base: a temporary boost or a rollover balance is real
+    // money this cycle, and comparing against the base allowance would flag an
+    // overspend that isn't one.
+    const allowance = roundMoney(getEffectiveAllowance(category));
+    const spent = roundMoney(Number(category.spent) || 0);
+
+    const subsByDay = plan.byCategoryDay.get(categoryId);
+    let subs = 0;
+    if (subsByDay) for (let day = 0; day < remaining[index]; day += 1) subs += subsByDay[day];
+    subs = roundMoney(subs);
+
+    const band = simulation.byCategory[index];
+    const samples = simulation.byCategorySamples[index];
+    const project = value => roundMoney(spent + subs + value);
+
+    // How much discretionary room is left before the allowance is gone; the
+    // share of simulated futures that exceed it is the overspend risk.
+    const headroom = allowance - spent - subs;
+    let over = 0;
+    for (let i = 0; i < samples.length; i += 1) if (samples[i] > headroom) over += 1;
+
+    return {
+      id: category.id,
+      name: category.name,
+      color: category.color,
+      allowance,
+      spent,
+      subscriptions: subs,
+      remainingDays: remaining[index],
+      cycleEnd: entry.cycle?.end ? format(entry.cycle.end, 'yyyy-MM-dd') : null,
+      p10: project(band.p10),
+      p50: project(band.p50),
+      p90: project(band.p90),
+      mean: project(band.mean),
+      dailyMean: remaining[index] > 0 ? roundMoney(band.mean / remaining[index]) : 0,
+      overspendRisk: samples.length ? Math.round((over / samples.length) * 100) / 100 : 0,
+    };
+  });
+
+  return {
+    ready: true,
+    reason: null,
+    observedDays: fit.observedDays,
+    seed: resolvedSeed,
+    sims: simulation.sims,
+    categories: rows.sort((a, b) => b.overspendRisk - a.overspendRisk || b.p50 - a.p50),
   };
 }
 
