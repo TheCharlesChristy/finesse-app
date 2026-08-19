@@ -6,6 +6,7 @@ import {
   MIN_HISTORY_DAYS,
   backtestPrediction,
   baselineForecast,
+  buildCycleProjection,
   buildDailySeries,
   buildPooledPrior,
   buildSpendPrediction,
@@ -387,6 +388,53 @@ describe('P8 — end-to-end prediction', () => {
     expect(row.confidence).toBe('none');
   });
 
+  it('gives every category a per-day expected spend series', () => {
+    const result = buildSpendPrediction({ transactions, categories: [CATEGORY], horizonDays: 30 });
+    const row = result.categories[0];
+
+    expect(row.daily).toHaveLength(30);
+    expect(row.cumulative).toHaveLength(30);
+    expect(row.daily.every(value => value >= 0)).toBe(true);
+    // Cumulative is the running sum of daily, and lands on the category mean.
+    for (let i = 1; i < row.cumulative.length; i += 1) {
+      expect(row.cumulative[i]).toBeGreaterThanOrEqual(row.cumulative[i - 1]);
+    }
+    expect(row.cumulative.at(-1)).toBeCloseTo(row.mean, 0);
+  });
+
+  it('reconciles per-category daily means against the aggregate', () => {
+    const second = { id: 2, name: 'Travel', allowance: 120, color: '#5db8ff' };
+    const mixed = [
+      ...transactions,
+      ...makeHistory({ categoryId: 2, everyNDays: 3, days: 220, amount: 12 }),
+    ];
+    const result = buildSpendPrediction({ transactions: mixed, categories: [CATEGORY, second], horizonDays: 30 });
+
+    const summed = result.categories.reduce((sum, row) => sum + row.cumulative.at(-1), 0);
+    expect(summed).toBeCloseTo(result.total.mean, 0);
+  });
+
+  // A subscription is a spike on one known day, not spread across the month.
+  it('puts a subscription on its due day in the daily series', () => {
+    const base = today();
+    const result = buildSpendPrediction({
+      transactions,
+      categories: [CATEGORY],
+      subscriptions: [{
+        id: 1, name: 'Gym', amount: 30, interval: 1, intervalUnit: 'month',
+        nextDueAt: iso(addDays(base, 5)), categoryId: 1, active: true,
+      }],
+      horizonDays: 30,
+    });
+
+    const row = result.categories.find(entry => entry.id === 1);
+    // Horizon starts tomorrow, so a charge 5 days out is index 4.
+    const spike = row.daily[4];
+    const neighbours = [row.daily[2], row.daily[3], row.daily[5], row.daily[6]];
+    expect(spike).toBeGreaterThan(30);
+    expect(Math.max(...neighbours)).toBeLessThan(spike - 25);
+  });
+
   it('honours the requested horizon', () => {
     const short = buildSpendPrediction({ transactions, categories: [CATEGORY], horizonDays: 7 });
     const long = buildSpendPrediction({ transactions, categories: [CATEGORY], horizonDays: 60 });
@@ -401,7 +449,105 @@ describe('P8 — end-to-end prediction', () => {
   });
 });
 
-describe('P9 — backtesting', () => {
+describe('P9 — end-of-cycle projection', () => {
+  const transactions = makeHistory({ everyNDays: 2, days: 220, amount: 20 });
+  const income = { id: 10, name: 'Salary', amount: 2000, resetFrequency: 'monthly', lastPaid: iso(addDays(today(), -8)) };
+  const funded = {
+    ...CATEGORY,
+    spent: 120,
+    incomeAllocations: [{ incomeId: 10, percent: 100 }],
+    lastReset: iso(addDays(today(), -8)),
+  };
+
+  it('projects each category to its own cycle end', () => {
+    const result = buildCycleProjection({
+      transactions, categories: [funded], incomes: [income], sims: 400,
+    });
+
+    expect(result.ready).toBe(true);
+    const row = result.categories[0];
+    expect(row.remainingDays).toBeGreaterThan(0);
+    // Projection starts from what is already spent, not from zero.
+    expect(row.p10).toBeGreaterThanOrEqual(row.spent);
+    expect(row.p10).toBeLessThanOrEqual(row.p50);
+    expect(row.p50).toBeLessThanOrEqual(row.p90);
+    expect(row.overspendRisk).toBeGreaterThanOrEqual(0);
+    expect(row.overspendRisk).toBeLessThanOrEqual(1);
+  });
+
+  it('reports near-certain overspend against a hopeless allowance', () => {
+    const doomed = { ...funded, allowance: 1, spent: 300 };
+    const result = buildCycleProjection({
+      transactions, categories: [doomed], incomes: [income], sims: 400,
+    });
+    expect(result.categories[0].overspendRisk).toBeGreaterThan(0.9);
+  });
+
+  it('reports near-zero overspend against a generous allowance', () => {
+    const safe = { ...funded, allowance: 100000, spent: 0 };
+    const result = buildCycleProjection({
+      transactions, categories: [safe], incomes: [income], sims: 400,
+    });
+    expect(result.categories[0].overspendRisk).toBeLessThan(0.05);
+  });
+
+  // A rollover balance or a temporary boost is real money this cycle; comparing
+  // against the base allowance would flag an overspend that isn't one.
+  it('counts rollover and boosts as headroom', () => {
+    const base = { ...funded, allowance: 200, spent: 190, rolloverBalance: 0, temporaryBoost: 0 };
+    const boosted = { ...base, rolloverBalance: 400, temporaryBoost: 400 };
+    const risk = category => buildCycleProjection({
+      transactions, categories: [category], incomes: [income], sims: 400,
+    }).categories[0].overspendRisk;
+
+    expect(risk(boosted)).toBeLessThan(risk(base));
+  });
+
+  it('refuses without enough history', () => {
+    const result = buildCycleProjection({
+      transactions: makeHistory({ everyNDays: 2, days: 8 }),
+      categories: [funded],
+      incomes: [income],
+    });
+    expect(result.ready).toBe(false);
+    expect(result.categories).toEqual([]);
+  });
+
+  it('is deterministic for the same data', () => {
+    const run = () => buildCycleProjection({
+      transactions, categories: [funded], incomes: [income], sims: 300,
+    }).categories[0];
+    expect(run()).toEqual(run());
+  });
+});
+
+describe('P10 — per-category simulation horizons', () => {
+  const buildModel = () => {
+    const series = buildDailySeries(makeHistory({ everyNDays: 2, days: 200, amount: 20 }), { categoryId: 1, to: today() });
+    return fitCategoryModel({ series, prior: buildPooledPrior([series]) });
+  };
+
+  it('stops tallying a category at its own horizon', () => {
+    const models = [buildModel(), buildModel()];
+    const sim = simulateSpend({
+      models, horizonDays: 60, sims: 800, rng: makeRng(77), correlation: 0,
+      horizonByCategory: [60, 30],
+    });
+    // Half the days should be roughly half the spend.
+    expect(sim.byCategory[1].mean).toBeGreaterThan(sim.byCategory[0].mean * 0.35);
+    expect(sim.byCategory[1].mean).toBeLessThan(sim.byCategory[0].mean * 0.65);
+  });
+
+  it('records nothing for a category whose cycle has already ended', () => {
+    const sim = simulateSpend({
+      models: [buildModel()], horizonDays: 30, sims: 200, rng: makeRng(5), horizonByCategory: [0],
+    });
+    expect(sim.byCategory[0].mean).toBe(0);
+    expect(sim.byCategory[0].p90).toBe(0);
+  });
+});
+
+describe('P11 — backtesting', () => {
   const transactions = makeHistory({ everyNDays: 2, days: 400, amount: 20 });
 
   it('scores every fold it has history for', () => {

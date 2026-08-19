@@ -1,16 +1,14 @@
 import { useMemo, useState } from 'react';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ReferenceLine,
-  ComposedChart, Line,
+  ComposedChart, LineChart, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend
 } from 'recharts';
-import { AlertTriangle, Check } from 'lucide-react';
+import { Activity, AlertTriangle, Check, History, TrendingUp, Wallet } from 'lucide-react';
 import { differenceInDays, format, startOfDay } from 'date-fns';
 import {
   fmt,
   buildMonthlyHistory,
-  getProjectedSpend,
-  getDailyBurnRate,
   daysUntilReset,
   projectedEndBalance,
   calcNextReset,
@@ -23,11 +21,58 @@ import {
   buildCashFlowForecast,
   normalizeIncomeAllocations,
 } from '../utils';
-import { DEFAULT_HORIZON_DAYS, buildSpendPrediction } from '../prediction';
+import { DEFAULT_HORIZON_DAYS, buildCycleProjection, buildSpendPrediction } from '../prediction';
 import { CardTitle } from '../components/ui';
 
 const COLORS = ['#4fffb0', '#5db8ff', '#c084fc', '#fbbf70', '#ff6b8a', '#67e8f9', '#a78bfa'];
 const FREQ_LABEL = { weekly: 'Weekly', fortnightly: 'Fortnightly', '4weekly': 'Every 4 weeks', monthly: 'Monthly' };
+
+// Three questions, three screens: what's coming, how the budget is set up, what
+// already happened. The page used to answer all three in one ten-card scroll,
+// which on a phone meant the forecast and the history were the same distance
+// away — a very long way.
+const TABS = [
+  { id: 'outlook', label: 'Outlook', icon: TrendingUp },
+  { id: 'budget',  label: 'Budget',  icon: Wallet },
+  { id: 'history', label: 'History', icon: History },
+];
+
+const PREDICTION_HORIZONS = [7, 30, 90];
+/** Beyond this many lines the per-category chart is spaghetti, not information. */
+const MAX_LINES = 6;
+
+const CONFIDENCE_LABEL = {
+  ok:   { text: 'good history',   color: 'var(--good)' },
+  low:  { text: 'thin history',   color: 'var(--warn)' },
+  none: { text: 'scheduled only', color: 'var(--text-muted)' },
+};
+
+/**
+ * Distinct colours, one per category.
+ *
+ * New categories all default to the same mint, so keying lines off
+ * `category.color` alone paints every one of them identically. Honour a
+ * category's own colour when it is actually distinctive and fall back to the
+ * palette when it collides — past seven categories the palette wraps, which is
+ * well beyond the point the chart shows only its top six anyway.
+ */
+function assignColors(rows = []) {
+  const used = new Set();
+  const map = new Map();
+  let next = 0;
+  rows.forEach((row, index) => {
+    let color = row.color;
+    if (!color || used.has(color)) {
+      while (next < COLORS.length && used.has(COLORS[next])) next += 1;
+      color = next < COLORS.length ? COLORS[next] : COLORS[index % COLORS.length];
+    }
+    used.add(color);
+    map.set(row.id, color);
+  });
+  return map;
+}
+
+const riskColor = risk => (risk >= 0.6 ? 'var(--danger)' : risk >= 0.3 ? 'var(--warn)' : 'var(--good)');
 
 function getNextIncomeReset(income, categories, now = new Date()) {
   const freq = income.resetFrequency || (income.payDayOfMonth ? 'monthly' : null);
@@ -88,15 +133,6 @@ const PieTooltip = ({ active, payload }) => {
   );
 };
 
-
-const PREDICTION_HORIZONS = [7, 30, 90];
-
-const CONFIDENCE_LABEL = {
-  ok:   { text: 'good history',   color: 'var(--good)' },
-  low:  { text: 'thin history',   color: 'var(--warn)' },
-  none: { text: 'scheduled only', color: 'var(--text-muted)' },
-};
-
 // The band is the whole point, so the tooltip leads with it. Showing the
 // median alone would imply a precision this forecast does not have.
 const ForecastTooltip = ({ active, payload, label }) => {
@@ -120,22 +156,64 @@ const ForecastTooltip = ({ active, payload, label }) => {
   );
 };
 
+/** Per-category tooltip, biggest first and zero-spend categories omitted. */
+const CategoryLinesTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+  const rows = payload
+    .filter(entry => Number(entry.value) > 0.005)
+    .sort((a, b) => Number(b.value) - Number(a.value));
+  if (!rows.length) return null;
+  return (
+    <div style={{ background: 'rgba(18,26,48,0.95)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 12, padding: '10px 14px', fontSize: 12 }}>
+      <div style={{ color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600 }}>{label}</div>
+      {rows.map(entry => (
+        <div key={entry.dataKey} style={{ color: entry.color, marginBottom: 2, display: 'flex', gap: 12, justifyContent: 'space-between' }}>
+          <span>{entry.name}</span><strong>{fmt(Number(entry.value))}</strong>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 /**
  * Monte Carlo spend forecast.
  *
  * Deliberately reports a range rather than a number: personal spending is
  * dominated by noise no model can see coming, so a single figure would be
- * false precision. Everything it needs already arrives as props — the
- * simulation itself lives in `prediction.js`, not here.
+ * false precision. The simulation itself lives in `prediction.js` and arrives
+ * here already computed — this only draws it.
  */
-function SpendPrediction({ transactions, categories, incomes, subscriptions, settings }) {
-  const [horizonDays, setHorizonDays] = useState(DEFAULT_HORIZON_DAYS);
+function SpendPrediction({ prediction, horizonDays, onHorizonChange }) {
+  const [mode, setMode] = useState('daily');
+  const [hidden, setHidden] = useState(() => new Set());
+  const [showAll, setShowAll] = useState(false);
 
-  const prediction = useMemo(() => buildSpendPrediction({
-    transactions, categories, incomes, subscriptions, settings, horizonDays,
-  }), [transactions, categories, incomes, subscriptions, settings, horizonDays]);
+  const ranked = prediction.categories;
+  const charted = showAll ? ranked : ranked.slice(0, MAX_LINES);
+  const visible = charted.filter(row => !hidden.has(row.id));
 
-  const widest = Math.max(1, ...prediction.categories.map(row => row.p90));
+  const toggle = id => setHidden(previous => {
+    const next = new Set(previous);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  // Recharts wants one object per x-value, so pivot the per-category arrays.
+  // Keys are ids rather than names: two categories may share a name, and a name
+  // may collide with a field the chart already uses.
+  const perDay = useMemo(() => prediction.series.map((point, index) => {
+    const row = { label: point.label, date: point.date };
+    for (const category of ranked) {
+      row[`cat-${category.id}`] = mode === 'daily'
+        ? category.daily[index]
+        : category.cumulative[index];
+    }
+    return row;
+  }), [prediction, ranked, mode]);
+
+  const widest = Math.max(1, ...ranked.map(row => row.p90));
+  const palette = useMemo(() => assignColors(ranked), [ranked]);
+  const colorFor = row => palette.get(row.id) || COLORS[0];
 
   return (
     <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
@@ -149,7 +227,7 @@ function SpendPrediction({ transactions, categories, incomes, subscriptions, set
         <div style={{ display: 'flex', gap: 6 }}>
           {PREDICTION_HORIZONS.map(days => (
             <button key={days} type="button"
-              onClick={() => setHorizonDays(days)}
+              onClick={() => onHorizonChange(days)}
               className={horizonDays === days ? 'btn-primary' : 'btn-secondary'}
               style={{ padding: '6px 12px', fontSize: 12 }}
               aria-pressed={horizonDays === days}>
@@ -185,7 +263,7 @@ function SpendPrediction({ transactions, categories, incomes, subscriptions, set
           </div>
 
           <div className="mobile-chart-scroll" style={{ marginTop: 16 }}>
-            <ResponsiveContainer width="100%" height={220}>
+            <ResponsiveContainer width="100%" height={200}>
               <ComposedChart data={prediction.series}>
                 <CartesianGrid vertical={false} />
                 <XAxis dataKey="label" interval={Math.max(0, Math.floor(prediction.series.length / 6) - 1)} />
@@ -199,13 +277,92 @@ function SpendPrediction({ transactions, categories, incomes, subscriptions, set
             </ResponsiveContainer>
           </div>
 
-          <div style={{ marginTop: 18 }}>
-            {prediction.categories.map(row => {
+          {/* ── Per-category lines ── */}
+          <div style={{ marginTop: 24, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 18 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+              <div>
+                <CardTitle as="h3" style={{ fontSize: 14, marginBottom: 4 }}>By Category</CardTitle>
+                <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                  {mode === 'daily'
+                    ? 'Expected spend on each day — the weekly rhythm is the model’s, not a smoothing artefact'
+                    : 'Running total per category across the horizon'}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {[['daily', 'Per day'], ['cumulative', 'Cumulative']].map(([value, text]) => (
+                  <button key={value} type="button"
+                    onClick={() => setMode(value)}
+                    className={mode === value ? 'btn-primary' : 'btn-secondary'}
+                    style={{ padding: '6px 12px', fontSize: 12 }}
+                    aria-pressed={mode === value}>
+                    {text}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 12 }}>
+              {charted.map(row => {
+                const on = !hidden.has(row.id);
+                const tint = colorFor(row);
+                return (
+                  <button key={row.id} type="button" onClick={() => toggle(row.id)} aria-pressed={on}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '4px 10px', borderRadius: 999, fontSize: 11, cursor: 'pointer',
+                      background: on ? 'rgba(255,255,255,0.07)' : 'transparent',
+                      border: `1px solid ${on ? tint : 'rgba(255,255,255,0.12)'}`,
+                      color: on ? 'var(--text-primary)' : 'var(--text-muted)',
+                    }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: on ? tint : 'rgba(255,255,255,0.25)' }} />
+                    {row.name}
+                  </button>
+                );
+              })}
+              {ranked.length > MAX_LINES && (
+                <button type="button" onClick={() => setShowAll(value => !value)}
+                  style={{
+                    padding: '4px 10px', borderRadius: 999, fontSize: 11, cursor: 'pointer',
+                    background: 'transparent', border: '1px dashed rgba(255,255,255,0.2)', color: 'var(--text-muted)',
+                  }}>
+                  {showAll ? 'Show top 6' : `+${ranked.length - MAX_LINES} more`}
+                </button>
+              )}
+            </div>
+
+            <div className="mobile-chart-scroll">
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={perDay}>
+                  <CartesianGrid vertical={false} />
+                  <XAxis dataKey="label" interval={Math.max(0, Math.floor(perDay.length / 6) - 1)} />
+                  <YAxis tickFormatter={v => `£${Math.round(v)}`} />
+                  <Tooltip content={<CategoryLinesTooltip />} />
+                  {visible.map(row => (
+                    <Line key={row.id} type="monotone"
+                      dataKey={`cat-${row.id}`}
+                      name={row.name}
+                      stroke={colorFor(row)}
+                      strokeWidth={2} dot={false}
+                      isAnimationActive={false} />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            {visible.length === 0 && (
+              <div style={{ color: 'var(--text-muted)', fontSize: 12, textAlign: 'center', marginTop: -120, marginBottom: 100 }}>
+                Turn a category back on to see its line.
+              </div>
+            )}
+          </div>
+
+          {/* ── Per-category totals ── */}
+          <div style={{ marginTop: 22, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 6 }}>
+            {ranked.map(row => {
               const confidence = CONFIDENCE_LABEL[row.confidence] || CONFIDENCE_LABEL.none;
               const left = (row.p10 / widest) * 100;
               const width = Math.max(1.5, ((row.p90 - row.p10) / widest) * 100);
               const marker = (row.p50 / widest) * 100;
-              const tint = row.color || '#5db8ff';
+              const tint = colorFor(row);
               return (
                 <div key={row.id} style={{
                   display: 'grid', gridTemplateColumns: 'minmax(88px, 1.1fr) 2fr minmax(104px, auto)',
@@ -238,7 +395,149 @@ function SpendPrediction({ transactions, categories, incomes, subscriptions, set
   );
 }
 
+/**
+ * Where each category ends its own cycle, against what it is allowed.
+ *
+ * Replaces a straight-line extrapolation of the current burn rate: that
+ * answered "if today repeats forever" rather than "what usually happens", and
+ * had no way to express how likely an overspend actually was.
+ */
+function CycleOutlook({ projection }) {
+  if (!projection.ready || !projection.categories.length) return null;
+
+  const palette = assignColors(projection.categories);
+  const chartData = projection.categories.map(row => ({
+    name: row.name,
+    Allowance: row.allowance,
+    Spent: row.spent,
+    Projected: row.p50,
+    color: palette.get(row.id),
+  }));
+  const atRisk = projection.categories.filter(row => row.overspendRisk >= 0.3);
+
+  return (
+    <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+      <CardTitle as="h2" style={{ marginBottom: 6 }}>Projected Spend vs Allowance</CardTitle>
+      <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 18 }}>
+        Simulated to the end of each category&rsquo;s own budget cycle, including what is already spent
+      </div>
+
+      {atRisk.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 10, background: 'rgba(251,191,112,0.1)', color: 'var(--warn)', fontSize: 13 }}>
+          <AlertTriangle size={15} aria-hidden="true" />
+          <span>
+            {atRisk.length} categor{atRisk.length === 1 ? 'y is' : 'ies are'} at real risk of going over:{' '}
+            <strong>{atRisk.map(row => row.name).join(', ')}</strong>.
+          </span>
+        </div>
+      )}
+
+      <div style={{ marginBottom: 20 }}>
+        {projection.categories.map(row => (
+          <div key={row.id} style={{
+            display: 'grid', gridTemplateColumns: 'minmax(88px, 1.2fr) minmax(120px, auto) 62px',
+            gap: 12, alignItems: 'center', padding: '9px 0', borderTop: '1px solid rgba(255,255,255,0.06)',
+          }}>
+            <div>
+              <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{row.name}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                {row.remainingDays}d left · {fmt(row.spent)} of {fmt(row.allowance)} spent
+              </div>
+            </div>
+            <div style={{ textAlign: 'right', fontSize: 12 }}>
+              <div style={{ color: row.p50 > row.allowance ? 'var(--danger)' : 'var(--text-primary)' }}>{fmt(row.p50)}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{fmt(row.p10)} – {fmt(row.p90)}</div>
+            </div>
+            <div style={{ textAlign: 'right', fontSize: 13, fontWeight: 600, color: riskColor(row.overspendRisk) }}
+              title="Share of simulated futures that end the cycle over budget">
+              {Math.round(row.overspendRisk * 100)}%
+            </div>
+          </div>
+        ))}
+        <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10, textAlign: 'right' }}>
+          right-hand column: chance of ending the cycle over budget
+        </div>
+      </div>
+
+      <div className="mobile-chart-scroll">
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={chartData} barGap={4} barCategoryGap="30%">
+            <CartesianGrid vertical={false} />
+            <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+            <YAxis tickFormatter={v => `£${v}`} />
+            <Tooltip content={<GlassTooltip />} />
+            <Legend wrapperStyle={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }} />
+            <Bar dataKey="Allowance" fill="rgba(255,255,255,0.1)" radius={[6,6,0,0]} />
+            <Bar dataKey="Spent"     fill="#5db8ff"              radius={[6,6,0,0]} />
+            <Bar dataKey="Projected" fill="#fbbf70" opacity={0.7} radius={[6,6,0,0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+/** Expected spend per day per category, straight from the simulation. */
+function ExpectedDailySpend({ projection }) {
+  const rows = projection.ready
+    ? projection.categories.filter(row => row.dailyMean > 0).sort((a, b) => b.dailyMean - a.dailyMean)
+    : [];
+  if (!rows.length) return null;
+  const peak = rows[0].dailyMean;
+  const palette = assignColors(rows);
+
+  return (
+    <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+      <CardTitle as="h2" style={{ marginBottom: 6 }}>Expected Daily Spend</CardTitle>
+      <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>
+        Simulated average per day for the rest of each category&rsquo;s cycle
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {rows.map(row => {
+          const tint = palette.get(row.id);
+          return (
+            <div key={row.id} className="mobile-row-stack" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 120, fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0 }}>{row.name}</div>
+              <div style={{ flex: 1 }}>
+                <div className="progress-track">
+                  <div className="progress-fill" style={{ width: `${Math.min(100, (row.dailyMean / peak) * 100)}%`, background: tint }} />
+                </div>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: tint, width: 60, textAlign: 'right', flexShrink: 0 }}>
+                {fmt(row.dailyMean)}/d
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ label, value, hint, color }) {
+  return (
+    <div className="glass" style={{ borderRadius: 16, padding: '18px 20px' }}>
+      <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+        {label}
+      </div>
+      <div className="font-display" style={{ fontSize: 28, color }}>{value}</div>
+      <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>{hint}</div>
+    </div>
+  );
+}
+
 export default function Forecasting({ categories, settings, transactions, incomes = [], incomeEvents = [], transfers = [], subscriptions = [], account = null }) {
+  const [tab, setTab] = useState('outlook');
+  const [horizonDays, setHorizonDays] = useState(DEFAULT_HORIZON_DAYS);
+
+  const prediction = useMemo(() => buildSpendPrediction({
+    transactions, categories, incomes, subscriptions, settings, horizonDays,
+  }), [transactions, categories, incomes, subscriptions, settings, horizonDays]);
+
+  const projection = useMemo(() => buildCycleProjection({
+    transactions, categories, incomes, subscriptions, settings,
+  }), [transactions, categories, incomes, subscriptions, settings]);
+
   const monthlyHistory = useMemo(() => buildMonthlyHistory(transactions, categories), [transactions, categories]);
   const merchantSpend = useMemo(() => getMerchantBreakdown(transactions, { limit: 8 }), [transactions]);
   const cashFlow = useMemo(
@@ -251,10 +550,8 @@ export default function Forecasting({ categories, settings, transactions, income
     () => (account ? buildBalanceHistory(account, { transactions, incomeEvents, transfers, days: 60 }) : []),
     [account, transactions, incomeEvents, transfers],
   );
-  const projectedSpend = useMemo(() => getProjectedSpend(categories, settings, incomes), [categories, settings, incomes]);
-  const dailyBurnRate  = useMemo(() => getDailyBurnRate(categories, settings, incomes), [categories, settings, incomes]);
-  const legacyDays     = daysUntilReset(settings);
-  const projBalance    = projectedEndBalance(categories, settings, incomes);
+  const legacyDays = daysUntilReset(settings);
+  const projBalance = projectedEndBalance(categories, settings, incomes);
 
   const incomeResetSchedule = useMemo(() => (
     incomes
@@ -280,442 +577,433 @@ export default function Forecasting({ categories, settings, transactions, income
   const spentPct        = totalAllowances > 0 ? (totalSpent / totalAllowances) * 100 : 0;
   const spentColor      = spentPct > 90 ? '#ff6b8a' : spentPct > 70 ? '#fbbf70' : '#4fffb0';
 
-  // Pie 1: budget used vs remaining
   const budgetDonutData = [
     { name: 'Spent',     value: totalSpent,                                   color: spentColor },
     { name: 'Remaining', value: Math.max(0, totalAllowances - totalSpent),    color: 'rgba(255,255,255,0.08)' },
   ];
 
-  // Pie 2: per-category allowance allocation, normalised to a monthly rate so
+  // Per-category allowance allocation, normalised to a monthly rate so
   // categories funded by different pay frequencies are comparable.
-  const allocationData = categories
-    .filter(c => (c.allowance || 0) > 0)
-    .map((c, i) => ({
+  const allocationData = useMemo(() => {
+    const funded = categories.filter(c => (c.allowance || 0) > 0);
+    const palette = assignColors(funded);
+    return funded.map(c => ({
       name: c.name,
       value: incomes.length > 0 ? getNormalisedCategoryAllowance(c, incomes, 'month') : (c.allowance || 0),
-      color: c.color || COLORS[i % COLORS.length],
+      color: palette.get(c.id),
     }));
+  }, [categories, incomes]);
 
-  // Projected vs allowance bar chart data
-  const projVsAllowance = categories.map((cat, i) => ({
-    name: cat.name,
-    Allowance: cat.allowance || 0,
-    Spent: cat.spent || 0,
-    Projected: Number((projectedSpend[cat.id] || 0).toFixed(2)),
-    color: COLORS[i % COLORS.length],
-  }));
+  const dailyExpected = projection.ready
+    ? projection.categories.reduce((sum, row) => sum + row.dailyMean, 0)
+    : 0;
+  const riskyCount = projection.ready
+    ? projection.categories.filter(row => row.overspendRisk >= 0.5).length
+    : 0;
 
-  // Daily burn rate data
-  const burnData = categories.map((cat, i) => ({
-    name: cat.name,
-    'Daily Rate': Number((dailyBurnRate[cat.id] || 0).toFixed(2)),
-    color: COLORS[i % COLORS.length],
-  })).filter(d => d['Daily Rate'] > 0);
-
-  const totalDailyBurn = Object.values(dailyBurnRate).reduce((a, b) => a + b, 0);
+  if (transactions.length === 0) {
+    return (
+      <div className="fade-in glass" style={{ borderRadius: 16, padding: '40px 24px', textAlign: 'center' }}>
+        <div style={{ color: 'var(--text-muted)', fontSize: 14 }}>
+          Log some expenses to see forecasting data.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
-      {/* ── Key projections ── */}
-      <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
-        <div className="glass" style={{ borderRadius: 16, padding: '18px 20px' }}>
-          <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Daily Burn Rate</div>
-          <div className="font-display" style={{ fontSize: 28, color: 'var(--accent-warm)' }}>{fmt(totalDailyBurn)}</div>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>across all categories</div>
-        </div>
-        <div className="glass" style={{ borderRadius: 16, padding: '18px 20px' }}>
-          <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Next Income Reset</div>
-          <div className="font-display" style={{ fontSize: 28, color: 'var(--accent-blue)' }}>
-            {nextIncomeReset ? `${nextIncomeReset.days}d` : (incomes.length > 0 ? '—' : (legacyDays ?? '—'))}
-          </div>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>
-            {nextIncomeReset
-              ? `${nextIncomeReset.income.name} · ${format(nextIncomeReset.next, 'd MMM')}`
-              : incomes.length > 0 ? 'income resets are held or unscheduled' : 'legacy schedule'}
-          </div>
-        </div>
-        <div className="glass" style={{ borderRadius: 16, padding: '18px 20px' }}>
-          <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Projected End Balance</div>
-          <div className="font-display" style={{ fontSize: 28, color: projBalance >= 0 ? 'var(--good)' : 'var(--danger)' }}>
-            {projBalance >= 0 ? '+' : ''}{fmt(projBalance)}
-          </div>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>at current burn rate</div>
-        </div>
+      <div role="tablist" aria-label="Forecasting sections"
+        style={{ display: 'flex', gap: 6, padding: 5, borderRadius: 14, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+        {TABS.map(({ id, label, icon: Icon }) => {
+          const on = tab === id;
+          return (
+            <button key={id} type="button" role="tab" aria-selected={on}
+              onClick={() => setTab(id)}
+              style={{
+                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                padding: '9px 12px', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                border: '1px solid transparent',
+                background: on ? 'rgba(255,255,255,0.09)' : 'transparent',
+                borderColor: on ? 'rgba(255,255,255,0.14)' : 'transparent',
+                color: on ? 'var(--text-primary)' : 'var(--text-muted)',
+              }}>
+              <Icon size={15} aria-hidden="true" />
+              {label}
+            </button>
+          );
+        })}
       </div>
 
-      <SpendPrediction
-        transactions={transactions}
-        categories={categories}
-        incomes={incomes}
-        subscriptions={subscriptions}
-        settings={settings}
-      />
-
-      {/* ── Income reset schedule ── */}
-      {incomeResetSchedule.length > 0 && (
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
-          <CardTitle as="h2" style={{ marginBottom: 6 }}>Income Reset Schedule</CardTitle>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 14 }}>
-            Category spend resets follow the income source that funds each category.
+      {tab === 'outlook' && (
+        <>
+          <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
+            <StatCard
+              label="Expected Daily Spend"
+              value={projection.ready ? fmt(dailyExpected) : '—'}
+              hint={projection.ready ? 'simulated, across all categories' : 'needs more history'}
+              color="var(--accent-warm)"
+            />
+            <StatCard
+              label="Next Income Reset"
+              value={nextIncomeReset ? `${nextIncomeReset.days}d` : (incomes.length > 0 ? '—' : (legacyDays ?? '—'))}
+              hint={nextIncomeReset
+                ? `${nextIncomeReset.income.name} · ${format(nextIncomeReset.next, 'd MMM')}`
+                : incomes.length > 0 ? 'income resets are held or unscheduled' : 'legacy schedule'}
+              color="var(--accent-blue)"
+            />
+            <StatCard
+              label="Projected End Balance"
+              value={`${projBalance >= 0 ? '+' : ''}${fmt(projBalance)}`}
+              hint="at current burn rate"
+              color={projBalance >= 0 ? 'var(--good)' : 'var(--danger)'}
+            />
+            <StatCard
+              label="Categories At Risk"
+              value={projection.ready ? String(riskyCount) : '—'}
+              hint={projection.ready ? 'more likely than not to go over' : 'needs more history'}
+              color={riskyCount > 0 ? 'var(--danger)' : 'var(--good)'}
+            />
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {incomeResetSchedule.map((entry, i) => (
-              <div key={entry.income.id} className="mobile-stack" style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                gap: 12,
-                alignItems: 'center',
-                padding: '10px 12px',
-                borderRadius: 12,
-                background: 'rgba(255,255,255,0.04)',
-                border: entry.held ? '1px solid rgba(251,191,112,0.18)' : '1px solid transparent',
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
-                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: COLORS[i % COLORS.length], flexShrink: 0 }} />
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {entry.income.name}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                      {entry.freq ? FREQ_LABEL[entry.freq] : 'No schedule'}
-                      {entry.held && <span style={{ color: 'var(--warn)' }}> · Held</span>}
-                    </div>
-                  </div>
-                </div>
-                <div style={{ fontSize: 12, color: entry.next && !entry.held ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
-                  {entry.next && !entry.held
-                    ? `${format(entry.next, 'd MMM yyyy')} · ${entry.days}d`
-                    : entry.held ? 'Reset held' : 'Not scheduled'}
-                </div>
-                <div className="mobile-center-left" style={{ fontSize: 12, textAlign: 'right', color: 'var(--text-muted)' }}>
-                  <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{fmt(entry.allocated)}</span>
-                  {' '}across {entry.linkedCategories.length} categor{entry.linkedCategories.length === 1 ? 'y' : 'ies'}
-                </div>
+
+          <SpendPrediction
+            prediction={prediction}
+            horizonDays={horizonDays}
+            onHorizonChange={setHorizonDays}
+          />
+
+          {/* Category budgets answer "can I afford this out of Groceries?". This
+              answers the different, more urgent question: will the money actually
+              be there when the direct debit comes out? */}
+          {cashFlow && cashFlow.series.length > 1 && (
+            <div className="glass mobile-card-pad" style={{
+              borderRadius: 18,
+              padding: '22px 24px',
+              borderColor: cashFlow.firstNegative ? 'rgba(255,107,138,0.3)' : undefined,
+              background: cashFlow.firstNegative ? 'rgba(255,107,138,0.04)' : undefined,
+            }}>
+              <CardTitle as="h2" style={{ marginBottom: 6 }}>Cash Flow</CardTitle>
+              <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>
+                Next 45 days, combining scheduled income, subscriptions and your current burn rate
               </div>
-            ))}
-          </div>
-        </div>
-      )}
 
-      {/* ── Pie charts ── */}
-      {(totalAllowances > 0 || allocationData.length > 0) && (
-        <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
+              {cashFlow.firstNegative ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 10, background: 'rgba(255,107,138,0.1)', color: 'var(--danger)', fontSize: 13 }}>
+                  <AlertTriangle size={15} aria-hidden="true" />
+                  <span>
+                    On current trends your balance goes negative on{' '}
+                    <strong>{format(cashFlow.firstNegative, 'd MMM')}</strong>.
+                  </span>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 10, background: 'rgba(79,255,176,0.08)', color: 'var(--good)', fontSize: 13 }}>
+                  <Check size={15} aria-hidden="true" />
+                  <span>
+                    You stay in the black. Lowest point is{' '}
+                    <strong>{fmt(cashFlow.lowest.balance)}</strong>
+                    {cashFlow.lowest.date ? ` on ${format(cashFlow.lowest.date, 'd MMM')}` : ''}.
+                  </span>
+                </div>
+              )}
 
-          {/* Donut: budget used vs remaining */}
-          {totalAllowances > 0 && (
-            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
-              <CardTitle as="h2" style={{ fontSize: 14, marginBottom: 4 }}>Budget Usage</CardTitle>
-              <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>Spent vs remaining allowance</div>
-              <div style={{ position: 'relative' }}>
-                <ResponsiveContainer width="100%" height={190}>
-                  <PieChart>
-                    <Pie
-                      data={budgetDonutData}
-                      cx="50%" cy="50%"
-                      innerRadius={62} outerRadius={82}
-                      startAngle={90} endAngle={-270}
-                      dataKey="value"
-                      strokeWidth={0}
-                    >
-                      {budgetDonutData.map((entry, i) => (
-                        <Cell key={i} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<PieTooltip />} />
-                  </PieChart>
+              <div className="mobile-chart-scroll">
+                <ResponsiveContainer width="100%" height={220}>
+                  <AreaChart data={cashFlow.series}>
+                    <defs>
+                      <linearGradient id="grad-cashflow" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} stopOpacity={0.35} />
+                        <stop offset="95%" stopColor={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid vertical={false} />
+                    <XAxis dataKey="label" interval={Math.max(0, Math.floor(cashFlow.series.length / 6) - 1)} />
+                    <YAxis tickFormatter={v => `£${Math.round(v)}`} />
+                    <Tooltip content={<GlassTooltip />} />
+                    <ReferenceLine y={0} stroke="rgba(255,107,138,0.5)" strokeDasharray="4 4" />
+                    <Area type="monotone" dataKey="balance" name="Projected balance"
+                      stroke={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} strokeWidth={2}
+                      fill="url(#grad-cashflow)" />
+                  </AreaChart>
                 </ResponsiveContainer>
-                {/* Center label */}
-                <div style={{
-                  position: 'absolute', top: '50%', left: '50%',
-                  transform: 'translate(-50%, -50%)',
-                  textAlign: 'center', pointerEvents: 'none',
-                }}>
-                  <div className="font-display" style={{ fontSize: 22, color: spentColor, letterSpacing: '-0.02em' }}>
-                    {spentPct.toFixed(0)}%
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>used</div>
-                </div>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'center', gap: 20, marginTop: 8, flexWrap: 'wrap' }}>
-                {budgetDonutData.map(d => (
-                  <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: d.color, flexShrink: 0 }} />
-                    <span style={{ color: 'var(--text-muted)' }}>{d.name}</span>
-                    <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>{fmt(d.value)}</span>
+            </div>
+          )}
+
+          {incomeResetSchedule.length > 0 && (
+            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
+              <CardTitle as="h2" style={{ marginBottom: 6 }}>Income Reset Schedule</CardTitle>
+              <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 14 }}>
+                Category spend resets follow the income source that funds each category.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {incomeResetSchedule.map((entry, i) => (
+                  <div key={entry.income.id} className="mobile-stack" style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                    gap: 12,
+                    alignItems: 'center',
+                    padding: '10px 12px',
+                    borderRadius: 12,
+                    background: 'rgba(255,255,255,0.04)',
+                    border: entry.held ? '1px solid rgba(251,191,112,0.18)' : '1px solid transparent',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+                      <span style={{ width: 9, height: 9, borderRadius: '50%', background: COLORS[i % COLORS.length], flexShrink: 0 }} />
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {entry.income.name}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                          {entry.freq ? FREQ_LABEL[entry.freq] : 'No schedule'}
+                          {entry.held && <span style={{ color: 'var(--warn)' }}> · Held</span>}
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 12, color: entry.next && !entry.held ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+                      {entry.next && !entry.held
+                        ? `${format(entry.next, 'd MMM yyyy')} · ${entry.days}d`
+                        : entry.held ? 'Reset held' : 'Not scheduled'}
+                    </div>
+                    <div className="mobile-center-left" style={{ fontSize: 12, textAlign: 'right', color: 'var(--text-muted)' }}>
+                      <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{fmt(entry.allocated)}</span>
+                      {' '}across {entry.linkedCategories.length} categor{entry.linkedCategories.length === 1 ? 'y' : 'ies'}
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
           )}
+        </>
+      )}
 
-          {/* Pie: category allocation */}
-          {allocationData.length > 0 && (
-            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
-              <CardTitle as="h2" style={{ fontSize: 14, marginBottom: 4 }}>Category Allocation</CardTitle>
-              <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>How allowance is split across categories</div>
-              <div className="mobile-row-stack" style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-                <div style={{ flexShrink: 0 }}>
-                  <ResponsiveContainer width={150} height={150}>
-                    <PieChart>
-                      <Pie
-                        data={allocationData}
-                        cx="50%" cy="50%"
-                        outerRadius={68}
-                        dataKey="value"
-                        strokeWidth={0}
-                        paddingAngle={2}
-                      >
-                        {allocationData.map((entry, i) => (
-                          <Cell key={i} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip content={<PieTooltip />} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
-                  {allocationData.map(entry => {
-                    const pct = normalisedAllocated > 0 ? ((entry.value / normalisedAllocated) * 100).toFixed(0) : 0;
-                    return (
-                      <div key={entry.name} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12 }}>
-                        <div style={{ width: 8, height: 8, borderRadius: '50%', background: entry.color, flexShrink: 0 }} />
-                        <span style={{ color: 'var(--text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {entry.name}
-                        </span>
-                        <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{pct}%</span>
-                        <span style={{ fontWeight: 600, color: 'var(--text-primary)', flexShrink: 0, minWidth: 48, textAlign: 'right' }}>
-                          {fmt(entry.value)}
-                        </span>
+      {tab === 'budget' && (
+        <>
+          <CycleOutlook projection={projection} />
+          <ExpectedDailySpend projection={projection} />
+
+          {(totalAllowances > 0 || allocationData.length > 0) && (
+            <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
+
+              {totalAllowances > 0 && (
+                <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+                  <CardTitle as="h2" style={{ fontSize: 14, marginBottom: 4 }}>Budget Usage</CardTitle>
+                  <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>Spent vs remaining allowance</div>
+                  <div style={{ position: 'relative' }}>
+                    <ResponsiveContainer width="100%" height={190}>
+                      <PieChart>
+                        <Pie
+                          data={budgetDonutData}
+                          cx="50%" cy="50%"
+                          innerRadius={62} outerRadius={82}
+                          startAngle={90} endAngle={-270}
+                          dataKey="value"
+                          strokeWidth={0}
+                        >
+                          {budgetDonutData.map((entry, i) => (
+                            <Cell key={i} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip content={<PieTooltip />} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div style={{
+                      position: 'absolute', top: '50%', left: '50%',
+                      transform: 'translate(-50%, -50%)',
+                      textAlign: 'center', pointerEvents: 'none',
+                    }}>
+                      <div className="font-display" style={{ fontSize: 22, color: spentColor, letterSpacing: '-0.02em' }}>
+                        {spentPct.toFixed(0)}%
                       </div>
-                    );
-                  })}
-                </div>
-              </div>
-              {totalIncome > 0 && (
-                <div style={{ marginTop: 18, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 14 }}>
-                  <div style={{ display: 'flex', height: 7, borderRadius: 99, overflow: 'hidden', background: 'rgba(255,255,255,0.06)', gap: 1 }}>
-                    {allocationData.map(entry => (
-                      <div key={entry.name} title={`${entry.name}: ${fmt(entry.value)}`}
-                        style={{ width: `${Math.min(100, (entry.value / totalIncome) * 100)}%`, background: entry.color, height: '100%', minWidth: 2 }} />
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>used</div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'center', gap: 20, marginTop: 8, flexWrap: 'wrap' }}>
+                    {budgetDonutData.map(d => (
+                      <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                        <div style={{ width: 8, height: 8, borderRadius: '50%', background: d.color, flexShrink: 0 }} />
+                        <span style={{ color: 'var(--text-muted)' }}>{d.name}</span>
+                        <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>{fmt(d.value)}</span>
+                      </div>
                     ))}
                   </div>
-                  <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 5 }}>
-                    {normalisedAllocated > totalIncome
-                      ? <span style={{ color: 'var(--danger)' }}>⚠ {((normalisedAllocated / totalIncome) * 100).toFixed(0)}% — over-allocated</span>
-                      : `${((normalisedAllocated / totalIncome) * 100).toFixed(0)}% of income allocated to categories`}
+                </div>
+              )}
+
+              {allocationData.length > 0 && (
+                <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+                  <CardTitle as="h2" style={{ fontSize: 14, marginBottom: 4 }}>Category Allocation</CardTitle>
+                  <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>How allowance is split across categories</div>
+                  <div className="mobile-row-stack" style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+                    <div style={{ flexShrink: 0 }}>
+                      <ResponsiveContainer width={150} height={150}>
+                        <PieChart>
+                          <Pie
+                            data={allocationData}
+                            cx="50%" cy="50%"
+                            outerRadius={68}
+                            dataKey="value"
+                            strokeWidth={0}
+                            paddingAngle={2}
+                          >
+                            {allocationData.map((entry, i) => (
+                              <Cell key={i} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip content={<PieTooltip />} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+                      {allocationData.map(entry => {
+                        const pct = normalisedAllocated > 0 ? ((entry.value / normalisedAllocated) * 100).toFixed(0) : 0;
+                        return (
+                          <div key={entry.name} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12 }}>
+                            <div style={{ width: 8, height: 8, borderRadius: '50%', background: entry.color, flexShrink: 0 }} />
+                            <span style={{ color: 'var(--text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {entry.name}
+                            </span>
+                            <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{pct}%</span>
+                            <span style={{ fontWeight: 600, color: 'var(--text-primary)', flexShrink: 0, minWidth: 48, textAlign: 'right' }}>
+                              {fmt(entry.value)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
+                  {totalIncome > 0 && (
+                    <div style={{ marginTop: 18, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 14 }}>
+                      <div style={{ display: 'flex', height: 7, borderRadius: 99, overflow: 'hidden', background: 'rgba(255,255,255,0.06)', gap: 1 }}>
+                        {allocationData.map(entry => (
+                          <div key={entry.name} title={`${entry.name}: ${fmt(entry.value)}`}
+                            style={{ width: `${Math.min(100, (entry.value / totalIncome) * 100)}%`, background: entry.color, height: '100%', minWidth: 2 }} />
+                        ))}
+                      </div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 5 }}>
+                        {normalisedAllocated > totalIncome
+                          ? <span style={{ color: 'var(--danger)' }}>⚠ {((normalisedAllocated / totalIncome) * 100).toFixed(0)}% — over-allocated</span>
+                          : `${((normalisedAllocated / totalIncome) * 100).toFixed(0)}% of income allocated to categories`}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           )}
-        </div>
-      )}
 
-      {/* ── Projected vs Allowance ── */}
-      {projVsAllowance.length > 0 && (
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
-          <CardTitle as="h2" style={{ marginBottom: 6 }}>Projected Spend vs Allowance</CardTitle>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>Where you'll end up this period if spending continues at current rate</div>
-          <div className="mobile-chart-scroll">
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={projVsAllowance} barGap={4} barCategoryGap="30%">
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                <YAxis tickFormatter={v => `£${v}`} />
-                <Tooltip content={<GlassTooltip />} />
-                <Legend wrapperStyle={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }} />
-                <Bar dataKey="Allowance" fill="rgba(255,255,255,0.1)" radius={[6,6,0,0]} />
-                <Bar dataKey="Spent"     fill="#5db8ff"              radius={[6,6,0,0]} />
-                <Bar dataKey="Projected" fill="#fbbf70" opacity={0.7} radius={[6,6,0,0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {/* ── Monthly history ── */}
-      {monthlyHistory.length > 1 && (
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
-          <CardTitle as="h2" style={{ marginBottom: 6 }}>Spend History by Category</CardTitle>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>Last 6 months</div>
-          <div className="mobile-chart-scroll">
-            <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={monthlyHistory}>
-                <defs>
-                  {categories.map((cat, i) => (
-                    <linearGradient key={cat.id} id={`grad-${cat.id}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%"  stopColor={COLORS[i % COLORS.length]} stopOpacity={0.3} />
-                      <stop offset="95%" stopColor={COLORS[i % COLORS.length]} stopOpacity={0.02} />
-                    </linearGradient>
-                  ))}
-                </defs>
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="month" />
-                <YAxis tickFormatter={v => `£${v}`} />
-                <Tooltip content={<GlassTooltip />} />
-                <Legend wrapperStyle={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }} />
-                {categories.map((cat, i) => (
-                  <Area key={cat.id} type="monotone" dataKey={cat.name}
-                    stroke={COLORS[i % COLORS.length]} strokeWidth={2}
-                    fill={`url(#grad-${cat.id})`} />
-                ))}
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {/* ── Daily burn rate ── */}
-      {burnData.length > 0 && (
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
-          <CardTitle as="h2" style={{ marginBottom: 6 }}>Daily Burn Rate by Category</CardTitle>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>Average spend per day this period</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {burnData.map(d => (
-              <div key={d.name} className="mobile-row-stack" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ width: 120, fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0 }}>{d.name}</div>
-                <div style={{ flex: 1 }}>
-                  <div className="progress-track">
-                    <div className="progress-fill" style={{
-                      width: `${Math.min(100, (d['Daily Rate'] / Math.max(...burnData.map(x => x['Daily Rate']))) * 100)}%`,
-                      background: d.color,
-                    }} />
-                  </div>
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: d.color, width: 60, textAlign: 'right', flexShrink: 0 }}>
-                  {fmt(d['Daily Rate'])}/d
-                </div>
+          {!projection.ready && (
+            <div className="glass" style={{ borderRadius: 16, padding: '28px 24px', textAlign: 'center' }}>
+              <Activity size={18} color="var(--text-muted)" aria-hidden="true" />
+              <div style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 8 }}>
+                {prediction.reason === 'no-categories'
+                  ? 'Add a category to see how your budget is tracking.'
+                  : projection.reason}
               </div>
-            ))}
-          </div>
-        </div>
+            </div>
+          )}
+        </>
       )}
 
-      {/* ── Cash-flow forecast ──
-           Category budgets answer "can I afford this out of Groceries?". This
-           answers the different, more urgent question: will the money actually
-           be there when the direct debit comes out? */}
-      {cashFlow && cashFlow.series.length > 1 && (
-        <div className="glass mobile-card-pad" style={{
-          borderRadius: 18,
-          padding: '22px 24px',
-          borderColor: cashFlow.firstNegative ? 'rgba(255,107,138,0.3)' : undefined,
-          background: cashFlow.firstNegative ? 'rgba(255,107,138,0.04)' : undefined,
-        }}>
-          <CardTitle as="h2" style={{ marginBottom: 6 }}>Cash Flow</CardTitle>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>
-            Next 45 days, combining scheduled income, subscriptions and your current burn rate
-          </div>
-
-          {cashFlow.firstNegative ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 10, background: 'rgba(255,107,138,0.1)', color: 'var(--danger)', fontSize: 13 }}>
-              <AlertTriangle size={15} aria-hidden="true" />
-              <span>
-                On current trends your balance goes negative on{' '}
-                <strong>{format(cashFlow.firstNegative, 'd MMM')}</strong>.
-              </span>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 10, background: 'rgba(79,255,176,0.08)', color: 'var(--good)', fontSize: 13 }}>
-              <Check size={15} aria-hidden="true" />
-              <span>
-                You stay in the black. Lowest point is{' '}
-                <strong>{fmt(cashFlow.lowest.balance)}</strong>
-                {cashFlow.lowest.date ? ` on ${format(cashFlow.lowest.date, 'd MMM')}` : ''}.
-              </span>
+      {tab === 'history' && (
+        <>
+          {monthlyHistory.length > 1 && (
+            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+              <CardTitle as="h2" style={{ marginBottom: 6 }}>Spend History by Category</CardTitle>
+              <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>Last 6 months</div>
+              <div className="mobile-chart-scroll">
+                <ResponsiveContainer width="100%" height={220}>
+                  <AreaChart data={monthlyHistory}>
+                    <defs>
+                      {categories.map((cat, i) => (
+                        <linearGradient key={cat.id} id={`grad-${cat.id}`} x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%"  stopColor={COLORS[i % COLORS.length]} stopOpacity={0.3} />
+                          <stop offset="95%" stopColor={COLORS[i % COLORS.length]} stopOpacity={0.02} />
+                        </linearGradient>
+                      ))}
+                    </defs>
+                    <CartesianGrid vertical={false} />
+                    <XAxis dataKey="month" />
+                    <YAxis tickFormatter={v => `£${v}`} />
+                    <Tooltip content={<GlassTooltip />} />
+                    <Legend wrapperStyle={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }} />
+                    {categories.map((cat, i) => (
+                      <Area key={cat.id} type="monotone" dataKey={cat.name}
+                        stroke={COLORS[i % COLORS.length]} strokeWidth={2}
+                        fill={`url(#grad-${cat.id})`} />
+                    ))}
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
             </div>
           )}
 
-          <div className="mobile-chart-scroll">
-            <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={cashFlow.series}>
-                <defs>
-                  <linearGradient id="grad-cashflow" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} stopOpacity={0.35} />
-                    <stop offset="95%" stopColor={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} stopOpacity={0.02} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="label" interval={Math.max(0, Math.floor(cashFlow.series.length / 6) - 1)} />
-                <YAxis tickFormatter={v => `£${Math.round(v)}`} />
-                <Tooltip content={<GlassTooltip />} />
-                <ReferenceLine y={0} stroke="rgba(255,107,138,0.5)" strokeDasharray="4 4" />
-                <Area type="monotone" dataKey="balance" name="Projected balance"
-                  stroke={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} strokeWidth={2}
-                  fill="url(#grad-cashflow)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {/* ── Balance history ──
-           Categories say how the budget is doing; this says whether the account
-           behind it is actually growing or shrinking. */}
-      {balanceHistory.length > 1 && (
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
-          <CardTitle as="h2" style={{ marginBottom: 6 }}>Account Balance</CardTitle>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>
-            Last 60 days, reconstructed from your transactions, income and transfers
-          </div>
-          <div className="mobile-chart-scroll">
-            <ResponsiveContainer width="100%" height={200}>
-              <AreaChart data={balanceHistory}>
-                <defs>
-                  <linearGradient id="grad-balance" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#4fffb0" stopOpacity={0.35} />
-                    <stop offset="95%" stopColor="#4fffb0" stopOpacity={0.02} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="label" interval={Math.max(0, Math.floor(balanceHistory.length / 6) - 1)} />
-                <YAxis tickFormatter={v => `£${Math.round(v)}`} />
-                <Tooltip content={<GlassTooltip />} />
-                <Area type="monotone" dataKey="balance" name="Balance"
-                  stroke="#4fffb0" strokeWidth={2} fill="url(#grad-balance)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {/* ── Merchants ──
-           Categories tell you the kind of spending; merchants tell you what you
-           actually bought, which is usually the more actionable of the two. */}
-      {merchantSpend.length > 0 && (
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
-          <CardTitle as="h2" style={{ marginBottom: 6 }}>Where Your Money Goes</CardTitle>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>Top merchants across all time</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {merchantSpend.map((entry, i) => (
-              <div key={entry.label} className="mobile-row-stack" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ width: 120, fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {entry.label}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div className="progress-track">
-                    <div className="progress-fill" style={{
-                      width: `${Math.min(100, (entry.total / merchantSpend[0].total) * 100)}%`,
-                      background: COLORS[i % COLORS.length],
-                    }} />
-                  </div>
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: COLORS[i % COLORS.length], width: 78, textAlign: 'right', flexShrink: 0 }}>
-                  {fmt(entry.total)}
-                </div>
+          {/* Categories say how the budget is doing; this says whether the account
+              behind it is actually growing or shrinking. */}
+          {balanceHistory.length > 1 && (
+            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+              <CardTitle as="h2" style={{ marginBottom: 6 }}>Account Balance</CardTitle>
+              <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>
+                Last 60 days, reconstructed from your transactions, income and transfers
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+              <div className="mobile-chart-scroll">
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={balanceHistory}>
+                    <defs>
+                      <linearGradient id="grad-balance" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#4fffb0" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="#4fffb0" stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid vertical={false} />
+                    <XAxis dataKey="label" interval={Math.max(0, Math.floor(balanceHistory.length / 6) - 1)} />
+                    <YAxis tickFormatter={v => `£${Math.round(v)}`} />
+                    <Tooltip content={<GlassTooltip />} />
+                    <Area type="monotone" dataKey="balance" name="Balance"
+                      stroke="#4fffb0" strokeWidth={2} fill="url(#grad-balance)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
 
-      {transactions.length === 0 && (
-        <div className="glass" style={{ borderRadius: 16, padding: '40px 24px', textAlign: 'center' }}>
-          <div style={{ color: 'var(--text-muted)', fontSize: 14 }}>
-            Log some expenses to see forecasting data.
-          </div>
-        </div>
+          {/* Categories tell you the kind of spending; merchants tell you what you
+              actually bought, which is usually the more actionable of the two. */}
+          {merchantSpend.length > 0 && (
+            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+              <CardTitle as="h2" style={{ marginBottom: 6 }}>Where Your Money Goes</CardTitle>
+              <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>Top merchants across all time</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {merchantSpend.map((entry, i) => (
+                  <div key={entry.label} className="mobile-row-stack" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ width: 120, fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {entry.label}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div className="progress-track">
+                        <div className="progress-fill" style={{
+                          width: `${Math.min(100, (entry.total / merchantSpend[0].total) * 100)}%`,
+                          background: COLORS[i % COLORS.length],
+                        }} />
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: COLORS[i % COLORS.length], width: 78, textAlign: 'right', flexShrink: 0 }}>
+                      {fmt(entry.total)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {monthlyHistory.length <= 1 && balanceHistory.length <= 1 && merchantSpend.length === 0 && (
+            <div className="glass" style={{ borderRadius: 16, padding: '28px 24px', textAlign: 'center' }}>
+              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+                Not enough history yet — this fills in as you log expenses.
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

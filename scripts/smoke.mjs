@@ -204,11 +204,24 @@ step('drill-down returns to the Dashboard');
 
 await page.getByRole('button', { name: 'Forecasting', exact: true }).click();
 await page.waitForTimeout(600);
-const forecast = await page.locator('body').innerText();
-for (const expected of ['Account Balance', 'Where Your Money Goes']) {
-  if (!forecast.includes(expected)) errors.push(`forecasting missing: ${expected}`);
+
+// Forecasting is split into three tabs, so a card being absent from the default
+// view is no longer a failure — but each tab still has to render its own.
+for (const [tabName, expected] of [
+  ['Outlook', ['Predicted Spending', 'Income Reset Schedule']],
+  ['Budget',  ['Budget Usage', 'Category Allocation']],
+  ['History', ['Account Balance', 'Where Your Money Goes']],
+]) {
+  await page.getByRole('tab', { name: tabName }).click();
+  await page.waitForTimeout(400);
+  const body = await page.locator('body').innerText();
+  for (const text of expected) {
+    if (!body.includes(text)) errors.push(`forecasting ${tabName} tab missing: ${text}`);
+  }
 }
-step('balance history and merchant breakdown render');
+await page.getByRole('tab', { name: 'Outlook' }).click();
+await page.waitForTimeout(300);
+step('forecasting tabs each render their own cards');
 
 // ── Money concepts ───────────────────────────────────────────────────────
 
