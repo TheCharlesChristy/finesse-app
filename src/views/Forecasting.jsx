@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ReferenceLine,
+  ComposedChart, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend
 } from 'recharts';
 import { AlertTriangle, Check } from 'lucide-react';
@@ -22,6 +23,7 @@ import {
   buildCashFlowForecast,
   normalizeIncomeAllocations,
 } from '../utils';
+import { DEFAULT_HORIZON_DAYS, buildSpendPrediction } from '../prediction';
 import { CardTitle } from '../components/ui';
 
 const COLORS = ['#4fffb0', '#5db8ff', '#c084fc', '#fbbf70', '#ff6b8a', '#67e8f9', '#a78bfa'];
@@ -85,6 +87,156 @@ const PieTooltip = ({ active, payload }) => {
     </div>
   );
 };
+
+
+const PREDICTION_HORIZONS = [7, 30, 90];
+
+const CONFIDENCE_LABEL = {
+  ok:   { text: 'good history',   color: 'var(--good)' },
+  low:  { text: 'thin history',   color: 'var(--warn)' },
+  none: { text: 'scheduled only', color: 'var(--text-muted)' },
+};
+
+// The band is the whole point, so the tooltip leads with it. Showing the
+// median alone would imply a precision this forecast does not have.
+const ForecastTooltip = ({ active, payload, label }) => {
+  const point = payload?.[0]?.payload;
+  if (!active || !point) return null;
+  return (
+    <div style={{ background: 'rgba(18,26,48,0.95)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 12, padding: '10px 14px', fontSize: 12 }}>
+      <div style={{ color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600 }}>By {label}</div>
+      <div style={{ color: 'var(--accent-mint)', marginBottom: 2 }}>
+        Most likely: <strong>{fmt(point.p50)}</strong>
+      </div>
+      <div style={{ color: 'var(--text-secondary)' }}>
+        Likely range: <strong>{fmt(point.p10)} – {fmt(point.p90)}</strong>
+      </div>
+      {point.subscriptions > 0 && (
+        <div style={{ color: 'var(--text-muted)', marginTop: 4 }}>
+          includes {fmt(point.subscriptions)} of scheduled bills
+        </div>
+      )}
+    </div>
+  );
+};
+
+/**
+ * Monte Carlo spend forecast.
+ *
+ * Deliberately reports a range rather than a number: personal spending is
+ * dominated by noise no model can see coming, so a single figure would be
+ * false precision. Everything it needs already arrives as props — the
+ * simulation itself lives in `prediction.js`, not here.
+ */
+function SpendPrediction({ transactions, categories, incomes, subscriptions, settings }) {
+  const [horizonDays, setHorizonDays] = useState(DEFAULT_HORIZON_DAYS);
+
+  const prediction = useMemo(() => buildSpendPrediction({
+    transactions, categories, incomes, subscriptions, settings, horizonDays,
+  }), [transactions, categories, incomes, subscriptions, settings, horizonDays]);
+
+  const widest = Math.max(1, ...prediction.categories.map(row => row.p90));
+
+  return (
+    <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <CardTitle as="h2" style={{ marginBottom: 6 }}>Predicted Spending</CardTitle>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+            Simulated from your own history — a likely range, not a single number
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {PREDICTION_HORIZONS.map(days => (
+            <button key={days} type="button"
+              onClick={() => setHorizonDays(days)}
+              className={horizonDays === days ? 'btn-primary' : 'btn-secondary'}
+              style={{ padding: '6px 12px', fontSize: 12 }}
+              aria-pressed={horizonDays === days}>
+              {days}d
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {!prediction.ready ? (
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 18, lineHeight: 1.6 }}>
+          {prediction.reason === 'no-categories'
+            ? 'Add a category and log a few expenses to unlock a forecast.'
+            : prediction.reason}
+          <div style={{ marginTop: 6, fontSize: 12 }}>
+            A forecast built on less history than this would look confident and be wrong.
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={{ marginTop: 18, marginBottom: 6 }}>
+            <div className="font-display" style={{ fontSize: 32, color: 'var(--accent-mint)' }}>
+              {fmt(prediction.total.p10)} – {fmt(prediction.total.p90)}
+            </div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4 }}>
+              over the next {prediction.horizonDays} days · most likely <strong>{fmt(prediction.total.p50)}</strong>
+            </div>
+            {prediction.subscriptions.total > 0 && (
+              <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>
+                includes {fmt(prediction.subscriptions.total)} of scheduled bills, which are known rather than predicted
+              </div>
+            )}
+          </div>
+
+          <div className="mobile-chart-scroll" style={{ marginTop: 16 }}>
+            <ResponsiveContainer width="100%" height={220}>
+              <ComposedChart data={prediction.series}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" interval={Math.max(0, Math.floor(prediction.series.length / 6) - 1)} />
+                <YAxis tickFormatter={v => `£${Math.round(v)}`} />
+                <Tooltip content={<ForecastTooltip />} />
+                <Area type="monotone" dataKey="band" name="Likely range"
+                  stroke="none" fill="#5db8ff" fillOpacity={0.18} activeDot={false} />
+                <Line type="monotone" dataKey="p50" name="Most likely"
+                  stroke="#4fffb0" strokeWidth={2} dot={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div style={{ marginTop: 18 }}>
+            {prediction.categories.map(row => {
+              const confidence = CONFIDENCE_LABEL[row.confidence] || CONFIDENCE_LABEL.none;
+              const left = (row.p10 / widest) * 100;
+              const width = Math.max(1.5, ((row.p90 - row.p10) / widest) * 100);
+              const marker = (row.p50 / widest) * 100;
+              const tint = row.color || '#5db8ff';
+              return (
+                <div key={row.id} style={{
+                  display: 'grid', gridTemplateColumns: 'minmax(88px, 1.1fr) 2fr minmax(104px, auto)',
+                  gap: 12, alignItems: 'center', padding: '9px 0', borderTop: '1px solid rgba(255,255,255,0.06)',
+                }}>
+                  <div>
+                    <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{row.name}</div>
+                    <div style={{ fontSize: 10, color: confidence.color }}>{confidence.text}</div>
+                  </div>
+                  <div style={{ position: 'relative', height: 8, borderRadius: 999, background: 'rgba(255,255,255,0.06)' }}>
+                    <div style={{ position: 'absolute', left: `${left}%`, width: `${width}%`, top: 0, bottom: 0, borderRadius: 999, background: tint, opacity: 0.35 }} />
+                    <div style={{ position: 'absolute', left: `${marker}%`, top: -2, width: 2, height: 12, background: tint, borderRadius: 2 }} />
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-primary)' }}>{fmt(row.p50)}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{fmt(row.p10)} – {fmt(row.p90)}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 14, lineHeight: 1.6 }}>
+            {prediction.sims.toLocaleString()} simulated futures over {prediction.observedDays} days of history.
+            The range covers the middle 80% — roughly one month in five should land outside it.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function Forecasting({ categories, settings, transactions, incomes = [], incomeEvents = [], transfers = [], subscriptions = [], account = null }) {
   const monthlyHistory = useMemo(() => buildMonthlyHistory(transactions, categories), [transactions, categories]);
@@ -191,6 +343,14 @@ export default function Forecasting({ categories, settings, transactions, income
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>at current burn rate</div>
         </div>
       </div>
+
+      <SpendPrediction
+        transactions={transactions}
+        categories={categories}
+        incomes={incomes}
+        subscriptions={subscriptions}
+        settings={settings}
+      />
 
       {/* ── Income reset schedule ── */}
       {incomeResetSchedule.length > 0 && (

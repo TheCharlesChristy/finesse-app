@@ -1,10 +1,32 @@
+import { execSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
+
+// The About card in Settings answers "has the PR I just merged actually reached
+// my phone?". package.json's version alone can't tell you that, so the commit
+// and the build time are baked in alongside it. Building outside a git checkout
+// (a tarball, a CI export) must still work, hence the fallback.
+function gitCommit() {
+  try {
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString().trim() || 'dev'
+  } catch {
+    return 'dev'
+  }
+}
+
 export default defineConfig({
   base: '/finesse-app/',
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_COMMIT__: JSON.stringify(gitCommit()),
+    __APP_BUILT_AT__: JSON.stringify(new Date().toISOString()),
+  },
   plugins: [
     react(),
     tailwindcss(),

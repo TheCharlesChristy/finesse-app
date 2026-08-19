@@ -1,9 +1,20 @@
 import { useMemo, useState } from 'react';
-import { Bell, Download, Upload, FileText, RefreshCcw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap } from 'lucide-react';
+import { Bell, Download, Upload, FileText, RefreshCcw, RefreshCw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap, Info } from 'lucide-react';
 import { fmt } from '../utils';
 import { notificationPermission, notificationsSupported, requestNotificationPermission } from '../notifications';
+import { APP_COMMIT, APP_VERSION, formatBuiltAt } from '../buildInfo';
+import { isUpdatePending, updateApp } from '../pwa';
 import CategorySelect from '../components/CategorySelect';
 import { CardTitle, IconButton } from '../components/ui';
+
+// What updateApp() found, in the user's terms. Anything unrecognised falls
+// back to 'error' — silence is the one outcome a manual update mustn't have.
+const UPDATE_MESSAGES = {
+  current: 'You\u2019re already on the latest version.',
+  unregistered: 'No service worker is running for this page, so there is nothing cached to update. That is normal in development, and before the app has been added to your home screen.',
+  unsupported: 'This browser doesn\u2019t support service workers, so the app is never cached \u2014 a normal page refresh always gets the latest version.',
+  error: 'Couldn\u2019t check for an update. Make sure you are online and try again.',
+};
 
 export default function Settings({
   onExport,
@@ -38,6 +49,8 @@ export default function Settings({
   const [permission, setPermission] = useState(() => notificationPermission());
   const [integrityStatus, setIntegrityStatus] = useState(null);
   const [isRecalculating, setIsRecalculating] = useState(false);
+  const [isUpdatingApp, setIsUpdatingApp] = useState(false);
+  const [updateReady, setUpdateReady] = useState(() => isUpdatePending());
 
   const handleRecalculate = async () => {
     if (!onRecalculate) return;
@@ -46,6 +59,21 @@ export default function Settings({
       setIntegrityStatus(await onRecalculate());
     } finally {
       setIsRecalculating(false);
+    }
+  };
+
+  const handleUpdateApp = async () => {
+    setIsUpdatingApp(true);
+    try {
+      const { status } = await updateApp();
+      setUpdateReady(isUpdatePending());
+      // 'updated' reloads the page from updateApp, so there is nobody left to
+      // tell — every other outcome needs saying out loud.
+      if (status !== 'updated') {
+        await showAlert(UPDATE_MESSAGES[status] ?? UPDATE_MESSAGES.error, { title: 'App update' });
+      }
+    } finally {
+      setIsUpdatingApp(false);
     }
   };
 
@@ -519,6 +547,42 @@ export default function Settings({
               {fullResetStatus}
             </div>
           )}
+        </div>
+      </div>
+
+      {/* About / build */}
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+          <Info size={16} color="var(--accent-blue)" aria-hidden="true" />
+          <CardTitle as="h2">About</CardTitle>
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>
+          Which build this device is running. Finesse checks for a new one hourly
+          and installs it in the background, but an app on your home screen can sit
+          on a cached copy for a while &mdash; update now if you are waiting on a change.
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+          {[
+            ['Version', APP_VERSION],
+            ['Build', APP_COMMIT],
+            ['Built', formatBuiltAt() ?? 'Unknown'],
+          ].map(([label, value]) => (
+            <div key={label} style={{ display: 'flex', gap: 12, fontSize: 12 }}>
+              <span style={{ color: 'var(--text-muted)', minWidth: 70 }}>{label}</span>
+              <span style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>{value}</span>
+            </div>
+          ))}
+        </div>
+
+        <button className="btn-secondary" onClick={handleUpdateApp} disabled={isUpdatingApp}
+          style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <RefreshCw size={14} /> {isUpdatingApp ? 'Checking\u2026' : 'Update App'}
+        </button>
+        <div style={{ color: updateReady ? 'var(--warn)' : 'var(--text-muted)', fontSize: 11, marginTop: 10, lineHeight: 1.6 }}>
+          {updateReady
+            ? 'A newer build is already downloaded \u2014 update now to switch to it.'
+            : 'Checks for a newer build and reloads straight into it if there is one.'}
         </div>
       </div>
     </div>
