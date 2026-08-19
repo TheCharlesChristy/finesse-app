@@ -1013,7 +1013,13 @@ export default function App() {
               )}
             </div>
           )}
-          <nav aria-label="Primary" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {/* Scrolls once the list outgrows the viewport. Without this the last
+              few items are simply unreachable on a short window — the sidebar is
+              fixed to the full height, so overflow has nowhere to go. */}
+          <nav aria-label="Primary" style={{
+            display: 'flex', flexDirection: 'column', gap: 4,
+            flex: 1, minHeight: 0, overflowY: 'auto',
+          }}>
             {NAV.map(({ id, label, Icon }) => (
               <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} onClick={() => navigate(id)} type="button"
                 aria-current={view === id ? 'page' : undefined}>

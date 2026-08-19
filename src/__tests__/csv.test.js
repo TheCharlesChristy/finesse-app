@@ -315,7 +315,7 @@ describe('toTransactionPayload', () => {
 });
 
 describe('summariseRows', () => {
-  it('counts by status and totals only what is selected', () => {
+  it('counts by status, and separates what is ticked from what will be written', () => {
     const summary = summariseRows([
       { status: ROW_NEW, include: true, categoryId: 1, amount: 10, type: 'expense' },
       { status: ROW_NEW, include: true, categoryId: null, amount: 5, type: 'expense' },
@@ -326,8 +326,35 @@ describe('summariseRows', () => {
 
     expect(summary).toMatchObject({
       total: 5, new: 3, duplicate: 1, invalid: 1,
-      selected: 3, uncategorised: 1, expense: 15, refund: 4, net: 11,
+      selected: 3, importable: 2, uncategorised: 1,
+      // The uncategorised £5 is excluded: it won't be written, so it mustn't
+      // appear in the spending figure shown next to the import button.
+      expense: 10, refund: 4, net: 6,
     });
+  });
+
+  it('reports nothing importable when every ticked row lacks a category', () => {
+    const rows = [
+      { status: ROW_NEW, include: true, categoryId: null, amount: 10, type: 'expense' },
+      { status: ROW_NEW, include: true, categoryId: null, amount: 5, type: 'expense' },
+    ];
+    const summary = summariseRows(rows);
+
+    expect(summary.selected).toBe(2);
+    expect(summary.importable).toBe(0);
+    // The button reads from `importable`, so it must agree with the payload.
+    expect(toTransactionPayload(rows)).toHaveLength(0);
+  });
+
+  it('keeps importable in step with the payload', () => {
+    const rows = [
+      { status: ROW_NEW, include: true, categoryId: 1, amount: 10, date: '2026-01-05', description: 'a', type: 'expense' },
+      { status: ROW_NEW, include: true, categoryId: null, amount: 5, date: '2026-01-06', description: 'b', type: 'expense' },
+      { status: ROW_SIMILAR, include: true, categoryId: 2, amount: 7, date: '2026-01-07', description: 'c', type: 'expense' },
+      { status: ROW_DUPLICATE, include: false, categoryId: 2, amount: 7, date: '2026-01-08', description: 'd', type: 'expense' },
+    ];
+
+    expect(summariseRows(rows).importable).toBe(toTransactionPayload(rows).length);
   });
 });
 

@@ -259,7 +259,7 @@ export function ImportStatementModal({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           {[
-            ['Importing', String(summary.selected), 'var(--accent-mint)'],
+            ['Importing', String(summary.importable), 'var(--accent-mint)'],
             ['Spending', fmt(summary.expense), 'var(--accent-warm)'],
             ['Refunds', fmt(summary.refund), 'var(--good)'],
             ['Skipping', String(summary.duplicate + summary.invalid), 'var(--text-muted)'],
@@ -349,10 +349,12 @@ export function ImportStatementModal({
             style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
             <ArrowLeft size={13} /> Columns
           </button>
-          <button className="btn-primary" onClick={handleImport} disabled={busy || summary.selected === 0}
+          {/* Counts what will actually be written, not what is ticked — a row
+              with no category is dropped on the way to the database. */}
+          <button className="btn-primary" onClick={handleImport} disabled={busy || summary.importable === 0}
             style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
             {busy ? <Upload size={14} /> : <Check size={14} />}
-            {busy ? 'Importing…' : `Import ${summary.selected} transaction${summary.selected === 1 ? '' : 's'}`}
+            {busy ? 'Importing…' : `Import ${summary.importable} transaction${summary.importable === 1 ? '' : 's'}`}
           </button>
         </div>
       </div>

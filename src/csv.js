@@ -459,23 +459,49 @@ export function toTransactionPayload(rows = []) {
     }));
 }
 
-/** Headline counts for the review screen. */
+/**
+ * Headline counts for the review screen.
+ *
+ * `selected` is what the user has ticked; `importable` is what will actually be
+ * written, which is smaller whenever a ticked row still has no category. The
+ * two are kept apart because the button must promise the second — offering to
+ * import three rows and then writing none, because `toTransactionPayload` drops
+ * the uncategorised ones, is indistinguishable from the import silently failing.
+ *
+ * The money totals follow `importable` for the same reason: a row that won't be
+ * written mustn't contribute to the spending figure shown beside the button.
+ */
 export function summariseRows(rows = []) {
   const summary = {
     total: rows.length, new: 0, duplicate: 0, similar: 0, invalid: 0,
-    selected: 0, uncategorised: 0, expense: 0, refund: 0, net: 0,
+    selected: 0, importable: 0, uncategorised: 0, expense: 0, refund: 0, net: 0,
   };
 
   for (const row of rows) {
     summary[row.status] += 1;
     if (!row.include || row.status === ROW_INVALID) continue;
     summary.selected += 1;
-    if (!row.categoryId) summary.uncategorised += 1;
+
+    if (!row.categoryId) {
+      summary.uncategorised += 1;
+      continue;
+    }
+
+    summary.importable += 1;
     if (row.type === TX_REFUND) { summary.refund += row.amount; summary.net -= row.amount; }
     else { summary.expense += row.amount; summary.net += row.amount; }
   }
 
+  summary.expense = roundTo2(summary.expense);
+  summary.refund = roundTo2(summary.refund);
+  summary.net = roundTo2(summary.net);
   return summary;
+}
+
+// csv.js stays free of utils' money helpers so it can be read on its own; this
+// is the only place it needs rounding.
+function roundTo2(value) {
+  return Math.round(value * 100) / 100;
 }
 
 // ── Reconciliation ───────────────────────────────────────────────────────────

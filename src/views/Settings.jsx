@@ -338,6 +338,7 @@ export default function Settings({
               value={settings?.defaultCategoryId ? String(settings.defaultCategoryId) : ''}
               onChange={handleDefaultCategoryChange}
               placeholder="No default selected"
+              aria-label="Default expense category"
               showAmounts
             />
           </div>
