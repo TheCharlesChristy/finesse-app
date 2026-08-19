@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
-import { Bell, Download, Upload, FileText, RefreshCcw, RefreshCw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap, Info } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Bell, Download, Upload, FileText, RefreshCcw, RefreshCw, Trash2, Sun, Moon, Monitor, Link2, FileJson, Plus, Wand2, Zap, Info, HardDrive, ShieldCheck } from 'lucide-react';
 import { fmt } from '../utils';
 import { notificationPermission, notificationsSupported, requestNotificationPermission } from '../notifications';
+import { formatBytes, getStorageEstimate, STORAGE_BEST_EFFORT, STORAGE_PERSISTED, STORAGE_UNSUPPORTED } from '../storage';
 import { APP_COMMIT, APP_VERSION, formatBuiltAt } from '../buildInfo';
 import { isUpdatePending, updateApp } from '../pwa';
 import CategorySelect from '../components/CategorySelect';
@@ -37,6 +38,8 @@ export default function Settings({
   onDeleteTemplate,
   nudgeCount = 0,
   onRecalculate,
+  storageState = null,
+  onRequestPersistence,
   showConfirm,
   showAlert,
   showPrompt,
@@ -48,6 +51,8 @@ export default function Settings({
   const [templateCategoryId, setTemplateCategoryId] = useState('');
   const [permission, setPermission] = useState(() => notificationPermission());
   const [integrityStatus, setIntegrityStatus] = useState(null);
+  const [estimate, setEstimate] = useState(null);
+  const [isRequestingPersistence, setIsRequestingPersistence] = useState(false);
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [isUpdatingApp, setIsUpdatingApp] = useState(false);
   const [updateReady, setUpdateReady] = useState(() => isUpdatePending());
@@ -59,6 +64,31 @@ export default function Settings({
       setIntegrityStatus(await onRecalculate());
     } finally {
       setIsRecalculating(false);
+    }
+  };
+
+  // The estimate is only read here, where it is shown — it costs a promise and
+  // nothing outside this card uses it. Re-read after a persistence request so
+  // the figures and the state never disagree.
+  useEffect(() => {
+    let cancelled = false;
+    getStorageEstimate().then(result => { if (!cancelled) setEstimate(result); });
+    return () => { cancelled = true; };
+  }, [storageState]);
+
+  const handleRequestPersistence = async () => {
+    if (!onRequestPersistence) return;
+    setIsRequestingPersistence(true);
+    try {
+      const state = await onRequestPersistence();
+      if (state === STORAGE_BEST_EFFORT) {
+        await showAlert(
+          'The browser declined for now. This usually changes once the app has been used a few times, or added to your home screen — try again later.\n\nIn the meantime, an exported backup is the reliable protection.',
+          { title: 'Not granted yet' },
+        );
+      }
+    } finally {
+      setIsRequestingPersistence(false);
     }
   };
 
@@ -472,6 +502,65 @@ export default function Settings({
         )}
       </div>
 
+      {/* Storage durability */}
+      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
+          <HardDrive size={16} color="var(--accent-purple)" aria-hidden="true" />
+          <CardTitle as="h2">Storage</CardTitle>
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>
+          By default a browser treats app data as disposable and may clear it to
+          reclaim space, or after a long enough gap between visits. Persistent
+          storage asks it not to &mdash; then only you can clear it.
+        </div>
+
+        {storageState === STORAGE_UNSUPPORTED ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            This browser doesn&rsquo;t expose storage persistence, so there is nothing to ask for.
+            Keep exporting backups.
+          </div>
+        ) : storageState === STORAGE_PERSISTED ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--good)', fontSize: 13 }}>
+            <ShieldCheck size={15} aria-hidden="true" /> Storage is persistent — this browser won&rsquo;t evict your data.
+          </div>
+        ) : (
+          <>
+            <button className="btn-primary" onClick={handleRequestPersistence}
+              disabled={isRequestingPersistence || storageState === null}
+              style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <ShieldCheck size={14} /> {isRequestingPersistence ? 'Asking…' : 'Keep my data'}
+            </button>
+            <div style={{ color: 'var(--warn)', fontSize: 11, marginTop: 10, lineHeight: 1.6 }}>
+              {storageState === null
+                ? 'Checking…'
+                : 'Your data is currently evictable. Browsers decide this themselves — being installed to your home screen and using the app regularly both make a yes more likely.'}
+            </div>
+          </>
+        )}
+
+        {estimate && (
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 16, paddingTop: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 7 }}>
+              <span style={{ color: 'var(--text-muted)' }}>Used</span>
+              <span style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>
+                {formatBytes(estimate.usage)} of {formatBytes(estimate.quota)}
+              </span>
+            </div>
+            <div style={{ height: 6, borderRadius: 4, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
+              <div style={{
+                width: `${Math.max(1, Math.min(100, estimate.percent))}%`, height: '100%',
+                background: estimate.percent > 85 ? 'var(--danger)' : 'var(--accent-purple)',
+                borderRadius: 4,
+              }} />
+            </div>
+            <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 8, lineHeight: 1.6 }}>
+              Browsers round these figures deliberately, so treat them as a rough guide.
+              Receipt photos are by far the largest thing Finesse stores.
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Data management */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
         <CardTitle as="h2" style={{ marginBottom: 8 }}>Data &amp; Sync</CardTitle>
@@ -494,7 +583,9 @@ export default function Settings({
           {settings?.lastBackupAt
             ? `Last backup ${new Date(settings.lastBackupAt).toLocaleDateString('en-GB')}. `
             : 'You have never exported a backup. Your data exists only in this browser. '}
-          Import will ask whether to replace or merge existing data.
+          Where your device supports it, exporting opens the share sheet so the file can go
+          straight to Files, iCloud or another device. Import will ask whether to replace or
+          merge existing data.
         </div>
 
         <div className="mobile-actions mobile-actions-full" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 16 }}>

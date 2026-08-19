@@ -1117,6 +1117,7 @@ export function buildNudges({
   goals = [],
   transactions = [],
   settings = null,
+  storageState = null,
   now = new Date(),
 } = {}) {
   const today = startOfDay(now);
@@ -1280,6 +1281,21 @@ export function buildNudges({
         view: 'settings',
       });
     }
+  }
+
+  // ── Evictable storage ──
+  // Stronger than the backup nudge and deliberately separate: a stale backup
+  // means an out-of-date copy exists, whereas evictable storage means the
+  // browser is free to delete the original without asking. `null` is "not
+  // checked yet", which must stay silent rather than alarm on a race.
+  if (hasData && storageState === 'best-effort') {
+    nudges.push({
+      id: `storage-evictable-${format(today, 'yyyy-MM')}`,
+      severity: NUDGE_WARN,
+      title: 'Your data can be evicted',
+      body: 'This browser has not promised to keep it. Turn on persistent storage in Settings.',
+      view: 'settings',
+    });
   }
 
   const order = { [NUDGE_DANGER]: 0, [NUDGE_WARN]: 1, [NUDGE_INFO]: 2 };

@@ -789,6 +789,23 @@ describe('nudges', () => {
     expect(find(fresh, 'backup-')).toHaveLength(0);
   });
 
+  it('warns about evictable storage, but stays quiet until the state is known', () => {
+    const categories = [{ id: 1, name: 'Food', allowance: 100, spent: 0 }];
+
+    // null is "not checked yet" — alarming on a race would be worse than late.
+    expect(find(buildNudges({ categories, storageState: null }), 'storage-evictable-')).toHaveLength(0);
+    expect(find(buildNudges({ categories, storageState: 'persisted' }), 'storage-evictable-')).toHaveLength(0);
+    expect(find(buildNudges({ categories, storageState: 'unsupported' }), 'storage-evictable-')).toHaveLength(0);
+
+    const evictable = find(buildNudges({ categories, storageState: 'best-effort' }), 'storage-evictable-');
+    expect(evictable).toHaveLength(1);
+    expect(evictable[0].severity).toBe('warn');
+    expect(evictable[0].view).toBe('settings');
+
+    // Nothing stored yet means nothing to lose.
+    expect(find(buildNudges({ storageState: 'best-effort' }), 'storage-evictable-')).toHaveLength(0);
+  });
+
   it('spots a subscription price change from its charge history', () => {
     const nudges = buildNudges({
       subscriptions: [{ id: 1, name: 'Netflix', amount: 12, active: true, nextDueAt: day(20) }],

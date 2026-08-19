@@ -43,6 +43,8 @@ import QuickAdd from './components/QuickAdd';
 import CommandPalette from './components/CommandPalette';
 import NudgeCenter from './components/NudgeCenter';
 import { notifyNudges } from './notifications';
+import { getPersistenceState, requestPersistence, STORAGE_PERSISTED } from './storage';
+import { shareCsv, shareJson, SHARE_CANCELLED, SHARE_SHARED } from './share';
 
 // "g then <key>" navigation targets.
 const GOTO_KEYS = {
@@ -155,6 +157,10 @@ export default function App() {
     const stored = Number(localStorage.getItem('finesse.activeAccountId'));
     return Number.isFinite(stored) && stored > 0 ? stored : null;
   });
+  // Whether the browser has promised to keep the database. Async, so it can't
+  // be derived during render — it starts null ("not yet known"), which the
+  // nudge builder treats as "say nothing" rather than "not protected".
+  const [storageState, setStorageState] = useState(null);
 
   const {
     accountsQuery, activeAccountId, accounts, accountTransfers, settings, categories, transactions,
@@ -171,6 +177,20 @@ export default function App() {
   useEffect(() => {
     if (activeAccountId) localStorage.setItem('finesse.activeAccountId', String(activeAccountId));
   }, [activeAccountId]);
+
+  // Read-only on load. Requesting persistence can prompt in some browsers, so
+  // that only ever happens from the button in Settings.
+  useEffect(() => {
+    let cancelled = false;
+    getPersistenceState().then(state => { if (!cancelled) setStorageState(state); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleRequestPersistence = useCallback(async () => {
+    const state = await requestPersistence();
+    setStorageState(state);
+    return state;
+  }, []);
 
   // The action and snapshot have been consumed into state above; scrub them
   // from the URL so a refresh doesn't replay them.
@@ -297,28 +317,36 @@ export default function App() {
   // ── Settings / data handlers ─────────────────────────────────────────────
   const handleExport = useCallback(async () => {
     const data = await exportData();
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `finance-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const result = await shareJson({
+      data,
+      filename: `finance-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      title: 'Finesse backup',
+      text: 'Finesse backup — keep this somewhere off-device.',
+    });
+
+    // A dismissed share sheet means no backup was taken. Recording one anyway
+    // would silence the "no backup for N days" nudge on the strength of
+    // something the user actively cancelled.
+    if (result === SHARE_CANCELLED) return result;
 
     // Remember it, so "no backup for N days" can be honest about N.
     const current = await getSettings(activeAccountId);
     await saveSettings({ ...(current || {}), lastBackupAt: new Date().toISOString() }, activeAccountId);
-  }, [activeAccountId]);
+    showToast(result === SHARE_SHARED ? 'Backup shared' : 'Backup downloaded', {
+      detail: result === SHARE_SHARED
+        ? 'Keep a copy somewhere other than this device.'
+        : 'Saved to your downloads.',
+    });
+    return result;
+  }, [activeAccountId, showToast]);
 
   const handleExportCSV = useCallback(async () => {
     const csv = await exportTransactionsCSV(activeAccountId);
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `transactions-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    return shareCsv({
+      csv,
+      filename: `transactions-${new Date().toISOString().slice(0, 10)}.csv`,
+      title: 'Finesse transactions',
+    });
   }, [activeAccountId]);
 
   const handleOpenExportChatSummary = useCallback(async () => {
@@ -329,13 +357,11 @@ export default function App() {
 
   const handleExportChatSummary = useCallback(async (selection) => {
     const data = await exportChatSummary(selection);
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `finesse-chat-summary-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    await shareJson({
+      data,
+      filename: `finesse-chat-summary-${new Date().toISOString().slice(0, 10)}.json`,
+      title: 'Finesse summary',
+    });
     setModal(null);
   }, []);
 
@@ -774,9 +800,9 @@ export default function App() {
 
   // ── Nudges ───────────────────────────────────────────────────────────────
   const nudges = useMemo(() => filterDismissedNudges(
-    buildNudges({ categories, incomes, subscriptions, goals, transactions, settings }),
+    buildNudges({ categories, incomes, subscriptions, goals, transactions, settings, storageState }),
     settings?.dismissedNudges,
-  ), [categories, incomes, subscriptions, goals, transactions, settings]);
+  ), [categories, incomes, subscriptions, goals, transactions, settings, storageState]);
 
   const handleDismissNudge = useCallback(async (nudge) => {
     const current = await getSettings(activeAccountId);
@@ -1064,6 +1090,8 @@ export default function App() {
               templates={templates} onAddTemplate={handleAddTemplate} onDeleteTemplate={handleDeleteTemplate}
               nudgeCount={nudges.length}
               onRecalculate={handleRecalculateCounters}
+              storageState={storageState}
+              onRequestPersistence={handleRequestPersistence}
               showConfirm={showConfirm} showAlert={showAlert} showPrompt={showPrompt} />
           )}
           </Suspense>)}
