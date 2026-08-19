@@ -31,6 +31,14 @@ src/
 ├── db.js                 # Dexie schema + every database helper function
 ├── utils.js              # Pure functions only — cycles, scheduling, forecasting, formatting
 ├── index.css             # All styling: CSS variables, glass classes, component styles
+├── csv.js                # Pure: bank-statement parsing, column mapping, dedupe, reconciliation
+├── prediction.js         # Pure: Monte Carlo spend simulation and backtesting
+├── storage.js            # navigator.storage: persistence + quota
+├── share.js              # navigator.share for exports, with a download fallback
+├── lock.js               # PIN derivation (PBKDF2) and re-lock timing
+├── receipts.js           # Receipt image compression before storage
+├── notifications.js      # Opt-in OS notifications for high-severity nudges
+├── pwa.js                # Service worker registration and manual update
 ├── hooks/
 │   └── useFinesseData.js # Every useLiveQuery call, in one place. Called only by App.jsx
 ├── views/                # One file per page/tab, lazy-loaded from App.jsx
@@ -42,6 +50,7 @@ src/
 │   ├── Calendar.jsx
 │   ├── Subscriptions.jsx
 │   ├── Forecasting.jsx
+│   ├── Review.jsx            # "Looking Back" — long-range retrospective
 │   ├── Goals.jsx             # savings pots and debts
 │   ├── Wishlist.jsx
 │   ├── Variables.jsx
@@ -55,12 +64,16 @@ src/
 │   │   ├── index.js      #   barrel — import modals from here, never the files directly
 │   │   ├── shared.jsx    #   IncomeAllocationEditor, FormulaInput, ColourPicker, PALETTE…
 │   │   ├── transaction.jsx, category.jsx, income.jsx, subscription.jsx,
-│   │   └── wishlist.jsx, data.jsx, budget.jsx
+│   │   ├── statement.jsx #   bank-statement import: map columns → review → commit
+│   │   └── wishlist.jsx, data.jsx, budget.jsx, goal.jsx
 │   ├── CategorySelect.jsx, DateInput.jsx  # custom accessible form controls
+│   ├── LockScreen.jsx    # PIN gate, rendered *instead of* the app
+│   ├── ReceiptField.jsx, ReceiptViewer.jsx, useBlobUrl.js
 │   ├── ui.jsx            # Modal shell (focus trap), IconButton, Field, CardTitle
 │   ├── useDialog.jsx     # Promise-based confirm / alert / prompt
 │   └── Toast.jsx         # Transient confirmations with an optional Undo action
-└── __tests__/            # Vitest: utils.test.js (pure) + db.test.js (fake-indexeddb)
+└── __tests__/            # Vitest: utils / csv / prediction (pure),
+                          #   db (fake-indexeddb), platform (browser-API modules)
 ```
 
 `scripts/smoke.mjs` (`npm run smoke`) drives a real browser through the core
@@ -156,6 +169,26 @@ A category funded by several incomes resets piecemeal, so by the final reset
 partial resets wiped, and `getRolloverForNextCycle` adds it back — without it,
 rollover over-credits multi-income categories.
 
+### Receipts are Blobs, and never leave in a backup
+
+Receipt photos are stored as Blobs on the transaction row — `receipt` (full)
+and `receiptThumb` (list preview) — after being re-encoded through a canvas by
+`receipts.js`. Never store an image as it arrived: a phone photo is 2–5 MB and
+storage quota is the one hard limit this app can hit.
+
+`JSON.stringify` turns a Blob into `{}`, so `exportData()` strips the receipt
+fields deliberately and reports `receiptsOmitted`. If you add another binary
+field, strip it there too — a backup that looks complete and isn't is worse
+than one that says what it left behind.
+
+### Money that can't be derived, isn't drawn
+
+`buildNetWorthHistory` trends assets from the ledger, but reports debt as a
+single current figure with `debtHasHistory: false`. Finesse records what remains
+on a debt goal, not when each payment landed, so a historical debt line would be
+invented. Hold to this: where the data can't support a series, say so rather
+than plotting a plausible-looking one.
+
 ### Schema changes
 
 If you change the Dexie schema, increment the version number and add a new `db.version(N).stores({...})` call. Do not modify the existing `version(1)` call. See DEV_GUIDE.md for the migration pattern.
@@ -186,7 +219,8 @@ Key CSS variables:
 ## Adding a new view
 
 1. Create `src/views/MyView.jsx` — accept data as props, emit mutations via callbacks
-2. Add an entry to the `NAV` array in `App.jsx`
+2. Add an entry to the `NAV` array in `App.jsx`, and to the view list in
+   `scripts/smoke.mjs` so it is actually exercised
 3. Add the query to `hooks/useFinesseData.js` if new data is needed, and pass it down from `App.jsx`
 4. Add a `{view === 'myview' && <MyView ... />}` render branch in `App.jsx`
 
@@ -284,6 +318,19 @@ so.
 ### Change the currency
 
 Find `fmt()` and `fmtShort()` in `utils.js`. Change the `currency` option in `Intl.NumberFormat` and update the `£` prefix in `fmtShort`.
+
+### Import a bank statement
+
+`csv.js` is pure and self-contained: parsing, delimiter detection, amount and
+date reading, column mapping, duplicate detection and reconciliation. The modal
+(`modals/statement.jsx`) owns the three-step flow and injects
+`suggestCategoryForNote` as a closure, so `csv.js` never reaches for rules or
+history itself.
+
+Two invariants worth keeping: nothing is written until the review step is
+confirmed, and `summariseRows().importable` must always equal
+`toTransactionPayload().length` — the button promises what will actually be
+written, not what is merely ticked.
 
 ### Add a new chart to Forecasting
 
