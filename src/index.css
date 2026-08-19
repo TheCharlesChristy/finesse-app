@@ -558,6 +558,30 @@ body {
 .fade-in { animation: fadeIn 0.3s ease forwards; }
 .font-display { font-family: 'DM Serif Display', serif; }
 
+/*
+ * Covers the app the moment it goes to the background, so the snapshot iOS
+ * takes for the app switcher shows the mesh rather than your balances.
+ * Deliberately opaque rather than blurred: a blur of a number is still a
+ * number-shaped smudge, and the snapshot is taken too fast to rely on a
+ * transition finishing — hence no animation on the way in.
+ */
+.privacy-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 10%, rgba(93,184,255,0.18) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 80% at 80% 90%, rgba(192,132,252,0.15) 0%, transparent 60%),
+    #0a0f1e;
+  pointer-events: none;
+}
+html[data-theme="light"] .privacy-veil {
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 10%, rgba(93,184,255,0.22) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 80% at 80% 90%, rgba(192,132,252,0.18) 0%, transparent 60%),
+    #dde6f5;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;

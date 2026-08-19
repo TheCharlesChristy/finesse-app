@@ -1,8 +1,8 @@
 /**
- * The two browser-API modules: storage persistence and file sharing.
+ * The browser-API modules: storage persistence, file sharing and the PIN lock.
  *
- * Both wrap APIs that are missing or half-implemented on real devices, so what
- * matters is the degradation — every path must return something the UI can
+ * These wrap APIs that are missing or half-implemented on real devices, so what
+ * matters most is the degradation — every path must return something the UI can
  * explain rather than throwing or, worse, quietly claiming success.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +12,7 @@ import {
   STORAGE_BEST_EFFORT, STORAGE_PERSISTED, STORAGE_UNSUPPORTED,
 } from '../storage';
 import { canShareFile, shareFile, SHARE_CANCELLED, SHARE_DOWNLOADED, SHARE_SHARED } from '../share';
+import { buildPinSettings, isValidPin, safeEqual, shouldRelock, verifyPin } from '../lock';
 
 // The test environment is Node, so both `navigator` and the DOM are absent
 // until a test installs one. Each helper puts back exactly what it replaced.
@@ -200,5 +201,56 @@ describe('sharing a file', () => {
     expect(await shareFile({ blob: blob(), filename: 'backup.json' })).toBe(SHARE_DOWNLOADED);
     expect(anchor.click).toHaveBeenCalledTimes(1);
     anchor.restore();
+  });
+});
+
+describe('PIN lock', () => {
+  it('accepts only digit PINs of a sensible length', () => {
+    expect(isValidPin('1234')).toBe(true);
+    expect(isValidPin('123456789012')).toBe(true);
+    expect(isValidPin('123')).toBe(false);
+    expect(isValidPin('1234567890123')).toBe(false);
+    expect(isValidPin('12a4')).toBe(false);
+    expect(isValidPin('')).toBe(false);
+    expect(isValidPin(null)).toBe(false);
+  });
+
+  it('never stores the PIN itself, and salts each install separately', async () => {
+    const first = await buildPinSettings('1234');
+    const second = await buildPinSettings('1234');
+
+    expect(first.pinHash).not.toContain('1234');
+    expect(first.pinSalt).not.toBe(second.pinSalt);
+    // Same PIN, different salt — the stored verifier must differ, or a shared
+    // hash would give away that two installs use the same PIN.
+    expect(first.pinHash).not.toBe(second.pinHash);
+  });
+
+  it('verifies the right PIN and rejects the wrong one', async () => {
+    const stored = await buildPinSettings('4821');
+
+    expect(await verifyPin('4821', stored)).toBe(true);
+    expect(await verifyPin('4822', stored)).toBe(false);
+    expect(await verifyPin('', stored)).toBe(false);
+    expect(await verifyPin('4821', {})).toBe(false);
+    expect(await verifyPin('4821', { pinSalt: stored.pinSalt })).toBe(false);
+  });
+
+  it('compares digests without short-circuiting on the first difference', () => {
+    expect(safeEqual('abcd', 'abcd')).toBe(true);
+    expect(safeEqual('abcd', 'abce')).toBe(false);
+    expect(safeEqual('abcd', 'abc')).toBe(false);
+    expect(safeEqual('', '')).toBe(true);
+    expect(safeEqual(null, null)).toBe(false);
+  });
+
+  it('re-locks only once the grace period has passed', () => {
+    const hidden = 1_000_000;
+
+    expect(shouldRelock(null, 60_000, hidden + 90_000)).toBe(false);
+    expect(shouldRelock(hidden, 60_000, hidden + 59_000)).toBe(false);
+    expect(shouldRelock(hidden, 60_000, hidden + 60_000)).toBe(true);
+    // "Immediately" must not be defeated by a zero-length background trip.
+    expect(shouldRelock(hidden, 0, hidden)).toBe(true);
   });
 });

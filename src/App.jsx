@@ -3,7 +3,7 @@ import { CalendarDays, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
   getSettings, saveSettings, addCategory, updateCategory, deleteCategory,
-  addTransaction, addTransactionsBulk, updateTransaction, deleteTransaction,
+  addTransaction, addTransactionsBulk, updateTransaction, deleteTransaction, restoreCategory,
   addWishlistItem, updateWishlistItem, deleteWishlistItem,
   addWishlistCategory, updateWishlistCategory, deleteWishlistCategory, exportData, importData,
   exportSnapshot, exportChatSummary, getExportableSchema,
@@ -45,6 +45,8 @@ import NudgeCenter from './components/NudgeCenter';
 import { notifyNudges } from './notifications';
 import { getPersistenceState, requestPersistence, STORAGE_PERSISTED } from './storage';
 import { shareCsv, shareJson, SHARE_CANCELLED, SHARE_SHARED } from './share';
+import { DEFAULT_LOCK_DELAY_MS, shouldRelock } from './lock';
+import LockScreen from './components/LockScreen';
 
 // "g then <key>" navigation targets.
 const GOTO_KEYS = {
@@ -161,6 +163,9 @@ export default function App() {
   // be derived during render — it starts null ("not yet known"), which the
   // nudge builder treats as "say nothing" rather than "not protected".
   const [storageState, setStorageState] = useState(null);
+  const [unlocked, setUnlocked] = useState(false);
+  const [obscured, setObscured] = useState(false);
+  const hiddenSince = useRef(null);
 
   const {
     accountsQuery, activeAccountId, accounts, accountTransfers, settings, categories, transactions,
@@ -191,6 +196,47 @@ export default function App() {
     setStorageState(state);
     return state;
   }, []);
+
+  // ── Privacy ──────────────────────────────────────────────────────────────
+  // `settings` is undefined until the query resolves, which is what tells a
+  // brand-new install ("no settings row", null) apart from "we don't know yet".
+  // Nothing financial renders in the meantime, or a PIN-protected app would
+  // flash its balances for a frame on every launch.
+  const settingsLoaded = settings !== undefined;
+  const pinSet = Boolean(settings?.pinHash && settings?.pinSalt);
+  const privacyScreenOn = settings?.privacyScreenEnabled !== false;
+
+  useEffect(() => {
+    if (!privacyScreenOn && !pinSet) return undefined;
+
+    const hide = () => {
+      hiddenSince.current = Date.now();
+      if (privacyScreenOn) setObscured(true);
+    };
+    const show = () => {
+      setObscured(false);
+      // Re-lock only after enough time away: asking for the PIN again because
+      // you glanced at a notification is how people turn this off.
+      if (pinSet && shouldRelock(hiddenSince.current, settings?.lockDelayMs ?? DEFAULT_LOCK_DELAY_MS)) {
+        setUnlocked(false);
+      }
+      hiddenSince.current = null;
+    };
+    const onVisibilityChange = () => (document.visibilityState === 'hidden' ? hide() : show());
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    // iOS fires pagehide where visibilitychange can be unreliable, and blur
+    // catches the app switcher being summoned without a full background.
+    window.addEventListener('pagehide', hide);
+    window.addEventListener('blur', hide);
+    window.addEventListener('focus', show);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', hide);
+      window.removeEventListener('blur', hide);
+      window.removeEventListener('focus', show);
+    };
+  }, [privacyScreenOn, pinSet, settings?.lockDelayMs]);
 
   // The action and snapshot have been consumed into state above; scrub them
   // from the URL so a refresh doesn't replay them.
@@ -649,13 +695,30 @@ export default function App() {
     });
   }, [categories, showToast]);
 
+  // A category takes its transactions and subscriptions with it, so this used
+  // to be the one delete guarded by a confirm dialog. The snapshot makes it
+  // properly reversible instead, which is a better answer than a dialog: the
+  // undo restores every row with its original id, and the account balance with
+  // it. The count goes in the toast so "and all its transactions" is a number
+  // rather than a warning to skim past.
   const handleDeleteCategory = useCallback(async (catId) => {
     const cat = categories.find(c => c.id === catId);
-    const ok = await showConfirm(`Delete "${cat?.name || 'category'}" and all its transactions?`, {
-      title: 'Delete Category', confirmText: 'Delete', danger: true,
+    const snapshot = await deleteCategory(catId);
+    if (!snapshot?.category) return;
+
+    const removed = snapshot.transactions.length;
+    const subs = snapshot.subscriptions.length;
+    const parts = [
+      removed > 0 ? `${removed} transaction${removed === 1 ? '' : 's'}` : null,
+      subs > 0 ? `${subs} subscription${subs === 1 ? '' : 's'}` : null,
+    ].filter(Boolean);
+
+    showToast(`Deleted ${cat?.name || 'category'}`, {
+      detail: parts.length ? `${parts.join(' and ')} removed with it.` : 'No transactions were attached.',
+      severity: 'warn',
+      action: { label: 'Undo', onClick: () => restoreCategory(snapshot) },
     });
-    if (ok) deleteCategory(catId);
-  }, [categories, showConfirm]);
+  }, [categories, showToast]);
 
   // ── Variable handlers ────────────────────────────────────────────────────
   const handleAddVariable    = useCallback(v    => addVariable(v, activeAccountId), [activeAccountId]);
@@ -866,9 +929,31 @@ export default function App() {
     })),
   ], [navigate, templates, handleLogTemplate, handleOpenAdjust]);
 
+  // Both gates sit below every hook, so the hook order never changes between
+  // renders — they swap what is rendered, not what runs.
+  if (!settingsLoaded) {
+    return (
+      <div style={{ minHeight: '100vh', position: 'relative' }}>
+        <div className="bg-mesh" />
+        <div style={{
+          position: 'relative', zIndex: 1, minHeight: '100vh',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+          color: 'var(--text-muted)', fontSize: 14,
+        }} aria-busy="true">
+          Loading your finances…
+        </div>
+      </div>
+    );
+  }
+
+  if (pinSet && !unlocked) {
+    return <LockScreen settings={settings} onUnlock={() => setUnlocked(true)} />;
+  }
+
   return (
     <div style={{ minHeight: '100vh', position: 'relative' }}>
       <div className="bg-mesh" />
+      {obscured && <div className="privacy-veil" aria-hidden="true" />}
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', minHeight: '100vh' }}>
         <aside id="app-sidebar" className="sidebar" aria-label="Sidebar" style={{
           width: 220, flexShrink: 0,

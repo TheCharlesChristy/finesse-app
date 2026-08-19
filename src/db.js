@@ -408,9 +408,22 @@ export async function updateCategory(id, data) {
   return db.categories.update(id, nextData);
 }
 
+/**
+ * Delete a category, its transactions and its subscriptions.
+ *
+ * Returns everything it removed, with ids intact, so `restoreCategory` can put
+ * it back exactly — this is the most destructive single action in the app, and
+ * an undo that restores a lookalike copy would be worse than none at all.
+ * Callers that don't want the snapshot can simply ignore the return value.
+ */
 export async function deleteCategory(id) {
+  const snapshot = { category: null, transactions: [], subscriptions: [] };
+
   await db.transaction('rw', db.categories, db.transactions, db.accounts, db.subscriptions, async () => {
     const transactions = await db.transactions.where('categoryId').equals(id).toArray();
+    snapshot.category = await db.categories.get(id);
+    snapshot.transactions = transactions;
+    snapshot.subscriptions = await db.subscriptions.where('categoryId').equals(id).toArray();
     // Signed, so deleting a category that contains refunds doesn't credit the
     // account for money that was never spent.
     const refundByAccount = transactions.reduce((acc, tx) => {
@@ -433,6 +446,52 @@ export async function deleteCategory(id) {
     await db.subscriptions.where('categoryId').equals(id).delete();
     await db.categories.delete(id);
   });
+
+  return snapshot;
+}
+
+/**
+ * Put back what `deleteCategory` removed.
+ *
+ * The account correction is recomputed from the restored transactions rather
+ * than stored alongside them, so it is always the exact inverse of what the
+ * delete applied — one signed sum, one sign flip, no second source of truth to
+ * drift. `spent` rides along on the category row untouched, since the
+ * transactions going back are precisely the ones it already counted.
+ *
+ * Safe to call twice: `put` is idempotent on a fixed id, and the balance is
+ * only adjusted when the category was actually missing.
+ */
+export async function restoreCategory(snapshot) {
+  const { category, transactions = [], subscriptions = [] } = snapshot || {};
+  if (!category?.id) return 0;
+
+  await db.transaction('rw', db.categories, db.transactions, db.accounts, db.subscriptions, async () => {
+    const alreadyPresent = await db.categories.get(category.id);
+
+    await db.categories.put(category);
+    if (transactions.length) await db.transactions.bulkPut(transactions);
+    if (subscriptions.length) await db.subscriptions.bulkPut(subscriptions);
+    if (alreadyPresent) return;
+
+    const deltaByAccount = transactions.reduce((acc, tx) => {
+      if (tx.accountId == null) return acc;
+      const key = Number(tx.accountId);
+      acc[key] = roundMoney((acc[key] || 0) + getSignedAmount(tx));
+      return acc;
+    }, {});
+
+    for (const [accountId, amount] of Object.entries(deltaByAccount)) {
+      const account = await db.accounts.get(Number(accountId));
+      if (account) {
+        await db.accounts.update(Number(accountId), {
+          balance: roundMoney((account.balance || 0) - amount),
+        });
+      }
+    }
+  });
+
+  return category.id;
 }
 
 // ── Transaction helpers ──────────────────────────────────────────────────────
