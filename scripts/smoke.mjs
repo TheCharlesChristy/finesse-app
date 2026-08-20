@@ -30,6 +30,10 @@ function findChromium() {
 const errors = [];
 const step = (msg) => console.log(`  ✓ ${msg}`);
 
+// Long enough to be a passphrase rather than a PIN, which is what puts the
+// lock screen on its text-input path.
+const SMOKE_PASSPHRASE = 'smoke-test-passphrase';
+
 const browser = await chromium.launch({ executablePath: findChromium() });
 const page = await browser.newPage();
 
@@ -642,6 +646,84 @@ if (/New budget applies on/i.test(await page.locator('body').innerText())) {
   errors.push('cancelling a staged budget left the banner up');
 }
 step('a staged budget can be cancelled before it lands');
+
+// ── Encryption ───────────────────────────────────────────────────────────
+// Left until last because it changes how every read works from here on. The
+// point of doing it in a real browser is the part unit tests can't reach: that
+// the app comes back up against a sealed database after a reload, with the key
+// gone and only the passphrase to open it.
+
+await page.getByRole('button', { name: 'Settings', exact: true }).click();
+await page.waitForTimeout(400);
+
+const encryptCard = page.locator('text=Encrypt this device').first();
+if (!await encryptCard.count()) errors.push('encryption card is missing from Settings');
+
+await page.locator('#encrypt-backed-up').check();
+await page.locator('#encrypt-secret').fill(SMOKE_PASSPHRASE);
+await page.locator('#encrypt-confirm').fill(SMOKE_PASSPHRASE);
+
+// The strength line has to speak up about what was typed, not sit silent.
+if (!/could try every possibility/i.test(await page.locator('body').innerText())) {
+  errors.push('no strength estimate shown for the chosen secret');
+}
+
+await page.getByRole('button', { name: /Encrypt this device/ }).click();
+// Argon2 is deliberately slow, and then every row is rewritten.
+await page.getByText(/written this code down/i).waitFor({ timeout: 60000 });
+step('encryption enabled and a recovery code shown');
+
+const codeText = await page.locator('body').innerText();
+const codeMatch = codeText.match(/[0-9A-HJKMNP-TV-Z]{4}(?:-[0-9A-HJKMNP-TV-Z]{4}){5}/);
+if (!codeMatch) errors.push('no recovery code was displayed');
+await page.locator('#recovery-saved').check();
+await page.getByRole('button', { name: 'Done', exact: true }).click();
+await page.waitForTimeout(500);
+
+if (!/This device is encrypted/i.test(await page.locator('body').innerText())) {
+  errors.push('settings does not report the device as encrypted');
+}
+
+// The real test: a cold start against sealed rows.
+await page.reload({ waitUntil: 'networkidle' });
+await page.getByText(/Enter your passphrase/i).waitFor({ timeout: 15000 });
+const lockedBody = await page.locator('body').innerText();
+if (/Salary/.test(lockedBody)) errors.push('locked screen leaked data from the database');
+step('a reload comes back locked, with nothing rendered behind it');
+
+await page.locator('#unlock-secret').fill('definitely-wrong-secret');
+await page.getByRole('button', { name: /Unlock/ }).click();
+await page.waitForTimeout(3000);
+if (!/didn’t unlock it/i.test(await page.locator('body').innerText())) {
+  errors.push('a wrong passphrase was not rejected');
+}
+step('the wrong passphrase is refused');
+
+await page.locator('#unlock-secret').fill(SMOKE_PASSPHRASE);
+await page.getByRole('button', { name: /Unlock/ }).click();
+await page.getByRole('button', { name: 'Dashboard', exact: true }).waitFor({ timeout: 30000 });
+await page.waitForTimeout(800);
+
+const unlockedBody = await page.locator('body').innerText();
+if (!/Salary/.test(unlockedBody)) errors.push('data did not come back after unlocking');
+step('the right passphrase decrypts the database and the app renders');
+
+// And back off again, leaving the data intact.
+await page.getByRole('button', { name: 'Settings', exact: true }).click();
+await page.waitForTimeout(400);
+await page.locator('#vault-current').fill(SMOKE_PASSPHRASE);
+await page.getByRole('button', { name: /Turn off/ }).click();
+await page.getByRole('button', { name: /Turn it off/ }).click();
+await page.waitForTimeout(4000);
+if (!/Encrypt this device/i.test(await page.locator('body').innerText())) {
+  errors.push('encryption could not be turned off again');
+}
+await page.getByRole('button', { name: 'Transactions', exact: true }).click();
+await page.waitForTimeout(600);
+if (!/Coffee|Groceries|Smoke/i.test(await page.locator('body').innerText())) {
+  errors.push('transactions did not survive decryption');
+}
+step('encryption can be turned off, leaving the ledger readable');
 
 await browser.close();
 

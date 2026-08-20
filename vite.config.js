@@ -89,6 +89,10 @@ export default defineConfig({
           if (id.includes('/dexie')) return 'vendor-dexie';
           if (id.includes('/date-fns/')) return 'vendor-datefns';
           if (id.includes('/lucide-react/')) return 'vendor-lucide';
+          // Argon2 and AES only change when the crypto libraries do, and the
+          // unlock path pulls them in on every launch — worth its own chunk so
+          // an app update doesn't re-download them.
+          if (id.includes('/@noble/')) return 'vendor-crypto';
         },
       },
     },

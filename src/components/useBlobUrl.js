@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 /**
- * An object URL for a Blob, revoked when the blob changes or the caller unmounts.
+ * An object URL for a stored image, revoked when it changes or the caller unmounts.
  *
  * Every `createObjectURL` pins its blob in memory until revoked, so a list of
  * receipts that forgot to clean up would hold on to every image it had ever
@@ -17,20 +17,27 @@ import { useEffect, useState } from 'react';
  * cleanup revokes, the re-run recreates — and costs one extra render when a
  * blob appears, not the cascade the rule exists to catch.
  *
- * "No blob means no URL" is derived at the return rather than written back
+ * Bytes are accepted alongside Blobs because that is how receipts are stored —
+ * see `receipts.js` for why the cipher forces it. The Blob is built inside the
+ * effect rather than by the caller, which keeps the dependency on the stored
+ * value itself: wrapping it at the call site would hand this a new object every
+ * render and churn a URL each time.
+ *
+ * "No source means no URL" is derived at the return rather than written back
  * through state, so a revoked URL can never survive a render as a stale value,
  * and the effect stays down to a single assignment.
  */
-export function useBlobUrl(blob) {
+export function useBlobUrl(source, type = 'image/jpeg') {
   const [url, setUrl] = useState(null);
 
   useEffect(() => {
-    if (!blob) return undefined;
+    if (!source) return undefined;
+    const blob = source instanceof Blob ? source : new Blob([source], { type });
     const next = URL.createObjectURL(blob);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
     setUrl(next);
     return () => URL.revokeObjectURL(next);
-  }, [blob]);
+  }, [source, type]);
 
-  return blob ? url : null;
+  return source ? url : null;
 }

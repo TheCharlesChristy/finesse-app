@@ -17,7 +17,7 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   addGoal, updateGoal, deleteGoal, contributeToGoal, autoContributeGoals,
   recalculateSpendCounters,
   stageBudgetConfig, cancelStagedBudgetConfig, applyStagedBudgetConfig,
-  undoBudgetConfigApply, getBudgetConfigContext } from './db';
+  undoBudgetConfigApply, getBudgetConfigContext, initEncryption, lockDatabase } from './db';
 import { useFinesseData } from './hooks/useFinesseData';
 import { describeStagedConfig, isBudgetConfigUndoExpired } from './budgetConfig';
 import { buildNudges, calcNextReset, evaluateFormula, filterDismissedNudges, fmt, getGoalCommitment, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
@@ -197,10 +197,18 @@ export default function App() {
   const hiddenSince = useRef(null);
 
   const {
+    vault, vaultChecked, encryptionEnabled,
     accountsQuery, activeAccountId, accounts, accountTransfers, settings, categories, transactions,
     wishlistItems, wishlistCategories, incomeEvents, subscriptions, incomes, variables,
     rules, templates, goals, netWorth,
-  } = useFinesseData(selectedAccountId);
+  } = useFinesseData(selectedAccountId, unlocked);
+
+  // Tells the storage layer where it stands before anything tries to write.
+  // Reads are already held back by the gate below, but a write that slipped
+  // through ahead of the vault being noticed would land in the clear beside
+  // sealed rows — so the middleware is told to refuse rather than trusting the
+  // ordering to hold.
+  useEffect(() => { initEncryption(); }, []);
   const activeAccount = accounts.find(account => Number(account.id) === Number(activeAccountId)) || null;
 
   useEffect(() => {
@@ -232,11 +240,16 @@ export default function App() {
   // Nothing financial renders in the meantime, or a PIN-protected app would
   // flash its balances for a frame on every launch.
   const settingsLoaded = settings !== undefined;
+  // Two gates that look the same and aren't. A PIN is a screen the app draws
+  // over itself; a vault is the only thing that can read the database at all.
+  // `pinSet` is read from settings, which on an encrypted device can't be read
+  // until the vault is open — so the vault is checked first and independently.
   const pinSet = Boolean(settings?.pinHash && settings?.pinSalt);
+  const lockRequired = encryptionEnabled || pinSet;
   const privacyScreenOn = settings?.privacyScreenEnabled !== false;
 
   useEffect(() => {
-    if (!privacyScreenOn && !pinSet) return undefined;
+    if (!privacyScreenOn && !lockRequired) return undefined;
 
     const hide = () => {
       hiddenSince.current = Date.now();
@@ -246,8 +259,12 @@ export default function App() {
       setObscured(false);
       // Re-lock only after enough time away: asking for the PIN again because
       // you glanced at a notification is how people turn this off.
-      if (pinSet && shouldRelock(hiddenSince.current, settings?.lockDelayMs ?? DEFAULT_LOCK_DELAY_MS)) {
+      if (lockRequired && shouldRelock(hiddenSince.current, settings?.lockDelayMs ?? DEFAULT_LOCK_DELAY_MS)) {
         setUnlocked(false);
+        // The key goes with it. Re-deriving costs a second at the next unlock,
+        // which is the price of not leaving it in memory on a phone sitting on
+        // a table — the case the timer exists for in the first place.
+        if (encryptionEnabled) lockDatabase();
       }
       hiddenSince.current = null;
     };
@@ -265,7 +282,7 @@ export default function App() {
       window.removeEventListener('blur', hide);
       window.removeEventListener('focus', show);
     };
-  }, [privacyScreenOn, pinSet, settings?.lockDelayMs]);
+  }, [privacyScreenOn, lockRequired, encryptionEnabled, settings?.lockDelayMs]);
 
   // The action and snapshot have been consumed into state above; scrub them
   // from the URL so a refresh doesn't replay them.
@@ -1085,8 +1102,31 @@ export default function App() {
     })),
   ], [navigate, templates, handleLogTemplate, handleOpenAdjust]);
 
-  // Both gates sit below every hook, so the hook order never changes between
-  // renders — they swap what is rendered, not what runs.
+  // All three gates sit below every hook, so the hook order never changes
+  // between renders — they swap what is rendered, not what runs.
+  //
+  // The lock comes before the loading gate deliberately. On an encrypted device
+  // nothing can be read until the key is unwrapped, so `settings` stays
+  // undefined until the user is through this screen — waiting for it first
+  // would spin for ever on the one device that most needs to show a prompt.
+  if (!vaultChecked) {
+    return (
+      <div style={{ minHeight: '100vh', position: 'relative' }}>
+        <div className="bg-mesh" />
+      </div>
+    );
+  }
+
+  if (lockRequired && !unlocked) {
+    return (
+      <LockScreen
+        settings={settings}
+        vault={vault}
+        onUnlock={() => setUnlocked(true)}
+      />
+    );
+  }
+
   if (!settingsLoaded) {
     return (
       <div style={{ minHeight: '100vh', position: 'relative' }}>
@@ -1100,10 +1140,6 @@ export default function App() {
         </div>
       </div>
     );
-  }
-
-  if (pinSet && !unlocked) {
-    return <LockScreen settings={settings} onUnlock={() => setUnlocked(true)} />;
   }
 
   return (
@@ -1377,6 +1413,8 @@ export default function App() {
               budgetConfigUndo={budgetConfigUndo}
               onCancelStagedBudgetConfig={handleCancelStagedBudgetConfig}
               onUndoBudgetConfig={handleUndoBudgetConfig}
+              onVaultUnlocked={() => setUnlocked(true)}
+              encryptionEnabled={encryptionEnabled}
               showConfirm={showConfirm} showAlert={showAlert} showPrompt={showPrompt} />
           )}
           </Suspense>)}
