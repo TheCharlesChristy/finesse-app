@@ -64,10 +64,12 @@ export default function Review({ transactions = [], categories = [], incomeEvent
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             <CalendarRange size={16} color="var(--accent-warm)" aria-hidden="true" />
-            <CardTitle as="h2">Looking back</CardTitle>
+            <CardTitle as="h2">
+              {format(review.from, 'MMM yyyy')} to {format(review.to, 'MMM yyyy')}
+            </CardTitle>
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 3 }}>
-            {format(review.from, 'MMM yyyy')} to {format(review.to, 'MMM yyyy')}
+            What actually happened, rather than what was budgeted
           </div>
         </div>
         <div role="group" aria-label="Review window" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>

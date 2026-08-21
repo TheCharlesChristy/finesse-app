@@ -133,3 +133,34 @@ export function CardTitle({ children, as: Tag = 'h2', style }) {
   );
 }
 
+
+// ── Tab bar ───────────────────────────────────────────────────────────────────
+/**
+ * The segmented control the consolidated pages share.
+ *
+ * Several pages that used to be their own nav entries are now tabs on one page,
+ * so this stopped being forty lines Forecasting happened to own and became a
+ * component the rest could reuse. Styling lives in `index.css` alongside
+ * `.nav-item`, which it deliberately echoes — the same control, one level down.
+ *
+ * `tabs` is `[{ id, label, Icon }]`; `Icon` is optional.
+ */
+export function Tabs({ label, tabs, value, onChange }) {
+  return (
+    <div role="tablist" aria-label={label} className="tab-bar">
+      {tabs.map(({ id, label: tabLabel, Icon }) => (
+        <button
+          key={id}
+          type="button"
+          role="tab"
+          aria-selected={value === id}
+          className={`tab-item ${value === id ? 'active' : ''}`}
+          onClick={() => onChange(id)}
+        >
+          {Icon && <Icon size={15} aria-hidden="true" />}
+          <span>{tabLabel}</span>
+        </button>
+      ))}
+    </div>
+  );
+}

@@ -8,6 +8,7 @@ import { APP_COMMIT, APP_VERSION, formatBuiltAt } from '../buildInfo';
 import { isUpdatePending, updateApp } from '../pwa';
 import CategorySelect from '../components/CategorySelect';
 import EncryptionSettings from '../components/EncryptionSettings';
+import VariablesSettings from '../components/VariablesSettings';
 import { CardTitle, IconButton } from '../components/ui';
 
 // What updateApp() found, in the user's terms. Anything unrecognised falls
@@ -32,6 +33,10 @@ export default function Settings({
   onResetIncome,
   onSaveSettings,
   onFullReset,
+  variables = [],
+  onAddVariable,
+  onUpdateVariable,
+  onDeleteVariable,
   rules = [],
   onAddRule,
   onDeleteRule,
@@ -53,6 +58,7 @@ export default function Settings({
   showAlert,
   showPrompt,
   onVaultUnlocked,
+  onPinSet,
   encryptionEnabled = false,
 }) {
   const [ruleMatch, setRuleMatch] = useState('');
@@ -128,6 +134,9 @@ export default function Settings({
         return;
       }
       onSaveSettings?.({ ...(settings || {}), ...patch });
+      // The lock gate reads straight from the database, so without this the
+      // PIN you just chose would lock you out of the page you chose it on.
+      onPinSet?.();
       setNewPin('');
       setConfirmPin('');
     } finally {
@@ -391,6 +400,13 @@ export default function Settings({
           </>
         )}
       </div>
+
+      <VariablesSettings
+        variables={variables}
+        onAddVariable={onAddVariable}
+        onUpdateVariable={onUpdateVariable}
+        onDeleteVariable={onDeleteVariable}
+      />
 
       {/* Reminders */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>

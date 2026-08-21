@@ -23,13 +23,20 @@ Deploy the `dist/` folder to any static host (Netlify, Vercel, your Plesk server
 3. It will appear as a full-screen app icon
 
 ## Features
+Six pages, three of which carry tabs.
+
 - **Dashboard** — income overview, category budgets with progress bars, recent transactions
-- **Transactions** — full expense log with search, filters and receipt photos
-- **Forecasting** — projected end-of-period balance, daily burn rates, net worth over time
-- **Looking Back** — where the money went over 3–24 months, and whether subscriptions have crept up
-- **Goals** — savings pots and debts, with interest modelled and payoff strategies compared
-- **Wishlist** — items with affordability tracking against your budget categories
-- **Settings** — income, categories, privacy, encryption, storage, and import/export
+- **Accounts** — several accounts, transfers between them, and income as it lands
+- **Activity** — *Transactions* (the full log, with search, filters and receipt
+  photos), *Calendar* (paydays, subscriptions and spend by day) and
+  *Subscriptions* (what recurs, and what it costs a month)
+- **Insights** — *Outlook* (projected end-of-period balance and daily burn rates),
+  *Budget* (how the allowances are set up), *History* (spend and net worth over
+  time) and *Looking Back* (where the money went over 3–24 months, and whether
+  subscriptions have crept up)
+- **Goals & Wishlist** — savings pots and debts with interest modelled and payoff
+  strategies compared, alongside the things you're saving towards
+- **Settings** — income, categories, variables, privacy, encryption, storage, and import/export
 
 ## Getting your data in and out
 - **Import a bank statement** — Settings or Transactions → Import CSV. Confirm which

@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Lock, Delete, KeyRound, ShieldCheck } from 'lucide-react';
+import { Lock, KeyRound, ShieldCheck } from 'lucide-react';
 
 import { MAX_PIN_LENGTH, MIN_PIN_LENGTH, verifyPin } from '../lock';
 import { unlockDatabase, resetVaultSecretWithRecovery } from '../db';
 import { isValidRecoveryCode, isValidSecret, describeSecretStrength } from '../vault';
 
-const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', null, '0', 'del'];
-
-// Wrong guesses get slower, so the keypad can't be brute-forced by hand. The
+// Wrong guesses get slower, so the field can't be brute-forced by hand. The
 // step is small enough to be invisible to someone who simply fat-fingered a
 // digit, and painful by the tenth attempt.
 //
-// Worth being clear about what this is not: it protects the keypad, not the
+// Worth being clear about what this is not: it protects the form, not the
 // data. Someone attacking a copy of the database offline never sees this
 // screen. `describeSecretStrength` is what speaks to that case, at the moment
 // the secret is chosen.
@@ -42,7 +40,9 @@ function lockoutFor(attempts) {
  */
 export default function LockScreen({ settings, vault, onUnlock }) {
   const encrypted = Boolean(vault);
-  const usesKeypad = !encrypted || vault.secretKind === 'pin';
+  // A PIN is digits and nothing else, which is what lets the field ask for the
+  // number pad. A passphrase takes the ordinary keyboard.
+  const numericPin = !encrypted || vault.secretKind === 'pin';
 
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
@@ -55,7 +55,7 @@ export default function LockScreen({ settings, vault, onUnlock }) {
 
   const waitMs = Math.max(0, lockedUntil - now);
   const waiting = waitMs > 0;
-  const longEnough = usesKeypad ? pin.length >= MIN_PIN_LENGTH : isValidSecret(pin);
+  const longEnough = numericPin ? pin.length >= MIN_PIN_LENGTH : isValidSecret(pin);
 
   // Only ticks while a lockout is counting down — no idle timer on the happy path.
   useEffect(() => {
@@ -97,29 +97,14 @@ export default function LockScreen({ settings, vault, onUnlock }) {
     }
   };
 
-  const press = (key) => {
-    if (waiting) return;
+  // Digits only, and never longer than a PIN can be — the same clamp the field
+  // in Settings applies when the PIN is chosen, so the two can't disagree about
+  // what is enterable. A paste of "1 2 3 4" lands as 1234 rather than failing.
+  const handleChange = (e) => {
     setError('');
-    if (key === 'del') {
-      setPin(value => value.slice(0, -1));
-      return;
-    }
-    // Auto-submitting at the minimum length would make a longer PIN impossible
-    // to enter, so the user always confirms.
-    setPin(value => (value + key).slice(0, MAX_PIN_LENGTH));
+    const value = e.target.value;
+    setPin(numericPin ? value.replace(/\D/g, '').slice(0, MAX_PIN_LENGTH) : value);
   };
-
-  // A hardware keyboard is the fast path on desktop; the keypad is for thumbs.
-  useEffect(() => {
-    if (!usesKeypad || recovering) return undefined;
-    const handleKeyDown = (e) => {
-      if (e.key >= '0' && e.key <= '9') press(e.key);
-      else if (e.key === 'Backspace') press('del');
-      else if (e.key === 'Enter' && longEnough) submit(pin);
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  });
 
   if (recovering) {
     return (
@@ -143,38 +128,44 @@ export default function LockScreen({ settings, vault, onUnlock }) {
         <div className="font-display" style={{ fontSize: 21, letterSpacing: '-0.02em' }}>Finesse</div>
         <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 4 }}>
           {encrypted
-            ? `Enter your ${usesKeypad ? 'PIN' : 'passphrase'} to decrypt your data`
+            ? `Enter your ${numericPin ? 'PIN' : 'passphrase'} to decrypt your data`
             : 'Enter your PIN to continue'}
         </div>
       </div>
 
-      {usesKeypad ? (
-        <div role="status" aria-live="polite" aria-label={`${pin.length} of ${MAX_PIN_LENGTH} digits entered`}
-          style={{ display: 'flex', justifyContent: 'center', gap: 9, marginBottom: 8, minHeight: 13 }}>
-          {Array.from({ length: Math.max(MIN_PIN_LENGTH, pin.length) }).map((_, index) => (
-            <span key={index} style={{
-              width: 11, height: 11, borderRadius: '50%',
-              background: index < pin.length ? 'var(--accent-mint)' : 'rgba(255,255,255,0.14)',
-              transition: 'background 0.15s ease',
-            }} />
-          ))}
-        </div>
-      ) : (
-        <form onSubmit={e => { e.preventDefault(); if (longEnough) submit(pin); }}>
-          <label className="field-label" htmlFor="unlock-secret">Passphrase</label>
-          <input
-            id="unlock-secret"
-            className="glass-input"
-            type="password"
-            autoFocus
-            autoComplete="current-password"
-            value={pin}
-            disabled={waiting || busy}
-            onChange={e => { setError(''); setPin(e.target.value); }}
-            style={{ width: '100%' }}
-          />
-        </form>
-      )}
+      {/* One field for both secrets, rather than a keypad for digits and a text
+          box for the rest. A drawn keypad has to reimplement everything a real
+          input already does — caret, selection, paste, password managers, the
+          hardware keyboard — and on the phone this is actually used on, the
+          system number pad has bigger targets than twelve buttons squeezed into
+          a card. `inputMode` is what summons it; `pattern` is what makes older
+          iOS agree. */}
+      <form onSubmit={e => { e.preventDefault(); if (longEnough) submit(pin); }}>
+        <label className="field-label" htmlFor="unlock-secret">
+          {numericPin ? 'PIN' : 'Passphrase'}
+        </label>
+        <input
+          id="unlock-secret"
+          className="glass-input"
+          type="password"
+          autoFocus
+          autoComplete="current-password"
+          inputMode={numericPin ? 'numeric' : 'text'}
+          pattern={numericPin ? '[0-9]*' : undefined}
+          enterKeyHint="go"
+          placeholder={numericPin ? `${MIN_PIN_LENGTH}–${MAX_PIN_LENGTH} digits` : undefined}
+          value={pin}
+          disabled={waiting || busy}
+          onChange={handleChange}
+          style={{
+            width: '100%',
+            ...(numericPin ? { textAlign: 'center', fontSize: 20 } : null),
+            // Only once there is something to space out — the placeholder reads
+            // as gibberish at a third of an em between its letters.
+            ...(numericPin && pin ? { letterSpacing: '0.35em', paddingLeft: 14 } : null),
+          }}
+        />
+      </form>
 
       <div aria-live="assertive" style={{
         textAlign: 'center', fontSize: 11, minHeight: 26, paddingTop: 6,
@@ -183,34 +174,12 @@ export default function LockScreen({ settings, vault, onUnlock }) {
         {waiting ? `Try again in ${Math.ceil(waitMs / 1000)}s` : error || (busy ? 'Decrypting…' : ' ')}
       </div>
 
-      {usesKeypad && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-          {KEYS.map((key, index) => key === null ? <span key={`gap-${index}`} /> : (
-            <button
-              key={key}
-              type="button"
-              className="btn-secondary"
-              onClick={() => press(key)}
-              disabled={waiting || busy}
-              aria-label={key === 'del' ? 'Delete last digit' : key}
-              style={{
-                height: 52, fontSize: key === 'del' ? 13 : 19, fontWeight: 500,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              {key === 'del' ? <Delete size={17} aria-hidden="true" /> : key}
-            </button>
-          ))}
-        </div>
-      )}
-
       <button
         type="button"
         className="btn-primary"
         onClick={() => submit(pin)}
         disabled={waiting || busy || !longEnough}
-        style={{ width: '100%', marginTop: 12, height: 46 }}
+        style={{ width: '100%', height: 46 }}
       >
         {busy ? 'Decrypting…' : 'Unlock'}
       </button>

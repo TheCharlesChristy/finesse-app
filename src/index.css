@@ -794,8 +794,15 @@ html[data-theme="light"] .privacy-veil {
     align-items: stretch !important;
   }
 
+  /* The inline `flex: N 1 <basis>` these children carry was written for a row,
+     where the basis is a width. Turning the container into a column silently
+     reinterprets every one of them as a *height* — which is why a select asking
+     for `flex: 1 1 220px` rendered as a 220px-tall box with 180px of nothing in
+     it. Sizing to content is what a stacked row wants in any case; the stretch
+     above already gives each child the full width. */
   .mobile-row-stack > * {
     min-width: 0 !important;
+    flex: 0 0 auto !important;
   }
 
   .mobile-actions {
@@ -1078,6 +1085,64 @@ html[data-theme="light"] .sidebar-overlay {
 @media (max-width: 620px) {
   .safe-to-spend { padding: 18px 18px; }
   .cycle-compare-row { grid-template-columns: 1fr auto; }
+}
+
+/* ── Tab bar ────────────────────────────────────────────────────────────────
+   The segmented control on the consolidated pages — Activity, Insights and
+   Goals & Wishlist — and on Forecasting's own sections. Deliberately a quieter
+   echo of `.nav-item`: the same control, one level down.
+
+   It scrolls sideways rather than wrapping. A second row of tabs would push the
+   content down by a whole line on the screen that has the least of it to spare,
+   and four tabs at an iPhone's width is exactly where wrapping would start. */
+.tab-bar {
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--glass-border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tab-bar::-webkit-scrollbar { display: none; }
+
+.tab-item {
+  flex: 1 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.tab-item:hover { color: var(--text-primary); }
+.tab-item.active {
+  background: var(--glass-bg-strong);
+  border-color: var(--glass-border-strong);
+  color: var(--text-primary);
+}
+.tab-item:focus-visible {
+  outline: 2px solid rgba(93,184,255,0.7);
+  outline-offset: 2px;
+}
+
+/* On a phone the labels are worth more than the icons: four tabs with both do
+   not fit an iPhone's width, and a tab bar that scrolls to reveal a clipped
+   word reads as a bug rather than an affordance. It still scrolls if it has to,
+   but with the icons dropped it rarely has to. */
+@media (max-width: 620px) {
+  .tab-item { padding: 9px 10px; font-size: 12px; }
+  .tab-item svg { display: none; }
 }
 
 /* ── Nudge centre ───────────────────────────────────────────────────────── */

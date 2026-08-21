@@ -45,31 +45,41 @@ src/
 │
 ├── views/
 │   ├── Dashboard.jsx     # Safe-to-spend, income summary, category bars, recent transactions
-│   ├── CategoryDetail.jsx # One category: cycle stats, merchants, its transactions
 │   ├── Accounts.jsx      # Multiple accounts, transfers, income events
-│   ├── Transactions.jsx  # Full expense log with search, filters and tags
-│   ├── PurchaseCheck.jsx # "Can I Purchase It" — live affordability check
-│   ├── Calendar.jsx      # Paydays, subscriptions and logged spend by day
-│   ├── Subscriptions.jsx # Recurring expenses and management links
-│   ├── Forecasting.jsx   # Cash flow, balance history, projections, burn rates
-│   ├── Goals.jsx         # Savings pots and debts
-│   ├── Wishlist.jsx      # Wishlist items with affordability tracking
-│   ├── Variables.jsx     # Named values for allowance formulas
-│   └── Settings.jsx      # Theme, reminders, rules, data export/import, integrity
+│   ├── Activity.jsx      # Tab bar over the three below
+│   │   ├── Transactions.jsx  # Full expense log with search, filters and tags
+│   │   ├── Calendar.jsx      # Paydays, subscriptions and logged spend by day
+│   │   └── Subscriptions.jsx # Recurring expenses and management links
+│   ├── Insights.jsx      # Tab bar over the two below
+│   │   ├── Forecasting.jsx   # Cash flow, balance history, projections, burn rates
+│   │   └── Review.jsx        # "Looking Back" — the long retrospective
+│   ├── GoalsWishlist.jsx # Tab bar over the two below
+│   │   ├── Goals.jsx         # Savings pots and debts
+│   │   └── Wishlist.jsx      # Wishlist items with affordability tracking
+│   ├── CategoryDetail.jsx # One category: cycle stats, merchants, its transactions
+│   └── Settings.jsx      # Theme, reminders, rules, variables, export/import, integrity
 │
 ├── hooks/
 │   └── useFinesseData.js # Every useLiveQuery call, called once by App.jsx
 ├── components/
 │   ├── modals/           # Modal dialogs split by domain, re-exported via index.js
-│   ├── ui.jsx            # Modal shell, IconButton, Field, CardTitle
+│   ├── ui.jsx            # Modal shell, IconButton, Field, CardTitle, Tabs
+│   ├── EncryptionSettings.jsx  # A Settings card, not a view
+│   ├── VariablesSettings.jsx   # Likewise — named values for allowance formulas
 │   ├── useDialog.jsx     # Promise-based confirm / alert / prompt
 │   └── Toast.jsx         # Transient confirmations with an optional Undo
 └── __tests__/            # Vitest suites for utils.js and db.js
 ```
 
-> Eleven of these appear in the `NAV` sidebar. `CategoryDetail` is the
-> exception — it's reached by tapping a category on the Dashboard rather than
-> from the nav.
+> Six of these appear in the `NAV` sidebar: Dashboard, Accounts, Activity,
+> Insights, Goals & Wishlist and Settings. The indented files are panels those
+> pages render as tabs — they are ordinary view components, just not
+> destinations of their own. `CategoryDetail` is the remaining exception: it's
+> reached by tapping a category on the Dashboard rather than from the nav.
+>
+> Old page ids (`transactions`, `calendar`, `subscriptions`, `forecasting`,
+> `review`, `wishlist`, `variables`) still work as navigation targets —
+> `VIEW_ALIASES` in `App.jsx` maps each onto its page and tab.
 
 ---
 

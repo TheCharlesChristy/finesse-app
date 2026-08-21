@@ -30,6 +30,21 @@ function findChromium() {
 const errors = [];
 const step = (msg) => console.log(`  ✓ ${msg}`);
 
+// Six nav entries now, with the pages that used to be their own entries folded
+// in as tabs on three of them. `go()` keeps the walkthrough below reading the
+// way it did when each was a destination: name the thing you want, land on it.
+const PAGE_OF = {
+  Transactions: 'Activity',
+  Calendar: 'Activity',
+  Subscriptions: 'Activity',
+  Outlook: 'Insights',
+  Budget: 'Insights',
+  History: 'Insights',
+  'Looking Back': 'Insights',
+  Goals: 'Goals & Wishlist',
+  Wishlist: 'Goals & Wishlist',
+};
+
 // Long enough to be a passphrase rather than a PIN, which is what puts the
 // lock screen on its text-input path.
 const SMOKE_PASSPHRASE = 'smoke-test-passphrase';
@@ -45,6 +60,14 @@ page.on('console', m => {
   if (/fonts\.(googleapis|gstatic)/.test(m.text() + (m.location()?.url || ''))) return;
   errors.push(`console: ${m.text()}`);
 });
+
+async function go(name) {
+  const parent = PAGE_OF[name];
+  await page.getByRole('button', { name: parent || name, exact: true }).click();
+  await page.waitForTimeout(300);
+  if (parent) await page.getByRole('tab', { name, exact: true }).click();
+  await page.waitForTimeout(350);
+}
 
 await page.goto(BASE, { waitUntil: 'networkidle' });
 
@@ -87,14 +110,36 @@ for (const expected of ['£2,000.00', '£400.00 allocated', '£1,600.00 unalloca
 }
 step('dashboard totals reconcile (2000 income − 400 allocated, 374.50 left of 400)');
 
-for (const name of ['Accounts', 'Transactions', 'Can I Purchase It', 'Calendar', 'Subscriptions',
-                    'Forecasting', 'Looking Back', 'Goals', 'Wishlist', 'Variables', 'Settings', 'Dashboard']) {
+for (const name of ['Accounts', 'Activity', 'Insights', 'Goals & Wishlist', 'Settings', 'Dashboard']) {
   await page.getByRole('button', { name, exact: true }).click();
   await page.waitForTimeout(350);
   const heading = await page.locator('h1').innerText();
   if (!heading.includes(name)) errors.push(`view "${name}" did not render (h1 was "${heading}")`);
 }
-step('all 12 views render');
+step('all 6 views render');
+
+// And every tab within them — a consolidated page that renders its first tab
+// and throws on the third is exactly what this script exists to catch.
+for (const [name, marker] of [
+  ['Transactions', 'Bulk Add'],
+  ['Calendar', 'Financial Calendar'],
+  ['Subscriptions', 'Recurring expenses'],
+  ['Outlook', 'Predicted Spending'],
+  ['Budget', 'Budget Usage'],
+  ['History', 'Where Your Money Goes'],
+  ['Looking Back', 'What actually happened'],
+  ['Goals', 'saving pots and debts'],
+  ['Wishlist', 'Add Item'],
+]) {
+  await go(name);
+  const body = await page.locator('body').innerText();
+  if (!body.includes(marker)) errors.push(`tab "${name}" did not render (looked for "${marker}")`);
+}
+step('all 9 tabs render inside their pages');
+
+// Back to where the walkthrough continues from.
+await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+await page.waitForTimeout(400);
 
 await page.getByRole('button', { name: 'Adjust Groceries' }).click();
 await page.getByRole('dialog').waitFor();
@@ -112,7 +157,7 @@ await page.getByRole('dialog', { name: 'Command palette' }).waitFor({ timeout: 5
 await page.getByPlaceholder('Jump to a view').fill('forecast');
 await page.keyboard.press('Enter');
 await page.waitForTimeout(400);
-if (!(await page.locator('h1').innerText()).includes('Forecasting')) {
+if (!(await page.locator('h1').innerText()).includes('Insights')) {
   errors.push('command palette did not navigate to Forecasting');
 }
 step('command palette navigates');
@@ -169,8 +214,7 @@ await page.getByRole('button', { name: 'Add Split' }).click();
 await page.getByRole('dialog').waitFor({ state: 'detached' });
 await page.waitForTimeout(400);
 
-await page.getByRole('button', { name: 'Transactions', exact: true }).click();
-await page.waitForTimeout(400);
+await go('Transactions');
 const txText = await page.locator('body').innerText();
 if ((txText.match(/split/g) || []).length < 2) {
   errors.push('split did not produce two linked transactions');
@@ -206,31 +250,26 @@ if (!(await page.locator('h1').innerText()).includes('Dashboard')) {
 }
 step('drill-down returns to the Dashboard');
 
-await page.getByRole('button', { name: 'Forecasting', exact: true }).click();
-await page.waitForTimeout(600);
-
-// Forecasting is split into three tabs, so a card being absent from the default
-// view is no longer a failure — but each tab still has to render its own.
+// Insights is four tabs, so a card being absent from the default view is no
+// longer a failure — but each tab still has to render its own.
 for (const [tabName, expected] of [
   ['Outlook', ['Predicted Spending', 'Income Reset Schedule']],
   ['Budget',  ['Budget Usage', 'Category Allocation']],
   ['History', ['Account Balance', 'Where Your Money Goes']],
+  ['Looking Back', ['Month by month', 'Where it went']],
 ]) {
-  await page.getByRole('tab', { name: tabName }).click();
-  await page.waitForTimeout(400);
+  await go(tabName);
   const body = await page.locator('body').innerText();
   for (const text of expected) {
-    if (!body.includes(text)) errors.push(`forecasting ${tabName} tab missing: ${text}`);
+    if (!body.includes(text)) errors.push(`insights ${tabName} tab missing: ${text}`);
   }
 }
-await page.getByRole('tab', { name: 'Outlook' }).click();
-await page.waitForTimeout(300);
-step('forecasting tabs each render their own cards');
+await go('Outlook');
+step('insights tabs each render their own cards');
 
 // ── Money concepts ───────────────────────────────────────────────────────
 
-await page.getByRole('button', { name: 'Goals', exact: true }).click();
-await page.waitForTimeout(400);
+await go('Goals');
 await page.getByRole('button', { name: 'Add your first goal' }).click();
 await page.getByRole('dialog').waitFor();
 await page.getByLabel('Name').fill('Holiday');
@@ -297,8 +336,7 @@ step('dismissal persists across a reload');
 
 // ── Calendar & planning ──────────────────────────────────────────────────
 
-await page.getByRole('button', { name: 'Calendar', exact: true }).click();
-await page.waitForTimeout(500);
+await go('Calendar');
 
 // Clicking a day opens its detail sheet.
 const todayCell = page.locator('.finance-calendar-day.today');
@@ -317,14 +355,12 @@ await page.getByRole('button', { name: 'Add Expense', exact: true }).click();
 await page.getByRole('dialog').waitFor({ state: 'detached' });
 await page.waitForTimeout(500);
 
-await page.getByRole('button', { name: 'Transactions', exact: true }).click();
-await page.waitForTimeout(500);
+await go('Transactions');
 const txList = await page.locator('body').innerText();
 if (!txList.includes('From calendar')) errors.push('expense logged from the calendar is missing');
 step('logging from a calendar day works');
 
-await page.getByRole('button', { name: 'Forecasting', exact: true }).click();
-await page.waitForTimeout(700);
+await go('Outlook');
 const fc = await page.locator('body').innerText();
 if (!/Cash Flow/i.test(fc)) errors.push('cash-flow forecast missing');
 if (!/(goes negative|stay in the black)/i.test(fc)) errors.push('cash-flow verdict missing');
@@ -333,8 +369,7 @@ step('cash-flow forecast renders with a verdict');
 // ── Polish ───────────────────────────────────────────────────────────────
 
 // Undo has to actually restore, or it's just a nicer-looking delete.
-await page.getByRole('button', { name: 'Transactions', exact: true }).click();
-await page.waitForTimeout(500);
+await go('Transactions');
 const txRow = page.getByRole('button', { name: /^Edit From calendar/ });
 if (await txRow.count() === 0) errors.push('test transaction missing before delete');
 
@@ -363,10 +398,13 @@ step('shortcut help sheet opens with "?"');
 await page.keyboard.press('g');
 await page.keyboard.press('c');
 await page.waitForTimeout(400);
-if (!(await page.locator('h1').innerText()).includes('Calendar')) {
-  errors.push('"g then c" did not navigate to the Calendar');
+if (!(await page.locator('h1').innerText()).includes('Activity')) {
+  errors.push('"g then c" did not navigate to Activity');
 }
-step('"g then <key>" navigation works');
+if (await page.getByRole('tab', { name: 'Calendar', exact: true }).getAttribute('aria-selected') !== 'true') {
+  errors.push('"g then c" landed on Activity but not on its Calendar tab');
+}
+step('"g then <key>" navigation reaches the right tab');
 
 // Integrity check reports honestly on a healthy database.
 await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -385,7 +423,7 @@ step('integrity check verifies counters against the log');
 // Still on Settings. The two cards guarding the data have to render, and the
 // storage one has to say something definite rather than sit on "Checking…".
 const settingsText = await page.locator('body').innerText();
-for (const expected of ['Storage', 'Privacy', 'Import Bank Statement']) {
+for (const expected of ['Storage', 'Privacy', 'Import Bank Statement', 'Variables']) {
   if (!settingsText.includes(expected)) errors.push(`settings missing: ${expected}`);
 }
 if (/Checking…/.test(settingsText)) errors.push('storage state never resolved');
@@ -442,8 +480,7 @@ step('statement importer maps columns, reviews rows and reconciles');
 await page.getByRole('button', { name: /^Import 3 transactions$/ }).click();
 await page.waitForTimeout(900);
 
-await page.getByRole('button', { name: 'Transactions', exact: true }).click();
-await page.waitForTimeout(600);
+await go('Transactions');
 const imported = await page.locator('body').innerText();
 for (const expected of ['COFFEE HUT', 'TESCO STORES', 'REFUND ASOS']) {
   if (!imported.includes(expected)) errors.push(`imported transaction missing: ${expected}`);
@@ -477,8 +514,7 @@ step('re-importing the same statement imports nothing twice');
 
 // ── Looking back ─────────────────────────────────────────────────────────
 
-await page.getByRole('button', { name: 'Looking Back', exact: true }).click();
-await page.waitForTimeout(700);
+await go('Looking Back');
 const review = await page.locator('body').innerText();
 for (const expected of ['Month by month', 'Where it went', 'Who got it', 'Spent', 'Kept']) {
   if (!review.includes(expected)) errors.push(`review view missing: ${expected}`);
@@ -493,8 +529,7 @@ step('looking-back view renders and survives a window change');
 
 // ── Debt interest ────────────────────────────────────────────────────────
 
-await page.getByRole('button', { name: 'Goals', exact: true }).click();
-await page.waitForTimeout(500);
+await go('Goals');
 await page.getByRole('button', { name: '+ Add Goal' }).click();
 await page.getByRole('dialog').waitFor({ timeout: 5000 });
 await page.getByRole('button', { name: 'Paying off' }).click();
@@ -718,8 +753,7 @@ await page.waitForTimeout(4000);
 if (!/Encrypt this device/i.test(await page.locator('body').innerText())) {
   errors.push('encryption could not be turned off again');
 }
-await page.getByRole('button', { name: 'Transactions', exact: true }).click();
-await page.waitForTimeout(600);
+await go('Transactions');
 if (!/Coffee|Groceries|Smoke/i.test(await page.locator('body').innerText())) {
   errors.push('transactions did not survive decryption');
 }
