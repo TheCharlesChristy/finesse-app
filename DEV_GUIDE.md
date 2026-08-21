@@ -38,6 +38,8 @@ src/
 ├── main.jsx              # React entry point
 ├── App.jsx               # Root component: nav, routing, modal state, auto-reset logic
 ├── db.js                 # Dexie schema + all database helpers
+├── vault.js              # Encryption key: Argon2id derivation, wrapping, recovery codes
+├── dbCrypto.js           # Dexie DBCore middleware that seals/opens rows
 ├── utils.js              # Pure functions: scheduling, forecasting, formatting
 ├── index.css             # Design system: CSS variables, glass classes, base styles
 │
@@ -75,15 +77,29 @@ src/
 
 ### Schema
 
-The Dexie database is named `FinanceApp`, schema version 1.
+The Dexie database is named `FinanceApp`, schema version 9.
 
 | Table | Key | Indexed fields | Description |
 |---|---|---|---|
-| `settings` | `++id` | — | Singleton row: income, schedule, reset state |
-| `categories` | `++id` | `name` | Expense categories with allowance + spent |
-| `transactions` | `++id` | `categoryId`, `date` | Individual logged expenses |
-| `wishlist` | `++id` | `name` | Wishlist items |
-| `wishlistCategories` | `++id` | `name` | Wishlist item categories (separate from expense categories) |
+| `accounts` | `++id` | — | Each account: name, balance, colour |
+| `accountTransfers` | `++id` | `fromAccountId`, `toAccountId` | Money moved between accounts |
+| `settings` | `++id` | `accountId` | One row per account: schedule, reset state, lock |
+| `categories` | `++id` | `accountId` | Expense categories with allowance + spent |
+| `transactions` | `++id` | `accountId`, `categoryId`, `&subscriptionRunKey` | Individual logged expenses |
+| `incomes` | `++id` | `accountId` | Recurring income sources |
+| `incomeEvents` | `++id` | `accountId`, `&receiptKey` | Income actually received |
+| `subscriptions` | `++id` | `accountId`, `categoryId` | Recurring expenses |
+| `wishlist` | `++id` | `accountId` | Wishlist items |
+| `wishlistCategories` | `++id` | `accountId` | Wishlist item categories |
+| `variables` | `++id` | `accountId` | Named values for allowance formulas |
+| `rules` | `++id` | `accountId` | Auto-categorisation rules |
+| `templates` | `++id` | `accountId` | Saved quick-log transactions |
+| `goals` | `++id` | `accountId` | Savings pots and debts |
+| `vault` | `++id` | — | Wrapped encryption key. Never encrypted |
+
+Indexes are deliberately sparse. An indexed field can't be encrypted, so v9
+dropped every index nothing actually queried — see "Encryption" below before
+adding one.
 
 ### Settings shape
 
@@ -164,6 +180,51 @@ db.version(2).stores({
 ```
 
 Dexie handles the upgrade automatically on next open. Keep all previous `version()` calls in the file.
+
+---
+
+## Encryption (`src/vault.js`, `src/dbCrypto.js`)
+
+Opt-in per device, from Settings → Encryption. Off by default; a database that
+never turns it on pays nothing for it existing.
+
+### How it fits together
+
+```
+secret ──Argon2id──▶ KEK ──unwraps──▶ master ──HKDF──┬─▶ rowKey   (AES-GCM, row cipher)
+                                                     └─▶ indexKey (HMAC, blinded indexes)
+recovery code ──Argon2id──▶ KEK ──unwraps──▶ the same master
+```
+
+The master is random and wrapped twice, never derived from the secret. That is
+what makes a PIN change instant — only the wrap is rewritten — and what lets a
+recovery code open the same data.
+
+`dbCrypto.js` installs a DBCore middleware with `db.use()`. It hooks `mutate`,
+`get`, `getMany`, `query` and `openCursor`; a sealed row keeps its primary key
+and indexed fields in the clear and carries the rest as `__d` (ciphertext),
+`__n` (nonce) and `__b` (per-field sealed binaries).
+
+### Rules for anyone touching it
+
+1. **Nothing on the row path may be async.** IndexedDB transactions commit when
+   the microtask queue drains, so an `await` inside `mutate`/`openCursor` kills
+   the transaction. This is why the cipher is `@noble/ciphers` rather than
+   `crypto.subtle`, and why receipts are stored as bytes rather than Blobs.
+2. **The clear-field set is read from the schema**, not maintained by hand. Add
+   an index and it becomes readable without the key — that is the trade.
+3. **Migrations are batched and resumable.** Unsealed rows read through
+   untouched, so a half-migrated database still works. `vault.sealedAt` records
+   completion; `resumeSealing()` finishes an interrupted pass at the next unlock.
+4. **`params` on `enableEncryption` is for tests only.** Argon2id at the shipped
+   cost is ~1s per derivation.
+
+### Testing it
+
+`src/__tests__/encryption.test.js` opens a second, middleware-free Dexie
+connection to the same database and asserts on the bytes actually stored.
+Anything checked only through the app's own reads would pass even if sealing
+did nothing.
 
 ---
 
@@ -325,5 +386,12 @@ The `<meta name="apple-mobile-web-app-capable">` tag in `index.html` enables thi
 **Merge import can create duplicates.** If you import the same backup twice in merge mode, you'll get duplicate categories and transactions. Replace mode is safe to use for syncing between devices.
 
 **No currency selection.** The app is hardcoded to GBP (£). To change: update `fmt()` and `fmtShort()` in `utils.js`.
+
+**A short PIN can't protect an encrypted database from an offline attack.** Ten
+thousand possibilities falls in seconds to someone holding a copy of the
+storage, and Argon2id raises the cost without changing the conclusion. The app
+says so where the secret is chosen; a passphrase is the only real answer. A
+platform-backed keystore with hardware attempt limiting would be the proper
+fix, and no such thing is available to a PWA.
 
 **Wishlist multi-period affordability is approximate.** For items costing more than one period's combined allowance, the `periodsNeeded` estimate assumes a flat 30-day period. It doesn't account for variable month lengths.

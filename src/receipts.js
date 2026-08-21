@@ -10,8 +10,14 @@
  *
  * Two sizes come out of it. The thumbnail is what the transaction list renders,
  * so scrolling never decodes a full-size image; the full version is only loaded
- * when one is opened. Both are Blobs, which IndexedDB stores natively — there
- * is no base64 anywhere, since that would inflate every image by a third for no
+ * when one is opened.
+ *
+ * Both are stored as bytes rather than Blobs. IndexedDB takes either, and Blobs
+ * read better at the call site — but `Blob.arrayBuffer()` is async, and the row
+ * cipher in `dbCrypto.js` has to run synchronously inside an IndexedDB
+ * transaction, so a Blob is a value it cannot encrypt at all. Bytes go in,
+ * `receiptBlob` turns them back into something an `<img>` can show, and there is
+ * still no base64 anywhere — that would inflate every image by a third for no
  * benefit.
  */
 
@@ -71,11 +77,12 @@ async function renderTo(bitmap, maxEdge, quality) {
   context.fillRect(0, 0, width, height);
   context.drawImage(bitmap, 0, 0, width, height);
 
-  return { blob: await canvasToBlob(canvas, OUTPUT_TYPE, quality), width, height };
+  const blob = await canvasToBlob(canvas, OUTPUT_TYPE, quality);
+  return { bytes: new Uint8Array(await blob.arrayBuffer()), width, height };
 }
 
 /**
- * Turn a picked file into the pair of blobs stored on the transaction.
+ * Turn a picked file into the pair of images stored on the transaction.
  *
  * Throws with a message meant for the user rather than a console: this runs
  * from a file picker, where "nothing happened" is the worst possible outcome.
@@ -99,12 +106,13 @@ export async function buildReceipt(file) {
     const thumb = await renderTo(bitmap, MAX_THUMB_EDGE, THUMB_QUALITY);
 
     return {
-      receipt: full.blob,
-      receiptThumb: thumb.blob,
+      receipt: full.bytes,
+      receiptThumb: thumb.bytes,
       receiptMeta: {
         width: full.width,
         height: full.height,
-        bytes: full.blob.size + thumb.blob.size,
+        type: OUTPUT_TYPE,
+        bytes: full.bytes.byteLength + thumb.bytes.byteLength,
         addedAt: new Date().toISOString(),
       },
     };
@@ -116,6 +124,30 @@ export async function buildReceipt(file) {
 /** The fields that clear a receipt — spelled out so callers can't half-remove one. */
 export const EMPTY_RECEIPT = { receipt: null, receiptThumb: null, receiptMeta: null };
 
+/**
+ * Whether a transaction carries a receipt.
+ *
+ * `receiptMeta` is checked first on purpose. On an encrypted database the image
+ * fields are getters that decrypt on read, so asking "is there a receipt?" by
+ * reading one would decrypt every image in a list just to find out that they
+ * exist. The metadata rides along in the row's own ciphertext, already open.
+ */
 export function hasReceipt(transaction) {
-  return Boolean(transaction?.receipt || transaction?.receiptThumb);
+  if (!transaction) return false;
+  if (transaction.receiptMeta) return true;
+  return Boolean(transaction.receipt || transaction.receiptThumb);
+}
+
+/**
+ * A displayable Blob for a stored receipt.
+ *
+ * Accepts the Blobs written before this changed as well as the bytes written
+ * since, so a database that predates the switch keeps rendering while the
+ * migration hasn't run.
+ */
+export function receiptBlob(value, meta = null) {
+  if (!value) return null;
+  if (typeof Blob !== 'undefined' && value instanceof Blob) return value;
+  const type = meta?.type || OUTPUT_TYPE;
+  return new Blob([value], { type });
 }

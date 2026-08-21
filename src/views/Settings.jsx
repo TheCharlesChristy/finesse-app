@@ -7,6 +7,7 @@ import { buildPinSettings, isValidPin, lockSupported, DEFAULT_LOCK_DELAY_MS, LOC
 import { APP_COMMIT, APP_VERSION, formatBuiltAt } from '../buildInfo';
 import { isUpdatePending, updateApp } from '../pwa';
 import CategorySelect from '../components/CategorySelect';
+import EncryptionSettings from '../components/EncryptionSettings';
 import { CardTitle, IconButton } from '../components/ui';
 
 // What updateApp() found, in the user's terms. Anything unrecognised falls
@@ -51,6 +52,8 @@ export default function Settings({
   showConfirm,
   showAlert,
   showPrompt,
+  onVaultUnlocked,
+  encryptionEnabled = false,
 }) {
   const [ruleMatch, setRuleMatch] = useState('');
   const [ruleCategoryId, setRuleCategoryId] = useState('');
@@ -560,8 +563,9 @@ export default function Settings({
         </div>
         <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>
           Hides your finances from whoever is holding the phone. Neither option
-          encrypts anything &mdash; the data on this device stays readable to
-          anyone who knows where to look, so treat this as a curtain, not a safe.
+          here encrypts anything &mdash; they are a curtain, not a safe. The safe
+          is under Encryption below, and the two work together: a PIN keeps the
+          screen covered between glances, encryption keeps the data unreadable.
         </div>
 
         <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', marginBottom: 18 }}>
@@ -645,11 +649,20 @@ export default function Settings({
             <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 10, lineHeight: 1.6 }}>
               Stored as a salted hash, never as the digits themselves. Forgetting it
               costs you nothing but the lock &mdash; clear the PIN by importing a
-              backup, or by clearing this site&rsquo;s data.
+              backup, or by clearing this site&rsquo;s data. That is only true while
+              the data is unencrypted; once it is, the secret that opens it is the
+              one thing no backup can replace.
             </div>
           </div>
         )}
       </div>
+
+      <EncryptionSettings
+        onBackup={onExport}
+        onUnlocked={onVaultUnlocked}
+        showConfirm={showConfirm}
+        showAlert={showAlert}
+      />
 
       {/* Storage durability */}
       <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
@@ -716,6 +729,22 @@ export default function Settings({
         <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>
           Export your data to transfer between devices or keep a backup. Import to restore.
         </div>
+        {encryptionEnabled && (
+          <div style={{
+            border: '1px solid rgba(251,191,112,0.3)', background: 'rgba(251,191,112,0.06)',
+            borderRadius: 12, padding: '12px 14px', marginBottom: 16,
+            fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6,
+            display: 'flex', gap: 8,
+          }}>
+            <Info size={14} style={{ flexShrink: 0, marginTop: 2, color: 'var(--warn)' }} aria-hidden="true" />
+            <span>
+              A backup file is <strong>not encrypted</strong>. This device is, but
+              the export is plain JSON so it can be read and restored anywhere —
+              which means anywhere you leave it can be read too. Keep backups
+              somewhere you would be happy putting your bank statements.
+            </span>
+          </div>
+        )}
         <div className="mobile-actions mobile-actions-full" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <button className="btn-primary" onClick={onExport} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             <Download size={14} /> Export Backup (.json)

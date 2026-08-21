@@ -15,7 +15,8 @@ import { useBlobUrl } from './useBlobUrl';
 export default function ReceiptField({ value, onChange, disabled = false }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const previewUrl = useBlobUrl(value?.receiptThumb || value?.receipt || null);
+  const previewUrl = useBlobUrl(value?.receiptThumb || value?.receipt || null,
+    value?.receiptMeta?.type);
 
   if (!receiptsSupported()) return null;
 

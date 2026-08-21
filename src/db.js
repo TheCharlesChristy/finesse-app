@@ -7,6 +7,11 @@ import { getNextRecurringDate, normalizeIncomeAllocations, roundMoney, getEffect
   TX_EXPENSE, TX_REFUND,
   wishlistAffordability } from './utils';
 import { buildBudgetConfigPlan, isStagedConfigDue, isBudgetConfigUndoExpired } from './budgetConfig';
+import { encryptionMiddleware, activateEncryption, markEncrypted, lockEncryption,
+  resetEncryption, setSealingSuspended, blindIndex, isEncryptionEnabled, isUnlocked,
+  sealedFieldReport } from './dbCrypto';
+import { createVault, unlockWithSecret, unlockWithRecovery, rewrapSecret, rewrapRecovery,
+  zero } from './vault';
 
 export const db = new Dexie('FinanceApp');
 
@@ -132,6 +137,47 @@ db.version(8).stores({
   templates: '++id, accountId, name',
   goals: '++id, accountId, name',
 });
+
+/**
+ * v9 adds the vault and takes away almost every index.
+ *
+ * An indexed field cannot be encrypted — IndexedDB has to read it to sort and
+ * seek on it — so each index is a column that stays legible to anyone holding
+ * the raw database. Auditing them against the code turned up that most were
+ * never queried: `name` on seven tables, `*tags`, `date`, `nextDueAt`, `active`,
+ * `priority` and `incomeId` were all declared and then only ever filtered in
+ * JS, on rows already fetched by `accountId`. They cost a write on every insert
+ * and bought nothing, and under encryption they would have left category names,
+ * merchants and every transaction date in plain sight.
+ *
+ * What survives is what the app genuinely seeks on: `accountId` everywhere,
+ * `categoryId`, the two transfer endpoints, and the two unique dedupe keys —
+ * which are stored blinded, so even those give up nothing (see `blindIndex`).
+ *
+ * No upgrade function: dropping an index rewrites no data, and `date` had one
+ * caller, rewritten to sort in JS over rows it had already loaded.
+ */
+db.version(9).stores({
+  accounts: '++id',
+  accountTransfers: '++id, fromAccountId, toAccountId',
+  incomeEvents: '++id, accountId, &receiptKey',
+  settings: '++id, accountId',
+  categories: '++id, accountId',
+  transactions: '++id, accountId, categoryId, &subscriptionRunKey',
+  wishlist: '++id, accountId',
+  wishlistCategories: '++id, accountId',
+  incomes: '++id, accountId',
+  subscriptions: '++id, accountId, categoryId',
+  variables: '++id, accountId',
+  rules: '++id, accountId',
+  templates: '++id, accountId',
+  goals: '++id, accountId',
+  vault: '++id',
+});
+
+// Installed before the first query runs. Until a vault exists this is a
+// pass-through, so a database that never turns encryption on pays nothing.
+db.use(encryptionMiddleware());
 
 const ACCOUNT_COLORS = ['#4fffb0', '#5db8ff', '#c084fc', '#fbbf70', '#ff6b8a', '#67e8f9'];
 
@@ -498,8 +544,11 @@ export async function restoreCategory(snapshot) {
 
 // ── Transaction helpers ──────────────────────────────────────────────────────
 export async function getTransactions(accountId = null) {
-  if (accountId == null) return db.transactions.orderBy('date').reverse().toArray();
-  const rows = await db.transactions.where('accountId').equals(Number(accountId)).toArray();
+  // Sorted here rather than by an index: `date` is encrypted from v9 on, and
+  // this path reads the whole table anyway, so the index bought only the sort.
+  const rows = accountId == null
+    ? await db.transactions.toArray()
+    : await db.transactions.where('accountId').equals(Number(accountId)).toArray();
   return rows.sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
@@ -786,8 +835,15 @@ export async function recordIncomeReceived({
   );
   const allocatedCategoryId = type === 'one-off' && categoryId != null ? Number(categoryId) : null;
 
+  // Blinded before it touches the index: the raw key spells out an account, an
+  // income and a date, and an indexed field is one an attacker can read. The
+  // digest is deterministic, so both the lookup and the unique constraint still
+  // work; the raw value rides along inside the encrypted payload so turning
+  // encryption off can put it back.
+  const indexedKey = dedupeKey == null ? null : blindIndex(dedupeKey);
+
   if (dedupeKey) {
-    const existing = await db.incomeEvents.where('receiptKey').equals(dedupeKey).first();
+    const existing = await db.incomeEvents.where('receiptKey').equals(indexedKey).first();
     if (existing) return existing.id;
   }
 
@@ -801,7 +857,10 @@ export async function recordIncomeReceived({
     type,
     createdAt: new Date().toISOString(),
   };
-  if (dedupeKey) event.receiptKey = dedupeKey;
+  if (dedupeKey) {
+    event.receiptKey = indexedKey;
+    event.receiptKeyPlain = dedupeKey;
+  }
   if (allocatedCategoryId != null) event.allocatedCategoryId = allocatedCategoryId;
 
   let id = 0;
@@ -828,7 +887,7 @@ export async function recordIncomeReceived({
     });
   } catch (error) {
     if (dedupeKey && error?.name === 'ConstraintError') {
-      const existing = await db.incomeEvents.where('receiptKey').equals(dedupeKey).first();
+      const existing = await db.incomeEvents.where('receiptKey').equals(indexedKey).first();
       return existing?.id || 0;
     }
     throw error;
@@ -939,7 +998,8 @@ export async function processDueSubscriptions(accountId = null, now = new Date()
           note: subscription.note || subscription.name,
           date: dueIso,
           subscriptionId: subscription.id,
-          subscriptionRunKey: runKey,
+          subscriptionRunKey: blindIndex(runKey),
+          subscriptionRunKeyPlain: runKey,
         });
         created += 1;
       } catch (error) {
@@ -1715,10 +1775,16 @@ const RECEIPT_FIELDS = ['receipt', 'receiptThumb', 'receiptMeta'];
 function stripReceipts(transactions = []) {
   let receiptsOmitted = 0;
   const rows = transactions.map(tx => {
-    if (!tx.receipt && !tx.receiptThumb) return tx;
+    // `receiptMeta` first, and the copy below built key by key rather than
+    // spread-and-deleted: on an encrypted database the image fields are getters
+    // that decrypt on read, and both shortcuts would decrypt every receipt in
+    // the export purely to discard the bytes.
+    if (!tx.receiptMeta && !tx.receipt && !tx.receiptThumb) return tx;
     receiptsOmitted += 1;
-    const copy = { ...tx };
-    for (const field of RECEIPT_FIELDS) delete copy[field];
+    const copy = {};
+    for (const key of Object.keys(tx)) {
+      if (!RECEIPT_FIELDS.includes(key)) copy[key] = tx[key];
+    }
     return copy;
   });
   return { rows, receiptsOmitted };
@@ -1785,7 +1851,8 @@ const EXPORT_ALWAYS_INCLUDED_KEYS = new Set(['id', 'accountId']);
 // receipt blobs — binary, unreadable as JSON, and far larger than everything
 // else in the file put together.
 const EXPORT_NEVER_INCLUDED_KEYS = new Set([
-  'subscriptionRunKey', 'receiptKey', ...RECEIPT_FIELDS,
+  'subscriptionRunKey', 'subscriptionRunKeyPlain', 'receiptKey', 'receiptKeyPlain',
+  ...RECEIPT_FIELDS,
 ]);
 const EXPORT_SENSITIVE_FIELD_PATTERN = /note|memo|description|comment|url/i;
 
@@ -2134,17 +2201,29 @@ export async function importData(data, mode = 'replace') {
     ...item,
     accountId: resolveAccountId(item.accountId),
   }));
-  const incomeEventRows = (items = []) => accountRows(items).map(item => {
+  // The indexed copy of a dedupe key is blinded under the key of whichever
+  // database wrote it, so it is meaningless here. Rebuilding it from the
+  // plaintext twin re-blinds it under *this* database's key — without which a
+  // backup restored onto an encrypted device would dedupe against nothing.
+  // Falling back to the indexed field covers a backup taken before blinding
+  // existed, where the raw key *is* the indexed one — without it, restoring an
+  // old backup onto an encrypted device would write that key in the clear.
+  const restoreDedupeKey = (item, field) => {
     const next = { ...item };
-    if (!next.receiptKey) delete next.receiptKey;
+    const source = next[`${field}Plain`] || next[field];
+    if (source) {
+      next[field] = blindIndex(source);
+      next[`${field}Plain`] = source;
+    }
+    if (!next[field]) delete next[field];
     return next;
-  });
+  };
 
-  const transactionRows = accountRows(dataTables.transactions).map(item => {
-    const next = { ...item };
-    if (!next.subscriptionRunKey) delete next.subscriptionRunKey;
-    return next;
-  });
+  const incomeEventRows = (items = []) => accountRows(items)
+    .map(item => restoreDedupeKey(item, 'receiptKey'));
+
+  const transactionRows = accountRows(dataTables.transactions)
+    .map(item => restoreDedupeKey(item, 'subscriptionRunKey'));
 
   setSummary('settings', await addRowsSafely(db.settings, accountRows(dataTables.settings)));
   setSummary('categories', await addRowsSafely(db.categories, accountRows(dataTables.categories)));
@@ -2209,4 +2288,322 @@ export async function exportTransactionsCSV(accountId = null) {
     ]);
   }
   return rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+}
+
+// ── Encryption: the vault, and the two migrations ───────────────────────────
+/**
+ * Everything above this line is written as if IndexedDB stored plain objects,
+ * because from `db.js`'s point of view it does — `dbCrypto.js` seals rows
+ * underneath Dexie. What is left here is the lifecycle: minting a vault,
+ * unlocking it, changing the secret, and the two bulk rewrites that move an
+ * existing database between plaintext and sealed.
+ *
+ * Both migrations run in resumable batches rather than one transaction, and
+ * that is deliberate. A single transaction over every row would either exceed
+ * what IndexedDB will hold open or lose the lot if the tab closed halfway.
+ * Batching is safe because `dbCrypto` reads sealed and unsealed rows alike, so
+ * a half-migrated database is a working database — `sealedAt` records whether
+ * the job finished, and `resumeSealing` picks up the rest at the next unlock.
+ */
+
+const ENCRYPTABLE_TABLES = ['accounts', 'accountTransfers', 'incomeEvents', 'settings',
+  'categories', 'transactions', 'wishlist', 'wishlistCategories', 'incomes',
+  'subscriptions', 'variables', 'rules', 'templates', 'goals'];
+
+// Small enough that a phone doesn't hold a hundred receipts in memory at once.
+const MIGRATION_BATCH = 100;
+
+// The plaintext twin of each blinded index, and the field it restores.
+const DEDUPE_KEY_TWINS = [['receiptKey', 'receiptKeyPlain'],
+  ['subscriptionRunKey', 'subscriptionRunKeyPlain']];
+
+export async function getVaultRecord() {
+  const rows = await db.vault.toArray();
+  return rows[0] || null;
+}
+
+async function putVaultRecord(record) {
+  const existing = await getVaultRecord();
+  if (existing?.id != null) {
+    await db.vault.put({ ...record, id: existing.id });
+    return;
+  }
+  await db.vault.add(record);
+}
+
+/**
+ * Tell `dbCrypto` where this database stands, before anything reads from it.
+ *
+ * Called once at startup. A vault on disk means every read has to wait for an
+ * unlock, so this runs before the first live query rather than alongside it.
+ */
+export async function initEncryption() {
+  const record = await getVaultRecord();
+  if (record) markEncrypted(); else resetEncryption();
+  return record;
+}
+
+/** What Settings needs to describe the current state. */
+export async function getEncryptionState() {
+  const record = await getVaultRecord();
+  return {
+    enabled: Boolean(record),
+    unlocked: isUnlocked(),
+    sealed: Boolean(record?.sealedAt),
+    secretKind: record?.secretKind || null,
+    createdAt: record?.createdAt || null,
+    // The fields IndexedDB still reads for itself, so the UI can name them
+    // rather than implying that encryption hides everything.
+    readableFields: sealedFieldReport(db),
+  };
+}
+
+/**
+ * Unlock, then finish any sealing that was interrupted.
+ *
+ * Returns false for a wrong secret and throws for anything else, so the caller
+ * can tell "try again" apart from "something is broken".
+ */
+export async function unlockDatabase(secret, { onProgress } = {}) {
+  const record = await getVaultRecord();
+  if (!record) return true;
+  const opened = await unlockWithSecret(record, secret);
+  if (!opened) return false;
+  await activateAndResume(opened, record, onProgress);
+  return true;
+}
+
+export async function unlockDatabaseWithRecovery(code, { onProgress } = {}) {
+  const record = await getVaultRecord();
+  if (!record) return true;
+  const opened = await unlockWithRecovery(record, code);
+  if (!opened) return false;
+  await activateAndResume(opened, record, onProgress);
+  return true;
+}
+
+async function activateAndResume(opened, record, onProgress) {
+  activateEncryption(opened.keys);
+  // The master is only needed to rewrap a secret, and changing one asks for the
+  // current secret anyway — so it is derived again when that happens rather
+  // than kept alive here for the whole session.
+  zero(opened.master);
+  if (!record.sealedAt) await resumeSealing({ onProgress });
+}
+
+/** Drop the keys. The data stays; nothing can read it until the next unlock. */
+export function lockDatabase() {
+  lockEncryption();
+}
+
+/**
+ * Turn encryption on: mint a vault, then seal what is already there.
+ *
+ * The recovery code comes back exactly once. `db.js` does not decide what
+ * happens to it — Settings shows it and refuses to continue until the user
+ * confirms they have written it down, which is the only reason this is safe to
+ * offer at all.
+ */
+export async function enableEncryption(secret, { onProgress, params } = {}) {
+  if (await getVaultRecord()) throw new Error('This device is already encrypted.');
+
+  // `params` overrides the Argon2 cost. It exists because the parameters are
+  // stored per-vault and meant to be raised as phones get faster — and because
+  // a test suite that paid a second of memory-hard KDF per case would stop
+  // being run. Nothing in the app passes it.
+  const { record, recoveryCode, keys, master } = await createVault(
+    secret, params ? { params } : undefined);
+  zero(master);
+  await putVaultRecord(record);
+  activateEncryption(keys);
+
+  try {
+    await sealAllRows(onProgress);
+  } catch (error) {
+    // The vault stays: rows sealed before the failure can only be read with
+    // it, so tearing it down here would be the one action that loses data.
+    console.error('Sealing was interrupted; it will resume at the next unlock.', error);
+    throw error;
+  }
+
+  return { recoveryCode };
+}
+
+/**
+ * Rewrite every row through the middleware, which seals it on the way down.
+ *
+ * Idempotent per table: re-sealing an already-sealed row costs a fresh nonce
+ * and nothing else, which is what lets a resume start from the table boundary
+ * rather than tracking individual rows.
+ */
+async function sealAllRows(onProgress) {
+  const record = await getVaultRecord();
+  const done = new Set(record?.sealedTables || []);
+
+  for (const table of ENCRYPTABLE_TABLES) {
+    if (done.has(table)) continue;
+    await rewriteTable(table, row => row, onProgress);
+    done.add(table);
+    await putVaultRecord({ ...(await getVaultRecord()), sealedTables: [...done] });
+  }
+
+  const finished = await getVaultRecord();
+  await putVaultRecord({ ...finished, sealedTables: [], sealedAt: new Date().toISOString() });
+}
+
+export async function resumeSealing({ onProgress } = {}) {
+  const record = await getVaultRecord();
+  if (!record || record.sealedAt) return false;
+  await sealAllRows(onProgress);
+  return true;
+}
+
+/**
+ * Turn encryption off again.
+ *
+ * Sealing is suspended rather than the keys dropped, so rows can still be read
+ * as they are rewritten in the clear — table by table, instead of holding an
+ * entire decrypted database (receipts and all) in memory across the switch.
+ */
+export async function disableEncryption({ onProgress } = {}) {
+  if (!isEncryptionEnabled()) return false;
+  if (!isUnlocked()) throw new Error('Unlock before turning encryption off.');
+
+  setSealingSuspended(true);
+  try {
+    for (const table of ENCRYPTABLE_TABLES) {
+      await rewriteTable(table, restoreDedupeTwins, onProgress);
+    }
+    await db.vault.clear();
+  } finally {
+    setSealingSuspended(false);
+  }
+  resetEncryption();
+  return true;
+}
+
+/**
+ * Put a blinded dedupe key back to the value it stands for.
+ *
+ * Without this, a subscription run or a recurring income already recorded
+ * would stop matching its own key the moment encryption came off, and record
+ * itself a second time.
+ */
+function restoreDedupeTwins(row) {
+  let next = row;
+  for (const [field, twin] of DEDUPE_KEY_TWINS) {
+    if (next[twin]) next = { ...next, [field]: next[twin] };
+  }
+  return next;
+}
+
+/**
+ * Read every row of one table and write it straight back.
+ *
+ * Primary keys are collected up front and the rows fetched in chunks against
+ * them: the rewrite changes no ids, so the key list stays valid throughout, and
+ * nothing has to hold the whole table at once.
+ *
+ * `materialiseBinaries` is what makes this work on receipts. A sealed row hands
+ * back its images as getters, and a legacy row hands back Blobs that no
+ * synchronous cipher can read — both are resolved to bytes here, outside the
+ * write transaction, which is the only place an `await` is allowed.
+ */
+async function rewriteTable(name, transform, onProgress) {
+  const table = db[name];
+  const keys = await table.toCollection().primaryKeys();
+
+  for (let i = 0; i < keys.length; i += MIGRATION_BATCH) {
+    const chunk = keys.slice(i, i + MIGRATION_BATCH);
+    const rows = await table.bulkGet(chunk);
+    const prepared = [];
+    for (const row of rows) {
+      if (!row) continue;
+      prepared.push(transform(await materialiseBinaries(row)));
+    }
+    if (prepared.length) await table.bulkPut(prepared);
+    onProgress?.({ table: name, done: Math.min(i + MIGRATION_BATCH, keys.length), total: keys.length });
+  }
+
+  if (!keys.length) onProgress?.({ table: name, done: 0, total: 0 });
+}
+
+/**
+ * Resolve anything binary on a row to plain bytes.
+ *
+ * Blobs are the interesting case: receipts written before v9 are stored as
+ * Blobs, and `Blob.arrayBuffer()` is async, so they cannot be sealed from
+ * inside a transaction at all. Converting them here — once, during a
+ * migration — is what lets the cipher stay synchronous everywhere else.
+ */
+async function materialiseBinaries(row) {
+  let next = null;
+  for (const key of Object.keys(row)) {
+    const value = row[key];
+    if (typeof Blob !== 'undefined' && value instanceof Blob) {
+      next = next || { ...row };
+      next[key] = new Uint8Array(await value.arrayBuffer());
+      if (next.receiptMeta && !next.receiptMeta.type) {
+        next.receiptMeta = { ...next.receiptMeta, type: value.type || 'image/jpeg' };
+      }
+    }
+  }
+  // Reading a key off a sealed row runs its getter, so the spread below is what
+  // turns lazy binaries into the real bytes `bulkPut` needs.
+  return next || { ...row };
+}
+
+/**
+ * Change the PIN or passphrase.
+ *
+ * Only the wrap around the master key changes, so this is instant however large
+ * the database is. The current secret is required rather than taken from the
+ * unlocked session: it is the one moment where proving it again is worth the
+ * friction, since the alternative is anyone at an unlocked screen locking the
+ * owner out permanently.
+ */
+export async function changeVaultSecret(currentSecret, nextSecret) {
+  const record = await getVaultRecord();
+  if (!record) throw new Error('This device isn’t encrypted.');
+  const opened = await unlockWithSecret(record, currentSecret);
+  if (!opened) return false;
+
+  const next = await rewrapSecret(record, opened.master, nextSecret);
+  await putVaultRecord(next);
+  activateEncryption(opened.keys);
+  zero(opened.master);
+  return true;
+}
+
+/**
+ * Set a new secret using the recovery code, for the PIN that was forgotten.
+ *
+ * The two halves have to happen together. Unlocking with a recovery code alone
+ * would leave the device open but still keyed to a secret nobody remembers —
+ * fine until the next relock, and then locked out again with the code already
+ * spent.
+ */
+export async function resetVaultSecretWithRecovery(code, nextSecret) {
+  const record = await getVaultRecord();
+  if (!record) throw new Error('This device isn’t encrypted.');
+  const opened = await unlockWithRecovery(record, code);
+  if (!opened) return false;
+
+  const next = await rewrapSecret(record, opened.master, nextSecret);
+  await putVaultRecord(next);
+  await activateAndResume(opened, next, undefined);
+  return true;
+}
+
+/** Mint a fresh recovery code, invalidating the old one. */
+export async function regenerateRecoveryCode(currentSecret) {
+  const record = await getVaultRecord();
+  if (!record) throw new Error('This device isn’t encrypted.');
+  const opened = await unlockWithSecret(record, currentSecret);
+  if (!opened) return null;
+
+  const { record: next, recoveryCode } = await rewrapRecovery(record, opened.master);
+  await putVaultRecord(next);
+  zero(opened.master);
+  return recoveryCode;
 }

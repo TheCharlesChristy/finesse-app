@@ -1,29 +1,38 @@
 /**
- * A PIN gate over the UI, and the derivation behind it.
+ * The PIN gate over the UI, and the timing behind it.
  *
- * Be clear about what this is. Finesse stores everything in IndexedDB in
- * plaintext, and a PIN checked in JavaScript cannot change that: anyone with
- * the unlocked device and a browser console can read the database directly. So
- * this defends against the realistic threat — someone picking up your phone, or
- * looking over your shoulder at the app switcher — and not against someone who
- * has your device and knows where to look. The UI says so rather than implying
- * a safety it doesn't provide.
+ * This is the *screen* lock, and it is now the weaker of two things that can
+ * be called locking Finesse. It hides the app from someone holding your phone.
+ * It does not make the database unreadable — anyone with the unlocked device
+ * and a browser console can open IndexedDB directly — and the lock screen says
+ * so rather than implying a safety it doesn't provide.
  *
- * Encrypting the database with a key derived from the PIN would be the real
- * version, and would also mean a forgotten PIN destroys the data with no
- * recovery path — a much worse failure than the one being solved.
+ * The stronger one lives in `vault.js`: a key that actually encrypts every row,
+ * unwrapped from the same kind of secret. It used to be argued against here on
+ * the grounds that a forgotten PIN would destroy the data with no recovery
+ * path. That objection was right, and it is what the recovery code answers —
+ * so encryption exists, and this file is what remains for the devices that
+ * haven't turned it on.
  *
- * What it does do properly: the PIN is never stored. PBKDF2-SHA-256 over a
+ * The two are kept separate on purpose. A screen lock can be added, removed and
+ * re-timed freely because nothing depends on it; a vault key cannot. Where both
+ * are set the vault wins, since it has to be opened before there is anything
+ * for a screen lock to hide.
+ *
+ * What this does do properly: the PIN is never stored. PBKDF2-SHA-256 over a
  * random per-install salt is, so the stored value is useless on its own, and
  * comparison is constant-time so the check leaks nothing through timing.
  */
+
+import { MIN_PIN_LENGTH as PIN_MIN, MAX_PIN_LENGTH as PIN_MAX } from './vault';
 
 const PBKDF2_ITERATIONS = 250000;
 const SALT_BYTES = 16;
 const KEY_BITS = 256;
 
-export const MIN_PIN_LENGTH = 4;
-export const MAX_PIN_LENGTH = 12;
+// Defined once, in `vault.js`, so the two locks can never drift into
+// disagreeing about what counts as a valid PIN.
+export { MIN_PIN_LENGTH, MAX_PIN_LENGTH } from './vault';
 
 function subtle() {
   if (typeof crypto === 'undefined' || !crypto.subtle) return null;
@@ -107,7 +116,7 @@ export async function buildPinSettings(pin) {
 /** A PIN the app will accept: digits only, within length bounds. */
 export function isValidPin(pin) {
   const value = String(pin || '');
-  return new RegExp(`^\\d{${MIN_PIN_LENGTH},${MAX_PIN_LENGTH}}$`).test(value);
+  return new RegExp(`^\\d{${PIN_MIN},${PIN_MAX}}$`).test(value);
 }
 
 // How long the app may sit in the background before the PIN is asked for

@@ -1,6 +1,7 @@
 import { Receipt, X } from 'lucide-react';
 
 import { useBlobUrl } from './useBlobUrl';
+import { hasReceipt } from '../receipts';
 
 /**
  * The receipt marker in a transaction row.
@@ -11,8 +12,8 @@ import { useBlobUrl } from './useBlobUrl';
  * failed to encode — a missing preview shouldn't hide the fact a receipt exists.
  */
 export function ReceiptThumb({ transaction, onOpen }) {
-  const url = useBlobUrl(transaction?.receiptThumb || null);
-  if (!transaction?.receipt && !transaction?.receiptThumb) return null;
+  const url = useBlobUrl(transaction?.receiptThumb || null, transaction?.receiptMeta?.type);
+  if (!hasReceipt(transaction)) return null;
 
   const label = `View receipt for ${transaction.note || 'this expense'}`;
 
@@ -43,7 +44,8 @@ export function ReceiptThumb({ transaction, onOpen }) {
  * and a photo wants the whole viewport with nothing around it.
  */
 export function ReceiptViewer({ transaction, onClose }) {
-  const url = useBlobUrl(transaction?.receipt || transaction?.receiptThumb || null);
+  const url = useBlobUrl(transaction?.receipt || transaction?.receiptThumb || null,
+    transaction?.receiptMeta?.type);
 
   return (
     <div

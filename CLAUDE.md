@@ -36,7 +36,9 @@ src/
 ├── prediction.js         # Pure: Monte Carlo spend simulation and backtesting
 ├── storage.js            # navigator.storage: persistence + quota
 ├── share.js              # navigator.share for exports, with a download fallback
-├── lock.js               # PIN derivation (PBKDF2) and re-lock timing
+├── lock.js               # PIN derivation (PBKDF2) and re-lock timing — screen lock only
+├── vault.js              # The encryption key: Argon2id, wrapping, recovery codes
+├── dbCrypto.js           # Dexie middleware that seals rows under the key
 ├── receipts.js           # Receipt image compression before storage
 ├── notifications.js      # Opt-in OS notifications for high-severity nudges
 ├── pwa.js                # Service worker registration and manual update
@@ -69,13 +71,15 @@ src/
 │   │   ├── budgetConfig.jsx #  budget-config import: validate → preview diff → stage
 │   │   └── wishlist.jsx, data.jsx, budget.jsx, goal.jsx
 │   ├── CategorySelect.jsx, DateInput.jsx  # custom accessible form controls
-│   ├── LockScreen.jsx    # PIN gate, rendered *instead of* the app
+│   ├── LockScreen.jsx    # PIN / passphrase gate, rendered *instead of* the app
+│   ├── EncryptionSettings.jsx # Turning encryption on and off, and the recovery code
 │   ├── ReceiptField.jsx, ReceiptViewer.jsx, useBlobUrl.js
 │   ├── ui.jsx            # Modal shell (focus trap), IconButton, Field, CardTitle
 │   ├── useDialog.jsx     # Promise-based confirm / alert / prompt
 │   └── Toast.jsx         # Transient confirmations with an optional Undo action
 └── __tests__/            # Vitest: utils / csv / prediction (pure),
-                          #   db (fake-indexeddb), platform (browser-API modules)
+                          #   db + encryption (fake-indexeddb),
+                          #   platform (browser-API modules)
 ```
 
 `scripts/smoke.mjs` (`npm run smoke`) drives a real browser through the core
@@ -171,12 +175,19 @@ A category funded by several incomes resets piecemeal, so by the final reset
 partial resets wiped, and `getRolloverForNextCycle` adds it back — without it,
 rollover over-credits multi-income categories.
 
-### Receipts are Blobs, and never leave in a backup
+### Receipts are bytes, and never leave in a backup
 
-Receipt photos are stored as Blobs on the transaction row — `receipt` (full)
-and `receiptThumb` (list preview) — after being re-encoded through a canvas by
-`receipts.js`. Never store an image as it arrived: a phone photo is 2–5 MB and
-storage quota is the one hard limit this app can hit.
+Receipt photos are stored as `Uint8Array` on the transaction row — `receipt`
+(full) and `receiptThumb` (list preview) — after being re-encoded through a
+canvas by `receipts.js`. Never store an image as it arrived: a phone photo is
+2–5 MB and storage quota is the one hard limit this app can hit.
+
+Bytes rather than Blobs because the row cipher is synchronous and
+`Blob.arrayBuffer()` is not — see the encryption section below. `receiptBlob()`
+turns them back into something an `<img>` can render, and accepts the Blobs
+written before v9 so old rows keep working. `hasReceipt()` checks `receiptMeta`
+first, deliberately: on an encrypted database the image fields are getters, and
+asking "is there a receipt?" by reading one would decrypt every image in a list.
 
 `JSON.stringify` turns a Blob into `{}`, so `exportData()` strips the receipt
 fields deliberately and reports `receiptsOmitted`. If you add another binary
@@ -221,6 +232,56 @@ first. Undo is offered for one cycle (`undoExpiresAt`) — long enough to catch 
 budget you didn't want, short of restoring allowances that have gone stale and
 discarding rollover accrued since.
 
+### Encryption — the middleware, and what it can't hide
+
+Encryption is opt-in per device. When it is on, `dbCrypto.js` sits under Dexie
+as a DBCore middleware and seals every row on the way down, opening it on the
+way up. Nothing in `db.js` or the views knows: they handle ordinary objects
+either way. A scheme that asked 2,200 lines of helpers to remember to encrypt
+would be one forgotten call away from a permanent plaintext row.
+
+Five things shape everything else here:
+
+- **The cipher is synchronous, and has to be.** An IndexedDB transaction commits
+  as soon as the microtask queue drains without a new request against it, so
+  awaiting `crypto.subtle` between two IDB operations kills the transaction.
+  Hence AES-GCM from `@noble/ciphers` on the row path — and hence bytes rather
+  than Blobs for receipts, since `Blob.arrayBuffer()` is async too. The slow,
+  memory-hard KDF (Argon2id) runs only at unlock, in `vault.js`, with no
+  transaction open. **Never `await` anything in the middleware's row path.**
+- **The clear set comes from the schema, not a list.** `clearFieldsFor` reads
+  the primary key and indexes off the live Dexie schema, so an index added later
+  can't quietly start leaking a field this file didn't know about.
+- **A key is wrapped, never derived directly.** The row key comes from a random
+  master, and the secret only wraps it — which is why changing a PIN is instant
+  instead of rewriting the database. The same master is wrapped a second time
+  under a random recovery code.
+- **Migrations are resumable, not transactional.** Both directions rewrite every
+  row in batches. `openRow` passes unsealed rows through untouched, so a
+  half-migrated database is a working database; `sealedAt` records whether the
+  pass finished and `resumeSealing` picks it up at the next unlock.
+- **Binaries are sealed apart and opened late.** Receipt images are sealed one
+  field at a time into `__b` and exposed as getters that decrypt on first read.
+  Anything that only needs to know *whether* a receipt exists must check
+  `receiptMeta`, or it will decrypt an image per row.
+
+`blindIndex` covers the two unique indexes that have to survive — `receiptKey`
+and `subscriptionRunKey`. Their raw form spells out an account, an income and a
+date, so what is indexed is an HMAC of it; the raw value rides along inside the
+encrypted payload as `*Plain` so turning encryption off can restore it.
+
+**What is still readable without the key**: the primary key and the remaining
+indexes — row counts, and which account and category each row belongs to. No
+amount, name, note, date, tag or photo. Settings says exactly this, generated
+from the live schema by `sealedFieldReport`, rather than implying encryption
+hides everything. Keep that honesty if you touch this.
+
+**A short PIN is not a key.** Ten thousand possibilities falls in seconds to
+someone holding a copy of the database, whatever the KDF costs; Argon2id buys
+orders of magnitude, not safety. `describeSecretStrength` says so in real units
+at the moment the secret is chosen, and the enable flow will not proceed until
+the recovery code has been shown and confirmed. Do not soften either.
+
 ### Formula evaluation
 
 `evaluateFormula` substitutes `$var`, `{Income}` and `[Category]` tokens, then
@@ -234,7 +295,16 @@ importer can say *which* reference failed rather than only that something did.
 
 ### Schema changes
 
-If you change the Dexie schema, increment the version number and add a new `db.version(N).stores({...})` call. Do not modify the existing `version(1)` call. See DEV_GUIDE.md for the migration pattern.
+If you change the Dexie schema, increment the version number and add a new `db.version(N).stores({...})` call. Do not modify the existing `version(1)` call. See DEV_GUIDE.md for the migration pattern. The current version is **9**.
+
+**Think hard before adding an index.** An indexed field cannot be encrypted —
+IndexedDB has to read it to sort and seek on it — so every index is a column
+that stays legible to anyone holding the raw database. v9 dropped seven `name`
+indexes, `*tags`, `date`, `nextDueAt`, `active`, `priority` and `incomeId`
+because nothing ever queried them; they were costing a write per insert and
+would have left category names, merchants and every transaction date in plain
+sight. If a new index is genuinely needed, add it knowing that, and say so in
+the same commit.
 
 ---
 
@@ -325,6 +395,13 @@ must keep it in step with the transaction log — `db.test.js` covers those
 invariants and new mutations belong there too. `recalculateSpendCounters()`
 rebuilds the counters from the log if they ever drift.
 
+`encryption.test.js` proves sealing by opening a *second* Dexie connection to
+the same database with no middleware installed, and asserting on what is
+actually stored. Assertions made through the app's own reads would pass just as
+happily if `seal` were the identity function — if you add a case here, check it
+the raw way. Its `FAST` Argon2 parameters exist so the suite stays runnable;
+the algorithm under test is unchanged.
+
 `npm run lint` is clean — keep it that way. `setState` inside an effect is the
 error you're most likely to hit; the fix is almost always to derive the value
 during render instead. The two allocation effects in `modals/category.jsx` are
@@ -346,6 +423,10 @@ so.
 - **Don't add global state management** (Redux, Zustand, Context). `useLiveQuery` in `App.jsx` + prop drilling is sufficient and explicit.
 - **Don't install a component library** (shadcn, MUI, etc.). The glass design system is hand-rolled and should stay that way.
 - **Don't rename `db.js` or `utils.js`** — they're imported widely.
+- **Don't `await` in the `dbCrypto.js` row path.** It runs inside IndexedDB
+  transactions, which commit the moment you hand control back.
+- **Don't add a way to recover data without the secret or the recovery code.**
+  There isn't one, and any hint otherwise in the UI is a lie the user will act on.
 - **Don't put business logic in views.** Views render and emit events. Logic goes in `utils.js` (pure) or `db.js` (DB operations) or `App.jsx` (orchestration).
 
 ---
