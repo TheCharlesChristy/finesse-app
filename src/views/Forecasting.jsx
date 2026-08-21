@@ -4,7 +4,7 @@ import {
   ComposedChart, LineChart, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend
 } from 'recharts';
-import { Activity, AlertTriangle, Check, History, TrendingUp, Wallet } from 'lucide-react';
+import { Activity, AlertTriangle, Check } from 'lucide-react';
 import { differenceInDays, format, startOfDay } from 'date-fns';
 import {
   fmt,
@@ -26,16 +26,6 @@ import { CardTitle } from '../components/ui';
 
 const COLORS = ['#4fffb0', '#5db8ff', '#c084fc', '#fbbf70', '#ff6b8a', '#67e8f9', '#a78bfa'];
 const FREQ_LABEL = { weekly: 'Weekly', fortnightly: 'Fortnightly', '4weekly': 'Every 4 weeks', monthly: 'Monthly' };
-
-// Three questions, three screens: what's coming, how the budget is set up, what
-// already happened. The page used to answer all three in one ten-card scroll,
-// which on a phone meant the forecast and the history were the same distance
-// away — a very long way.
-const TABS = [
-  { id: 'outlook', label: 'Outlook', icon: TrendingUp },
-  { id: 'budget',  label: 'Budget',  icon: Wallet },
-  { id: 'history', label: 'History', icon: History },
-];
 
 const PREDICTION_HORIZONS = [7, 30, 90];
 /** Beyond this many lines the per-category chart is spaghetti, not information. */
@@ -526,8 +516,15 @@ function StatCard({ label, value, hint, color }) {
   );
 }
 
-export default function Forecasting({ categories, settings, transactions, incomes = [], incomeEvents = [], transfers = [], subscriptions = [], account = null, netWorth = null, accountCount = 1 }) {
-  const [tab, setTab] = useState('outlook');
+/**
+ * The forward-looking sections of Insights: what's coming, how the budget is
+ * set up, and what already happened.
+ *
+ * `tab` is a prop rather than state because the tab bar now lives one level up
+ * in `Insights`, where the retrospective sits alongside these three. Splitting
+ * the bar from the panels is what stops the page needing two rows of tabs.
+ */
+export default function Forecasting({ tab = 'outlook', categories, settings, transactions, incomes = [], incomeEvents = [], transfers = [], subscriptions = [], account = null, netWorth = null, accountCount = 1 }) {
   const [horizonDays, setHorizonDays] = useState(DEFAULT_HORIZON_DAYS);
 
   const prediction = useMemo(() => buildSpendPrediction({
@@ -613,29 +610,6 @@ export default function Forecasting({ categories, settings, transactions, income
 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-
-      <div role="tablist" aria-label="Forecasting sections"
-        style={{ display: 'flex', gap: 6, padding: 5, borderRadius: 14, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
-        {TABS.map(({ id, label, icon: Icon }) => {
-          const on = tab === id;
-          return (
-            <button key={id} type="button" role="tab" aria-selected={on}
-              onClick={() => setTab(id)}
-              style={{
-                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-                padding: '9px 12px', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                border: '1px solid transparent',
-                background: on ? 'rgba(255,255,255,0.09)' : 'transparent',
-                borderColor: on ? 'rgba(255,255,255,0.14)' : 'transparent',
-                color: on ? 'var(--text-primary)' : 'var(--text-muted)',
-              }}>
-              <Icon size={15} aria-hidden="true" />
-              {label}
-            </button>
-          );
-        })}
-      </div>
-
       {tab === 'outlook' && (
         <>
           <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>

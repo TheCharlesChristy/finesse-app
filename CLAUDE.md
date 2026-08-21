@@ -44,20 +44,22 @@ src/
 ├── pwa.js                # Service worker registration and manual update
 ├── hooks/
 │   └── useFinesseData.js # Every useLiveQuery call, in one place. Called only by App.jsx
-├── views/                # One file per page/tab, lazy-loaded from App.jsx
+├── views/                # Lazy-loaded from App.jsx. Six are in NAV; the rest are
+│   │                     #   panels the consolidated three render as tabs.
 │   ├── Dashboard.jsx
-│   ├── CategoryDetail.jsx    # not in NAV — opened by tapping a category
 │   ├── Accounts.jsx
-│   ├── Transactions.jsx
-│   ├── PurchaseCheck.jsx     # "Can I Purchase It"
-│   ├── Calendar.jsx
-│   ├── Subscriptions.jsx
-│   ├── Forecasting.jsx
-│   ├── Review.jsx            # "Looking Back" — long-range retrospective
-│   ├── Goals.jsx             # savings pots and debts
-│   ├── Wishlist.jsx
-│   ├── Variables.jsx
-│   └── Settings.jsx
+│   ├── Activity.jsx          # NAV — tabs: Transactions | Calendar | Subscriptions
+│   │   ├── Transactions.jsx
+│   │   ├── Calendar.jsx
+│   │   └── Subscriptions.jsx
+│   ├── Insights.jsx          # NAV — tabs: Outlook | Budget | History | Looking Back
+│   │   ├── Forecasting.jsx   #   the first three; takes its section as a `tab` prop
+│   │   └── Review.jsx        #   "Looking Back" — long-range retrospective
+│   ├── GoalsWishlist.jsx     # NAV — tabs: Goals | Wishlist
+│   │   ├── Goals.jsx         #   savings pots and debts
+│   │   └── Wishlist.jsx
+│   ├── CategoryDetail.jsx    # not in NAV — opened by tapping a category
+│   └── Settings.jsx          # NAV
 ├── components/
 │   ├── QuickAdd.jsx      # Floating "log an expense" button (mobile)
 │   ├── CommandPalette.jsx # ⌘K: jump to a view, run an action, find a transaction
@@ -73,6 +75,7 @@ src/
 │   ├── CategorySelect.jsx, DateInput.jsx  # custom accessible form controls
 │   ├── LockScreen.jsx    # PIN / passphrase gate, rendered *instead of* the app
 │   ├── EncryptionSettings.jsx # Turning encryption on and off, and the recovery code
+│   ├── VariablesSettings.jsx  # Named values for allowance formulas — a Settings card
 │   ├── ReceiptField.jsx, ReceiptViewer.jsx, useBlobUrl.js
 │   ├── ui.jsx            # Modal shell (focus trap), IconButton, Field, CardTitle
 │   ├── useDialog.jsx     # Promise-based confirm / alert / prompt
@@ -276,6 +279,22 @@ amount, name, note, date, tag or photo. Settings says exactly this, generated
 from the live schema by `sealedFieldReport`, rather than implying encryption
 hides everything. Keep that honesty if you touch this.
 
+### The lock gate resolves before the first paint
+
+Whether a lock stands in front of the app is answered by `lock` in
+`useFinesseData` — its own unscoped query, resolved before anything renders and
+`undefined` until genuinely known. App draws a bare background until then.
+
+It cannot be derived from `settings`. That query is scoped to an account, so
+until `accounts` resolves it short-circuits to `null`, which is indistinguishable
+from "no PIN set" — the app painted a full dashboard, balance and all, and
+swapped the lock screen in a few frames later. **Anything that decides whether
+to render financial content must wait on `lockChecked`, never on `settings`.**
+
+The query is unscoped on purpose: a PIN covers the device, not one account, so a
+PIN set against any account locks the app, and the row carrying it comes back
+with the answer because that is the row the entered PIN is verified against.
+
 **A short PIN is not a key.** Ten thousand possibilities falls in seconds to
 someone holding a copy of the database, whatever the KDF costs; Argon2id buys
 orders of magnitude, not safety. `describeSecretStrength` says so in real units
@@ -327,15 +346,54 @@ Key CSS variables:
 --text-primary, --text-secondary, --text-muted
 ```
 
+### `.mobile-row-stack` turns a row into a column — and its children with it
+
+The class flips a flex row to `flex-direction: column` below 620px. That also
+reinterprets every child's `flex-basis`: what was a *width* in a row becomes a
+*height* in a column. A `<select>` written as `flex: 1 1 220px` rendered as a
+220px-tall box with 180px of nothing inside it, and three Settings cards were
+carrying the same bug.
+
+So the rule sets `flex: 0 0 auto` on every child, which is what a stacked row
+wants anyway — `align-items: stretch` already gives each child the full width,
+and the height should come from the content. **If you add a `.mobile-row-stack`,
+size its children for the row case and let the media query handle the column.**
+
 ---
 
-## Adding a new view
+## Navigation — six entries, and the aliases behind them
+
+`NAV` in `App.jsx` is six items. Three of them are consolidated pages that render
+their old siblings as tabs, and each keeps a `viewTabs[pageId]` entry in App
+saying which tab is showing.
+
+The old page ids did not go away, because they are the vocabulary the rest of
+the app navigates in — `buildNudges` returns `view: 'subscriptions'`, the goto
+keys are muscle memory, and a nudge should land on the tab that answers it.
+`VIEW_ALIASES` maps each old id onto a `[page, tab]` pair, and `navigate()`
+resolves through it. **Call `navigate(id)`, never `setView(id)`,** or an alias
+will land on the right page and the wrong tab.
+
+### Adding a new view
 
 1. Create `src/views/MyView.jsx` — accept data as props, emit mutations via callbacks
 2. Add an entry to the `NAV` array in `App.jsx`, and to the view list in
    `scripts/smoke.mjs` so it is actually exercised
 3. Add the query to `hooks/useFinesseData.js` if new data is needed, and pass it down from `App.jsx`
 4. Add a `{view === 'myview' && <MyView ... />}` render branch in `App.jsx`
+
+### Adding a tab to a consolidated page
+
+1. Add `{ id, label, Icon }` to that page's `TABS`, and a panel branch beside the others
+2. If the tab was previously reachable by another name, add a `VIEW_ALIASES` entry
+   so old navigation targets still land on it
+3. Add it to `TAB_TARGETS` so the command palette can still find it by its own name
+4. Add it to `PAGE_OF` and the tab sweep in `scripts/smoke.mjs`
+
+Tab bars come from `Tabs` in `components/ui.jsx` — never hand-rolled, so the
+four of them can't drift apart. Its styling is `.tab-bar` / `.tab-item` in
+`index.css`; icons are hidden below 620px, which is what lets four tabs fit an
+iPhone SE without the bar scrolling.
 
 ---
 
@@ -458,7 +516,7 @@ written, not what is merely ticked.
 
 ### Add a new chart to Forecasting
 
-Import from `recharts` and add to `Forecasting.jsx`. Put any new data-crunching logic in `utils.js` as a pure function, accepting `transactions` and/or `categories` and `settings` as arguments.
+Import from `recharts` and add to `Forecasting.jsx` — inside the `tab === 'outlook' | 'budget' | 'history'` branch it belongs to. Put any new data-crunching logic in `utils.js` as a pure function, accepting `transactions` and/or `categories` and `settings` as arguments.
 
 ### Inspect the database in browser
 

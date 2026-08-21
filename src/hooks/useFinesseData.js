@@ -28,6 +28,10 @@ import { buildNetWorthHistory } from '../utils';
  * jumped the gun would throw rather than return nothing. Until the vault is
  * either absent or unlocked, each query below short-circuits to the same empty
  * value it uses before an account is chosen.
+ *
+ * `lock` is the fifth, and exists for the same reason one step earlier: the
+ * screen lock has to be decided before the first paint, not after `settings`
+ * arrives. See its own comment below.
  */
 export function useFinesseData(selectedAccountId, unlocked = true) {
   // `undefined` while the read is in flight, which is what stops the app
@@ -35,6 +39,35 @@ export function useFinesseData(selectedAccountId, unlocked = true) {
   const vault = useLiveQuery(() => db.vault.toArray().then(rows => rows[0] || null), []);
   const encryptionEnabled = Boolean(vault);
   const ready = vault !== undefined && (!encryptionEnabled || unlocked);
+
+  /**
+   * Whether a lock stands between the launch and the app — answered here,
+   * before anything is rendered, and independently of `settings` below.
+   *
+   * It cannot be derived from that query: it is scoped to an account, so until
+   * `accounts` resolves it short-circuits to `null`, which reads exactly like
+   * "no PIN set". The app would paint a dashboard on the first frame and swap
+   * the lock screen in once settings arrived — which is the one thing a lock
+   * must never do. Staying `undefined` until the answer is known is what lets
+   * App hold the whole tree back instead.
+   *
+   * A vault answers on its own, and is checked first: sealed rows can't be read
+   * without the key, so the settings table is only consulted when there is no
+   * vault — the only case in which it is readable anyway.
+   *
+   * Unscoped deliberately, and a fifth exception to the account-scoping rule: a
+   * PIN covers the device, not one account, so a PIN set against any account
+   * locks the app. The row that carries it comes back with the answer, because
+   * that is the row the entered PIN has to be verified against — the active
+   * account is not necessarily the one it was set on.
+   */
+  const lock = useLiveQuery(async () => {
+    if (vault === undefined) return undefined;
+    if (vault) return { required: true, pinSettings: null };
+    const rows = await db.settings.toArray();
+    const withPin = rows.find(row => row.pinHash && row.pinSalt) || null;
+    return { required: Boolean(withPin), pinSettings: withPin };
+  }, [vault]);
 
   // Left unscoped deliberately — this one drives the account switcher itself.
   // Stays `undefined` until the first read resolves, which is how App.jsx tells
@@ -100,7 +133,8 @@ export function useFinesseData(selectedAccountId, unlocked = true) {
 
   return {
     vault: vault || null,
-    vaultChecked: vault !== undefined,
+    lock: lock || null,
+    lockChecked: lock !== undefined,
     encryptionEnabled,
     ready,
     netWorth: netWorth || null,

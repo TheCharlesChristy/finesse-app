@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
-import { CalendarClock, CalendarDays, CalendarRange, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, SlidersHorizontal, ShoppingCart, Wallet } from 'lucide-react';
+import { CalendarClock, CalendarDays, CalendarRange, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, Wallet } from 'lucide-react';
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
   getSettings, saveSettings, addCategory, updateCategory, deleteCategory,
@@ -22,19 +22,13 @@ import { useFinesseData } from './hooks/useFinesseData';
 import { describeStagedConfig, isBudgetConfigUndoExpired } from './budgetConfig';
 import { buildNudges, calcNextReset, evaluateFormula, filterDismissedNudges, fmt, getGoalCommitment, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
 
-const Dashboard     = lazy(() => import('./views/Dashboard'));
-const Transactions  = lazy(() => import('./views/Transactions'));
-const Forecasting   = lazy(() => import('./views/Forecasting'));
-const Wishlist      = lazy(() => import('./views/Wishlist'));
-const PurchaseCheck = lazy(() => import('./views/PurchaseCheck'));
-const Accounts      = lazy(() => import('./views/Accounts'));
-const Calendar      = lazy(() => import('./views/Calendar'));
-const Subscriptions = lazy(() => import('./views/Subscriptions'));
-const SettingsView  = lazy(() => import('./views/Settings'));
-const Variables     = lazy(() => import('./views/Variables'));
+const Dashboard      = lazy(() => import('./views/Dashboard'));
+const Accounts       = lazy(() => import('./views/Accounts'));
+const Activity       = lazy(() => import('./views/Activity'));
+const Insights       = lazy(() => import('./views/Insights'));
+const GoalsWishlist  = lazy(() => import('./views/GoalsWishlist'));
+const SettingsView   = lazy(() => import('./views/Settings'));
 const CategoryDetail = lazy(() => import('./views/CategoryDetail'));
-const Goals         = lazy(() => import('./views/Goals'));
-const Review        = lazy(() => import('./views/Review'));
 import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportModeModal,
   AddOneOffIncomeModal, AddSubscriptionModal, BulkAddExpensesModal,
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
@@ -52,19 +46,70 @@ import { shareCsv, shareJson, SHARE_CANCELLED, SHARE_SHARED } from './share';
 import { DEFAULT_LOCK_DELAY_MS, shouldRelock } from './lock';
 import LockScreen from './components/LockScreen';
 
-// "g then <key>" navigation targets.
+const NAV = [
+  { id: 'dashboard', label: 'Dashboard',        Icon: LayoutDashboard },
+  { id: 'accounts',  label: 'Accounts',         Icon: Wallet },
+  { id: 'activity',  label: 'Activity',         Icon: ListOrdered },
+  { id: 'insights',  label: 'Insights',         Icon: TrendingUp },
+  { id: 'goals',     label: 'Goals & Wishlist', Icon: PiggyBank },
+  { id: 'settings',  label: 'Settings',         Icon: SettingsIcon },
+];
+
+/**
+ * The pages that became tabs, and where they went.
+ *
+ * Six nav entries replaced twelve, but the old ids are still the vocabulary the
+ * rest of the app navigates in: `buildNudges` returns `view: 'subscriptions'`,
+ * the goto keys are muscle memory, and a nudge should land on the tab that
+ * answers it rather than the first tab of the page it happens to live on. So
+ * `navigate` resolves through here instead of every caller being rewritten.
+ */
+const VIEW_ALIASES = {
+  transactions:  ['activity', 'transactions'],
+  calendar:      ['activity', 'calendar'],
+  subscriptions: ['activity', 'subscriptions'],
+  forecasting:   ['insights', 'outlook'],
+  review:        ['insights', 'review'],
+  wishlist:      ['goals',    'wishlist'],
+  variables:     ['settings', null],
+};
+
+/** Which tab a consolidated page opens on when nothing has asked for one. */
+const DEFAULT_TABS = {
+  activity: 'transactions',
+  insights: 'outlook',
+  goals:    'goals',
+};
+
+/**
+ * The tabs, as command-palette destinations.
+ *
+ * Folding six pages into three shouldn't cost the ability to type
+ * "subscriptions" and land on them — the palette searches labels, and these are
+ * the labels people know the app by.
+ */
+const TAB_TARGETS = [
+  { id: 'transactions',  label: 'Transactions',  Icon: ListOrdered },
+  { id: 'calendar',      label: 'Calendar',      Icon: CalendarDays },
+  { id: 'subscriptions', label: 'Subscriptions', Icon: CreditCard },
+  { id: 'forecasting',   label: 'Forecasting',   Icon: TrendingUp },
+  { id: 'review',        label: 'Looking Back',  Icon: CalendarRange },
+  { id: 'wishlist',      label: 'Wishlist',      Icon: ShoppingBag },
+];
+
+// "g then <key>" navigation targets. Written in the old vocabulary on purpose —
+// VIEW_ALIASES turns "g then s" into the Subscriptions tab of Activity, which is
+// what it always meant.
 const GOTO_KEYS = {
   d: 'dashboard',
   a: 'accounts',
   t: 'transactions',
-  p: 'purchase',
   c: 'calendar',
   s: 'subscriptions',
   f: 'forecasting',
   r: 'review',
   g: 'goals',
   w: 'wishlist',
-  v: 'variables',
   x: 'settings',
 };
 
@@ -74,29 +119,17 @@ const SHORTCUTS = [
   ['⌘K / Ctrl K', 'Command palette'],
   ['/', 'Search transactions'],
   ['G then D', 'Dashboard'],
+  ['G then A', 'Accounts'],
   ['G then T', 'Transactions'],
   ['G then C', 'Calendar'],
+  ['G then S', 'Subscriptions'],
   ['G then F', 'Forecasting'],
-  ['G then G', 'Goals'],
   ['G then R', 'Looking Back'],
+  ['G then G', 'Goals'],
+  ['G then W', 'Wishlist'],
   ['G then X', 'Settings'],
   ['Esc', 'Close a dialog'],
   ['?', 'This list'],
-];
-
-const NAV = [
-  { id: 'dashboard',   label: 'Dashboard',   Icon: LayoutDashboard },
-  { id: 'accounts',    label: 'Accounts',    Icon: Wallet },
-  { id: 'transactions',label: 'Transactions', Icon: ListOrdered },
-  { id: 'purchase',    label: 'Can I Purchase It', Icon: ShoppingCart },
-  { id: 'calendar',    label: 'Calendar',     Icon: CalendarDays },
-  { id: 'subscriptions', label: 'Subscriptions', Icon: CreditCard },
-  { id: 'forecasting', label: 'Forecasting',  Icon: TrendingUp },
-  { id: 'review',      label: 'Looking Back',  Icon: CalendarRange },
-  { id: 'goals',       label: 'Goals',         Icon: PiggyBank },
-  { id: 'wishlist',    label: 'Wishlist',      Icon: ShoppingBag },
-  { id: 'variables',   label: 'Variables',     Icon: SlidersHorizontal },
-  { id: 'settings',    label: 'Settings',     Icon: SettingsIcon },
 ];
 
 /** The `?action=` a home-screen shortcut launched us with, if any. */
@@ -158,9 +191,10 @@ export default function App() {
   // Boot-time URL handling happens in the state initialisers rather than in an
   // effect: the URL is already known on the first render, so reading it there
   // avoids a second render pass and the cascading-render lint rule that flags it.
-  const [view, setView] = useState(() => (
-    readLaunchAction() === 'purchase-check' ? 'purchase' : 'dashboard'
-  ));
+  const [view, setView] = useState('dashboard');
+  // Which tab each consolidated page is showing. One object rather than a state
+  // per page, so `navigate` can set any of them without knowing which it is.
+  const [viewTabs, setViewTabs] = useState(DEFAULT_TABS);
   const [pendingImport, setPendingImport] = useState(readSharedSnapshot);
   const [budgetConfigContext, setBudgetConfigContext] = useState(null);
   const [modal, setModal] = useState(() => {
@@ -197,7 +231,7 @@ export default function App() {
   const hiddenSince = useRef(null);
 
   const {
-    vault, vaultChecked, encryptionEnabled,
+    vault, lock, lockChecked, encryptionEnabled,
     accountsQuery, activeAccountId, accounts, accountTransfers, settings, categories, transactions,
     wishlistItems, wishlistCategories, incomeEvents, subscriptions, incomes, variables,
     rules, templates, goals, netWorth,
@@ -235,17 +269,16 @@ export default function App() {
   }, []);
 
   // ── Privacy ──────────────────────────────────────────────────────────────
-  // `settings` is undefined until the query resolves, which is what tells a
-  // brand-new install ("no settings row", null) apart from "we don't know yet".
-  // Nothing financial renders in the meantime, or a PIN-protected app would
-  // flash its balances for a frame on every launch.
-  const settingsLoaded = settings !== undefined;
+  // Nothing financial may render before the lock has had its say, or a
+  // PIN-protected app flashes its balances for a frame on every launch. That
+  // answer comes from `lock`, which is resolved on its own in useFinesseData
+  // and stays unknown until it is genuinely known — `settings` cannot be asked,
+  // because it reads as "no PIN" for the first few frames of every launch.
+  //
   // Two gates that look the same and aren't. A PIN is a screen the app draws
   // over itself; a vault is the only thing that can read the database at all.
-  // `pinSet` is read from settings, which on an encrypted device can't be read
-  // until the vault is open — so the vault is checked first and independently.
-  const pinSet = Boolean(settings?.pinHash && settings?.pinSalt);
-  const lockRequired = encryptionEnabled || pinSet;
+  const lockRequired = Boolean(lock?.required);
+  const settingsLoaded = accountsQuery !== undefined && settings !== undefined;
   const privacyScreenOn = settings?.privacyScreenEnabled !== false;
 
   useEffect(() => {
@@ -788,11 +821,6 @@ export default function App() {
     setModal('editWishList');
   }, []);
 
-  const handleLogPurchase = useCallback((draft) => {
-    setTransactionDefaults(draft);
-    setModal('addTx');
-  }, []);
-
   const handleAddAccount = useCallback((account) => addAccount(account), []);
   const handleUpdateAccount = useCallback((id, data) => updateAccount(id, data), []);
   const handleDeleteAccount = useCallback(async (account) => {
@@ -868,7 +896,19 @@ export default function App() {
   const handleUpdateVariable = useCallback((id, d) => updateVariable(id, d), []);
   const handleDeleteVariable = useCallback(id   => deleteVariable(id), []);
 
-  const navigate = useCallback((id) => { setView(id); setSidebarOpen(false); }, []);
+  // Takes either a nav id or one of the old page ids, and lands on the right
+  // tab of the right page for both.
+  const navigate = useCallback((id, tab) => {
+    const [target, aliasTab] = VIEW_ALIASES[id] || [id, null];
+    const nextTab = tab || aliasTab;
+    setView(target);
+    if (nextTab) setViewTabs(current => ({ ...current, [target]: nextTab }));
+    setSidebarOpen(false);
+  }, []);
+
+  const selectTab = useCallback((viewId, tab) => (
+    setViewTabs(current => ({ ...current, [viewId]: tab }))
+  ), []);
 
   // ── Fast capture handlers ────────────────────────────────────────────────
   const handleAddSplit = useCallback((data) => (
@@ -1086,7 +1126,7 @@ export default function App() {
     { id: 'add-goal', label: 'Add a savings goal', keywords: 'save sinking fund debt', run: () => setModal('addGoal') },
     { id: 'add-subscription', label: 'Add a subscription', keywords: 'recurring bill netflix', run: () => setModal('addSubscription') },
     { id: 'adjust-budget', label: 'Adjust a budget', keywords: 'top up borrow move money', run: () => handleOpenAdjust(null) },
-    ...NAV.map(item => ({
+    ...[...NAV, ...TAB_TARGETS].map(item => ({
       id: `go-${item.id}`,
       label: `Go to ${item.label}`,
       keywords: `view navigate ${item.label}`,
@@ -1109,7 +1149,12 @@ export default function App() {
   // nothing can be read until the key is unwrapped, so `settings` stays
   // undefined until the user is through this screen — waiting for it first
   // would spin for ever on the one device that most needs to show a prompt.
-  if (!vaultChecked) {
+  //
+  // And the bare background comes before both. Until `lock` has resolved the
+  // app does not yet know whether it is allowed to draw anything, so it draws
+  // nothing: a spinner here would be honest, but the frame after it is the one
+  // that used to leak the dashboard.
+  if (!lockChecked) {
     return (
       <div style={{ minHeight: '100vh', position: 'relative' }}>
         <div className="bg-mesh" />
@@ -1120,7 +1165,7 @@ export default function App() {
   if (lockRequired && !unlocked) {
     return (
       <LockScreen
-        settings={settings}
+        settings={lock.pinSettings}
         vault={vault}
         onUnlock={() => setUnlocked(true)}
       />
@@ -1303,13 +1348,28 @@ export default function App() {
             />
           )}
           {view === 'goals' && (
-            <Goals
+            <GoalsWishlist
+              tab={viewTabs.goals}
+              onTabChange={(tab) => selectTab('goals', tab)}
               goals={goals}
               incomes={incomes}
               onAddGoal={() => setModal('addGoal')}
               onEditGoal={handleEditGoal}
               onDeleteGoal={handleDeleteGoal}
               onContribute={handleContributeToGoal}
+              wishlistItems={wishlistItems}
+              wishlistCategories={wishlistCategories}
+              categories={categories}
+              settings={settings}
+              onAddItem={() => { setWishlistDefaultCatId(null); setModal('addWish'); }}
+              onEditItem={handleEditWishlistItem}
+              onDeleteItem={handleDeleteWishlistItem}
+              onAddWishlistCat={(data) => addWishlistCategory(data, activeAccountId)}
+              onEditWishlistCat={handleEditWishlistList}
+              onDeleteWishlistCat={deleteWishlistCategory}
+              onAddItemToFolder={(catId) => { setWishlistDefaultCatId(catId); setModal('addWish'); }}
+              onSaveForItem={(item) => { setSavingForItem(item); setModal('saveForItem'); }}
+              showConfirm={showConfirm}
             />
           )}
           {view === 'accounts' && (
@@ -1327,70 +1387,41 @@ export default function App() {
               onDeleteIncomeEvent={handleDeleteIncomeEvent}
             />
           )}
-          {view === 'transactions' && (
-            <Transactions transactions={transactions} categories={categories}
-              onDelete={handleDeleteTransaction} onEdit={handleEditTransaction} onAdd={() => setModal('addTx')}
-              onRepeat={handleRepeatTransaction}
+          {view === 'activity' && (
+            <Activity
+              tab={viewTabs.activity}
+              onTabChange={(tab) => selectTab('activity', tab)}
+              categories={categories}
+              transactions={transactions}
+              subscriptions={subscriptions}
+              incomes={incomes}
+              onDeleteTransaction={handleDeleteTransaction}
+              onEditTransaction={handleEditTransaction}
+              onAddTransaction={() => setModal('addTx')}
+              onRepeatTransaction={handleRepeatTransaction}
               onBulkAdd={() => setModal('bulkAddTx')}
               onImportStatement={() => setModal('importStatement')}
-              onAddSubscription={() => setModal('addSubscription')} />
-          )}
-          {view === 'forecasting' && (
-            <Forecasting categories={categories} settings={settings} transactions={transactions} incomes={incomes}
-              incomeEvents={incomeEvents} transfers={accountTransfers} subscriptions={subscriptions}
-              account={activeAccount} netWorth={netWorth} accountCount={accounts.length} />
-          )}
-          {view === 'review' && (
-            <Review categories={categories} transactions={transactions}
-              incomeEvents={incomeEvents} subscriptions={subscriptions} />
-          )}
-          {view === 'purchase' && (
-            <PurchaseCheck categories={categories} onLogPurchase={handleLogPurchase} />
-          )}
-          {view === 'calendar' && (
-            <Calendar
-              categories={categories}
-              incomes={incomes}
-              subscriptions={subscriptions}
-              transactions={transactions}
               onAddSubscription={() => setModal('addSubscription')}
               onEditSubscription={handleEditSubscription}
               onDeleteSubscription={handleDeleteSubscription}
               onToggleSubscription={handleToggleSubscription}
               onAddExpenseOn={handleAddExpenseOnDate}
-              onEditTransaction={handleEditTransaction}
             />
           )}
-          {view === 'subscriptions' && (
-            <Subscriptions
+          {view === 'insights' && (
+            <Insights
+              tab={viewTabs.insights}
+              onTabChange={(tab) => selectTab('insights', tab)}
               categories={categories}
+              settings={settings}
+              transactions={transactions}
+              incomes={incomes}
+              incomeEvents={incomeEvents}
+              transfers={accountTransfers}
               subscriptions={subscriptions}
-              onAddSubscription={() => setModal('addSubscription')}
-              onEditSubscription={handleEditSubscription}
-              onDeleteSubscription={handleDeleteSubscription}
-              onToggleSubscription={handleToggleSubscription}
-            />
-          )}
-          {view === 'wishlist' && (
-            <Wishlist items={wishlistItems} wishlistCategories={wishlistCategories}
-              expenseCategories={categories} settings={settings} incomes={incomes}
-              onAddItem={() => { setWishlistDefaultCatId(null); setModal('addWish'); }}
-              onEditItem={handleEditWishlistItem}
-              onDeleteItem={handleDeleteWishlistItem}
-              onAddWishlistCat={(data) => addWishlistCategory(data, activeAccountId)}
-              onEditWishlistCat={handleEditWishlistList}
-              onDeleteWishlistCat={deleteWishlistCategory}
-              onAddItemToFolder={(catId) => { setWishlistDefaultCatId(catId); setModal('addWish'); }}
-              goals={goals}
-              onSaveForItem={(item) => { setSavingForItem(item); setModal('saveForItem'); }}
-              showConfirm={showConfirm} />
-          )}
-          {view === 'variables' && (
-            <Variables
-              variables={variables}
-              onAddVariable={handleAddVariable}
-              onUpdateVariable={handleUpdateVariable}
-              onDeleteVariable={handleDeleteVariable}
+              account={activeAccount}
+              netWorth={netWorth}
+              accountCount={accounts.length}
             />
           )}
           {view === 'settings' && (
@@ -1400,6 +1431,8 @@ export default function App() {
               categories={categories} settings={settings} onSaveSettings={handleSaveSettings}
               incomes={incomes} onResetIncome={(incomeId) => resetCategoriesForIncome(incomeId, undefined, activeAccountId)}
               onFullReset={handleFullReset}
+              variables={variables} onAddVariable={handleAddVariable}
+              onUpdateVariable={handleUpdateVariable} onDeleteVariable={handleDeleteVariable}
               rules={rules} onAddRule={handleAddRule} onUpdateRule={handleUpdateRule} onDeleteRule={handleDeleteRule}
               templates={templates} onAddTemplate={handleAddTemplate} onDeleteTemplate={handleDeleteTemplate}
               nudgeCount={nudges.length}
@@ -1414,6 +1447,7 @@ export default function App() {
               onCancelStagedBudgetConfig={handleCancelStagedBudgetConfig}
               onUndoBudgetConfig={handleUndoBudgetConfig}
               onVaultUnlocked={() => setUnlocked(true)}
+              onPinSet={() => setUnlocked(true)}
               encryptionEnabled={encryptionEnabled}
               showConfirm={showConfirm} showAlert={showAlert} showPrompt={showPrompt} />
           )}
