@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } fro
 import { CalendarClock, CalendarDays, CalendarRange, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, Wallet } from 'lucide-react';
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
-  getSettings, saveSettings, addCategory, updateCategory, deleteCategory,
+  getSettings, patchSettings, addCategory, updateCategory, deleteCategory,
   addTransaction, addTransactionsBulk, updateTransaction, deleteTransaction, restoreCategory,
   addWishlistItem, updateWishlistItem, deleteWishlistItem,
   addWishlistCategory, updateWishlistCategory, deleteWishlistCategory, exportData, importData,
@@ -16,7 +16,7 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   addTemplate, deleteTemplate, logTemplate,
   addGoal, updateGoal, deleteGoal, contributeToGoal, autoContributeGoals,
   recalculateSpendCounters,
-  stageBudgetConfig, cancelStagedBudgetConfig, applyStagedBudgetConfig,
+  stageBudgetConfig, cancelStagedBudgetConfig, applyStagedBudgetConfig, reconcileStagedBudgetConfig,
   undoBudgetConfigApply, getBudgetConfigContext, initEncryption, lockDatabase } from './db';
 import { useFinesseData } from './hooks/useFinesseData';
 import { describeStagedConfig, isBudgetConfigUndoExpired } from './budgetConfig';
@@ -379,62 +379,129 @@ export default function App() {
       });
   }, [activeAccountId, subscriptions, showToast]);
 
-  // Income auto-reset: funded categories reset when their associated income resets.
+  // Everything that acts on a reset runs through one queue, in the order it was
+  // queued. Two of them touch the staged budget config — the reconcile below
+  // clears one already applied, the reset applies one that is due — and running
+  // those concurrently would let a reset apply the very config the reconcile is
+  // about to establish was already applied.
+  const incomeResetQueue = useRef(Promise.resolve());
+  const enqueueResetWork = useCallback((run) => {
+    incomeResetQueue.current = incomeResetQueue.current
+      .catch(() => {})
+      .then(run)
+      .catch(error => console.error('Reset work failed', error));
+    return incomeResetQueue.current;
+  }, []);
+
+  // A config that was applied but left sitting in the staged slot would apply a
+  // second time at the next reset and duplicate every category it creates. The
+  // write that stranded it there is fixed; this clears the ones already
+  // stranded. Queued first, so a reset landing on this same load finds the
+  // slot already empty rather than applying the ghost.
   useEffect(() => {
-    if (!incomes.length) return;
-    (async () => {
-      const now = new Date();
-      let latestReset = null;
+    if (!activeAccountId) return;
+    enqueueResetWork(async () => {
+      const result = await reconcileStagedBudgetConfig(activeAccountId);
+      if (!result.cleared) return;
+      console.warn('Cleared a staged budget config that had already been applied', result);
+      showToast('Removed a duplicate copy of your new budget', {
+        detail: 'It had already been applied — it would have applied again at your next reset.',
+        severity: 'warn',
+      });
+    });
+  }, [activeAccountId, enqueueResetWork, showToast]);
 
-      for (const income of incomes) {
-        const due = getLatestDueIncomeReset(income, now);
-        if (!due) continue;
+  /**
+   * Land a staged budget config at a reset, and say what happened.
+   *
+   * Shared by both paths that reset an income — the scheduled one below and
+   * the fast-forward handler — because a config that lands on one but not the
+   * other is a config that silently never lands at all: fast-forward writes
+   * `lastPaid`, so the scheduled path then sees nothing due for that cycle.
+   */
+  const applyStagedConfigAtReset = useCallback(async (incomeId, due) => {
+    const configResult = await applyStagedBudgetConfig(activeAccountId, { incomeId, resetAt: due });
 
-        const resetAt = due.toISOString();
-        await recordIncomeReceived({
-          accountId: activeAccountId,
-          incomeId: income.id,
-          name: income.name,
-          amount: income.amount,
-          date: resetAt,
-          type: 'recurring',
-        });
-        await resetCategoriesForIncome(income.id, resetAt, activeAccountId);
+    if (configResult.applied) {
+      const count = configResult.plan.categories.length;
+      showToast(`New budget applied to ${count} categor${count === 1 ? 'y' : 'ies'}`, {
+        detail: 'It can be undone from Settings for the next cycle.',
+      });
+    } else if (configResult.reason === 'validation-failed' || configResult.reason === 'backup-failed') {
+      // Nothing was written. The nudge built from the recorded failure is
+      // the durable channel — this toast only catches the user who is
+      // looking at the app when it happens.
+      console.error('Budget config could not be applied', configResult);
+      showToast('Your new budget could not be applied', {
+        detail: 'Nothing changed. See Settings for what went wrong.',
+      });
+    }
+    return configResult;
+  }, [activeAccountId, showToast]);
 
-        // A staged budget config lands here and nowhere else: after the old
-        // cycle's rollover has settled against the *old* allowances, and before
-        // goals draw from the new ones. Applying it any earlier would rewrite
-        // the budget the closing cycle was measured against.
-        const configResult = await applyStagedBudgetConfig(activeAccountId, {
-          incomeId: income.id, resetAt: due,
-        });
-        if (configResult.applied) {
-          const count = configResult.plan.categories.length;
-          showToast(`New budget applied to ${count} categor${count === 1 ? 'y' : 'ies'}`, {
-            detail: 'It can be undone from Settings for the next cycle.',
-          });
-        } else if (configResult.reason === 'validation-failed' || configResult.reason === 'backup-failed') {
-          // Nothing was written. The nudge built from the recorded failure is
-          // the durable channel — this toast only catches the user who is
-          // looking at the app when it happens.
-          console.error('Budget config could not be applied', configResult);
-          showToast('Your new budget could not be applied', {
-            detail: 'Nothing changed. See Settings for what went wrong.',
-          });
-        }
+  /**
+   * Run every income reset that has fallen due.
+   *
+   * Incomes are re-read here rather than taken from the `incomes` prop, and
+   * that is the whole point of the function existing separately from the effect
+   * below. Runs are queued rather than allowed to overlap, so a queued run
+   * starts after the one before it has written `lastPaid` — and only a fresh
+   * read shows it that. Handed the render's array instead, it would see the
+   * same incomes still due and reset them a second time.
+   */
+  const runDueIncomeResets = useCallback(async (accountId) => {
+    if (!accountId) return;
+    const dueIncomes = await db.incomes.where('accountId').equals(Number(accountId)).toArray();
+    const now = new Date();
+    let latestReset = null;
 
-        // After the reset, so a cycle's savings come out of the fresh budget.
-        await autoContributeGoals(income.id, activeAccountId, resetAt);
-        await updateIncome(income.id, { lastPaid: resetAt, holdActive: false });
-        if (!latestReset || due > latestReset) latestReset = due;
-      }
+    for (const income of dueIncomes) {
+      const due = getLatestDueIncomeReset(income, now);
+      if (!due) continue;
 
-      if (latestReset) {
-        const current = await getSettings(activeAccountId);
-        if (current) await saveSettings({ ...current, lastReset: latestReset.toISOString() }, activeAccountId);
-      }
-    })();
-  }, [incomes, activeAccountId, showToast]);
+      const resetAt = due.toISOString();
+      await recordIncomeReceived({
+        accountId,
+        incomeId: income.id,
+        name: income.name,
+        amount: income.amount,
+        date: resetAt,
+        type: 'recurring',
+      });
+      await resetCategoriesForIncome(income.id, resetAt, accountId);
+
+      // A staged budget config lands here and nowhere else: after the old
+      // cycle's rollover has settled against the *old* allowances, and before
+      // goals draw from the new ones. Applying it any earlier would rewrite
+      // the budget the closing cycle was measured against.
+      await applyStagedConfigAtReset(income.id, due);
+
+      // After the reset, so a cycle's savings come out of the fresh budget.
+      await autoContributeGoals(income.id, accountId, resetAt);
+      await updateIncome(income.id, { lastPaid: resetAt, holdActive: false });
+      if (!latestReset || due > latestReset) latestReset = due;
+    }
+
+    // Patched, not written whole. A read-modify-write of the settings row
+    // here would carry a copy of `stagedBudgetConfig` taken before the apply
+    // above cleared it, putting the config back — live budget and queued
+    // config at the same time, applying again at the next reset.
+    if (latestReset) {
+      await patchSettings(accountId, { lastReset: latestReset.toISOString() });
+    }
+  }, [applyStagedConfigAtReset]);
+
+  // Income auto-reset: funded categories reset when their associated income resets.
+  //
+  // Queued rather than fired straight off, because this effect re-runs on every
+  // write to the incomes table — including its own `updateIncome` calls, which
+  // land mid-loop when more than one income is due. Overlapping runs used to
+  // reach the same reset twice from two directions at once; the run above is
+  // written to be safely repeatable, and this keeps the repeats in single file.
+  useEffect(() => {
+    if (!activeAccountId || !incomes.length) return;
+    enqueueResetWork(() => runDueIncomeResets(activeAccountId));
+  }, [incomes, activeAccountId, enqueueResetWork, runDueIncomeResets]);
 
   // Formula recomputation: runs whenever variables or categories change
   useEffect(() => {
@@ -478,8 +545,7 @@ export default function App() {
     if (result === SHARE_CANCELLED) return result;
 
     // Remember it, so "no backup for N days" can be honest about N.
-    const current = await getSettings(activeAccountId);
-    await saveSettings({ ...(current || {}), lastBackupAt: new Date().toISOString() }, activeAccountId);
+    await patchSettings(activeAccountId, { lastBackupAt: new Date().toISOString() });
     // Receipt photos can't travel in a JSON backup. Saying so is the whole
     // point — a backup you believe is complete is worse than one you know isn't.
     const omitted = data.receiptsOmitted || 0;
@@ -671,7 +737,12 @@ export default function App() {
     }
   }, [pendingImport, showAlert]);
 
-  const handleSaveSettings = useCallback((data) => saveSettings(data, activeAccountId), [activeAccountId]);
+  // Settings sends the fields it changed, not a copy of the row. The row also
+  // holds machine-managed state the reset path rewrites on its own schedule —
+  // `stagedBudgetConfig`, `lastReset` — and a toggle that wrote back a React
+  // snapshot of all of it would undo whatever landed since that render.
+  const handleSaveSettings = useCallback(
+    (changes) => patchSettings(activeAccountId, changes), [activeAccountId]);
 
   const handleFullReset = useCallback(async () => {
     await clearAllData();
@@ -688,7 +759,10 @@ export default function App() {
     await updateIncome(id, { holdActive: !income.holdActive });
   }, []);
 
-  const handleIncomeFastForward = useCallback(async (id, isoDate) => {
+  // On the reset queue like the scheduled path, not alongside it: writing
+  // `lastPaid` below re-fires the auto-reset effect mid-handler, and the two
+  // resetting the same income from either side is exactly what the queue is for.
+  const handleIncomeFastForward = useCallback((id, isoDate) => enqueueResetWork(async () => {
     const income = await db.incomes.get(id);
     if (!income) return;
     await recordIncomeReceived({
@@ -701,11 +775,22 @@ export default function App() {
     });
     await updateIncome(id, { lastPaid: isoDate, holdActive: false });
     await resetCategoriesForIncome(id, isoDate, activeAccountId);
+
+    // Getting paid early is still getting paid: this is that income's reset for
+    // the cycle, so a config staged against it lands here, in the same place in
+    // the order as the scheduled path. Without this the fast-forward marks the
+    // income paid, the scheduled path then finds nothing due, and the new budget
+    // sits staged through the whole cycle it was written for.
+    //
+    // A config carrying an `applyNotBefore` earlier than this date is refused by
+    // `isStagedConfigDue` and stays staged, which is the right answer — the user
+    // has fast-forwarded past the date its formulas were written against.
+    await applyStagedConfigAtReset(id, new Date(isoDate));
+
     await autoContributeGoals(id, activeAccountId, isoDate);
     // Keep settings.lastReset current so forecasting burn rates stay accurate
-    const current = await getSettings(activeAccountId);
-    if (current) await saveSettings({ ...current, lastReset: isoDate }, activeAccountId);
-  }, [activeAccountId]);
+    await patchSettings(activeAccountId, { lastReset: isoDate });
+  }), [activeAccountId, applyStagedConfigAtReset, enqueueResetWork]);
 
   const handleAddOneOffIncome = useCallback(async (data) => {
     await recordIncomeReceived({
@@ -1081,10 +1166,9 @@ export default function App() {
 
   const handleDismissNudge = useCallback(async (nudge) => {
     const current = await getSettings(activeAccountId);
-    await saveSettings({
-      ...(current || {}),
+    await patchSettings(activeAccountId, {
       dismissedNudges: { ...(current?.dismissedNudges || {}), [nudge.id]: new Date().toISOString() },
-    }, activeAccountId);
+    });
   }, [activeAccountId]);
 
   const handleNudgeNavigate = useCallback((nudge) => {
@@ -1105,8 +1189,7 @@ export default function App() {
       // Only written when something was actually sent, so this doesn't churn
       // the settings row on every visibility change.
       if (!result) return;
-      const current = await getSettings(activeAccountId);
-      await saveSettings({ ...(current || {}), notifiedNudges: result.notifiedIds }, activeAccountId);
+      await patchSettings(activeAccountId, { notifiedNudges: result.notifiedIds });
     };
 
     deliver();

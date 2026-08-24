@@ -431,6 +431,41 @@ export async function saveSettings(data, accountId = null) {
   }
 }
 
+/**
+ * Change some settings fields and leave the rest alone.
+ *
+ * The settings row is one object holding unrelated things with very different
+ * lifetimes: a theme the user flips by hand, and machine-managed state like
+ * `stagedBudgetConfig` and `lastReset` that the reset path rewrites on its own
+ * schedule. `saveSettings` takes a whole row, so patching one field through it
+ * means reading the row, spreading it, and writing every other field back too —
+ * and if that read came from a React snapshot, or merely happened before a
+ * concurrent write, the stale copy silently undoes it.
+ *
+ * That is not hypothetical: it is how an applied budget config came back from
+ * the dead. Apply cleared `stagedBudgetConfig`; a settings write built from a
+ * snapshot taken beforehand put it straight back, so the account held a live
+ * budget *and* a config still queued to apply again at the next reset.
+ *
+ * `changes` is merged into the stored row by Dexie, inside IndexedDB, so
+ * nothing the caller didn't name can be clobbered by a value it never read.
+ * Use this for every write that changes part of the row. `saveSettings` above
+ * is the replace-the-whole-row primitive, and is right only when the caller
+ * really does hold the entire current row.
+ */
+export async function patchSettings(accountId, changes = {}) {
+  const id = accountId != null ? Number(accountId) : await getDefaultAccountId();
+  if (id == null) return null;
+  const existing = await db.settings.where('accountId').equals(Number(id)).toArray();
+  // Only the row's *id* is taken from this read. The merge itself happens
+  // inside `update`, against whatever the row holds at that moment.
+  if (existing.length > 0) {
+    await db.settings.update(existing[0].id, changes);
+    return existing[0].id;
+  }
+  return db.settings.add(withAccountId({ ...changes }, id));
+}
+
 // ── Category helpers ─────────────────────────────────────────────────────────
 export async function getCategories(accountId = null) {
   if (accountId == null) return db.categories.toArray();
@@ -1485,7 +1520,9 @@ export async function stageBudgetConfig(accountId, { config, plan, fileName = nu
     consumedAt: null,
   };
 
-  await saveSettings({ ...(settings || {}), stagedBudgetConfig: staged }, id);
+  // Patched rather than written whole: `settings` was read a few statements
+  // ago and the reset path may have moved on since.
+  await patchSettings(id, { stagedBudgetConfig: staged });
   return { staged, replaced };
 }
 
@@ -1496,8 +1533,55 @@ export async function cancelStagedBudgetConfig(accountId) {
   const settings = await getSettings(id);
   if (!settings?.stagedBudgetConfig) return null;
   const cancelled = settings.stagedBudgetConfig;
-  await saveSettings({ ...settings, stagedBudgetConfig: null }, id);
+  await patchSettings(id, { stagedBudgetConfig: null });
   return cancelled;
+}
+
+/**
+ * Clear a staged config that has already been applied.
+ *
+ * An account is never meant to hold a live budget and a queued config *for the
+ * same import* at once, but a settings write built from a stale copy of the row
+ * could put a cleared `stagedBudgetConfig` back after the apply had removed it.
+ * The account was then left showing "new budget applies on…" and "a budget
+ * config was applied on…" together — and, worse, the ghost would apply a second
+ * time at the next reset, running every `create` row again and leaving two
+ * categories of one name.
+ *
+ * The write path that caused it is gone (see `patchSettings`), but databases
+ * that already hold the state have to be brought back on their own. Run at
+ * startup, this is the only thing that clears it.
+ *
+ * Identifying the ghost has to be exact, because being wrong means cancelling a
+ * budget the user meant to keep. Two facts make it so: there is only ever one
+ * staged slot per account, and an apply consumes whatever is in it. So a staged
+ * record that predates the last apply can only be the record that apply
+ * consumed. `undo.stagedAt` says which one that was outright; for undo records
+ * written before that field existed, `undo.backup.exportedAt` is the backup
+ * taken moments before the write and dates the apply on the real clock —
+ * unlike `appliedAt`, which is the reset date and may be days earlier.
+ *
+ * A config staged *after* the last apply is a genuine new import and is left
+ * alone, which is why neither test can fall back to "both fields are set".
+ */
+export async function reconcileStagedBudgetConfig(accountId) {
+  const id = accountId != null ? Number(accountId) : await getDefaultAccountId();
+  if (id == null) return { cleared: false, reason: 'no-account' };
+
+  const settings = await getSettings(id);
+  const staged = settings?.stagedBudgetConfig;
+  const undo = settings?.budgetConfigUndo;
+  if (!staged || !undo) return { cleared: false, reason: 'nothing-to-reconcile' };
+
+  const isGhost = undo.stagedAt
+    ? undo.stagedAt === staged.stagedAt
+    : Boolean(staged.stagedAt && undo.backup?.exportedAt
+        && new Date(staged.stagedAt) <= new Date(undo.backup.exportedAt));
+
+  if (!isGhost) return { cleared: false, reason: 'staged-after-apply' };
+
+  await patchSettings(id, { stagedBudgetConfig: null });
+  return { cleared: true, staged, appliedAt: undo.appliedAt };
 }
 
 /** Everything the validator needs to judge a config against this account. */
@@ -1518,7 +1602,25 @@ export async function getBudgetConfigContext(accountId) {
 }
 
 /**
- * Apply a staged config, atomically or not at all.
+ * Applies in flight, per account.
+ *
+ * The reset path can fire more than once as live queries settle — the same
+ * reason `autoContributeGoals` is idempotent per pay date — so two applies for
+ * one reset are an ordinary occurrence, not an edge case. Chaining them here
+ * means the second one runs *after* the first and finds nothing staged, instead
+ * of racing it through a plan and a full backup it will not be allowed to use.
+ *
+ * This is the cheap half of the guard and covers one tab only. The half that
+ * actually guarantees correctness is the claim inside the write transaction
+ * below, which also holds across two tabs of the same installed PWA.
+ */
+const applyInFlight = new Map();
+
+/** Thrown to roll back an apply whose staged config was claimed by someone else. */
+const SUPERSEDED = Symbol('budget-config-superseded');
+
+/**
+ * Apply a staged config, atomically or not at all — and at most once.
  *
  * Formulas are re-evaluated here rather than trusted from staging time: income
  * may have changed in between, and the formulas — not the numbers in the file —
@@ -1528,11 +1630,41 @@ export async function getBudgetConfigContext(accountId) {
  *
  * The write runs inside one Dexie transaction, so a failure part-way rolls the
  * whole thing back. A partially applied budget is worse than a failed one.
+ *
+ * "At most once" needs saying separately, because the plan is built *outside*
+ * that transaction — it has to be, since re-validating reads tables the write
+ * doesn't own and the automatic backup reads all of them. Two callers arriving
+ * together therefore both saw a staged config, both planned against the same
+ * pre-apply categories, and both wrote: every `create` row ran twice, leaving
+ * two categories of the same name and two variables of the same name. From
+ * there `evaluateFormula` resolves `$Name` and `[Name]` by whichever row Dexie
+ * hands back first, and every allowance total counts the duplicates twice — a
+ * budget the app genuinely cannot read a single answer out of.
+ *
+ * So the transaction re-reads the settings row and *claims* the staged config
+ * before touching a category, aborting if the record it planned against is no
+ * longer the one on disk. An IndexedDB readwrite transaction holds its stores
+ * for its whole life, so the claim and the writes cannot be interleaved.
  */
-export async function applyStagedBudgetConfig(accountId, { incomeId = null, resetAt = new Date() } = {}) {
+export async function applyStagedBudgetConfig(accountId, options = {}) {
   const id = accountId != null ? Number(accountId) : await getDefaultAccountId();
   if (id == null) return { applied: false, reason: 'no-account' };
 
+  const queued = (applyInFlight.get(id) || Promise.resolve())
+    .catch(() => {})
+    .then(() => runStagedBudgetConfigApply(id, options));
+
+  // Kept only while it is the newest link, so a settled chain doesn't pin the
+  // last result — or the account id — in memory for the life of the tab.
+  applyInFlight.set(id, queued);
+  queued.catch(() => {}).finally(() => {
+    if (applyInFlight.get(id) === queued) applyInFlight.delete(id);
+  });
+
+  return queued;
+}
+
+async function runStagedBudgetConfigApply(id, { incomeId = null, resetAt = new Date() } = {}) {
   const settings = await getSettings(id);
   const staged = settings?.stagedBudgetConfig;
   if (!staged) return { applied: false, reason: 'nothing-staged' };
@@ -1548,10 +1680,9 @@ export async function applyStagedBudgetConfig(accountId, { incomeId = null, rese
     // the user gets a nudge explaining why their new budget did not land rather
     // than a budget that half did.
     const at = new Date().toISOString();
-    await saveSettings({
-      ...settings,
+    await patchSettings(id, {
       stagedBudgetConfig: { ...staged, lastAttemptAt: at, lastAttemptErrors: plan.errors },
-    }, id);
+    });
     return { applied: false, reason: 'validation-failed', errors: plan.errors, plan };
   }
 
@@ -1581,6 +1712,11 @@ export async function applyStagedBudgetConfig(accountId, { incomeId = null, rese
     appliedAt,
     undoExpiresAt,
     label: staged.fileName || 'budget config',
+    // Which staged record this consumed. `appliedAt` is the *reset* date and
+    // can predate the moment the apply actually ran, so it cannot answer "is
+    // the config sitting in the staged slot the one I already applied?".
+    // `reconcileStagedBudgetConfig` needs that answer exactly.
+    stagedAt: staged.stagedAt || null,
     // Exactly what apply can touch, captured whole. Undo restores these rows
     // rather than reversing a diff, so it cannot drift from what was changed.
     categories: context.categories.map(row => ({ ...row })),
@@ -1590,81 +1726,104 @@ export async function applyStagedBudgetConfig(accountId, { incomeId = null, rese
     backup,
   };
 
-  await db.transaction('rw', db.categories, db.variables, db.settings, async () => {
-    // ── Variables first: category formulas dereference them. ──
-    const variableIdByName = new Map();
-    for (const row of plan.variables) {
-      if (row.action === 'create') {
-        const newId = await db.variables.add({ accountId: id, name: row.name, value: row.value });
-        undo.createdVariableIds.push(newId);
-        variableIdByName.set(row.name, newId);
-      } else if (row.action === 'update') {
-        await db.variables.update(Number(row.id), { name: row.name, value: row.value });
-        variableIdByName.set(row.name, Number(row.id));
-      } else {
-        variableIdByName.set(row.name, Number(row.id));
-      }
-    }
-
-    // ── Then categories. ──
-    for (const row of plan.categories) {
-      if (row.action === 'create') {
-        const newId = await db.categories.add({
-          accountId: id,
-          ...row.fields,
-          // A new category starts its life with a clean counter. This is the
-          // only place an import writes runtime state, and only because there
-          // is no prior state to preserve.
-          spent: 0,
-          spentByIncome: {},
-          incomeResetAt: {},
-          temporaryBoost: 0,
-          boostSources: [],
-          rolloverBalance: 0,
-          cycleClearedSpend: 0,
-          lastReset: appliedAt,
-        });
-        undo.createdCategoryIds.push(newId);
-        continue;
+  let superseded = false;
+  try {
+    await db.transaction('rw', db.categories, db.variables, db.settings, async () => {
+      // ── Claim the config before writing anything it describes. ──
+      //
+      // First statement in the transaction on purpose. Everything below was
+      // planned against a read taken outside it, so this is the one point where
+      // "is this config still mine to apply?" can be answered and acted on
+      // without another apply slipping in between the two.
+      const claimRows = await db.settings.where('accountId').equals(id).toArray();
+      const claimed = claimRows[0]?.stagedBudgetConfig || null;
+      if (!claimed || claimed.stagedAt !== staged.stagedAt) {
+        // Applied by whoever got here first, or replaced by a fresh import. Either
+        // way this plan describes a budget that no longer wants applying, and its
+        // `create` rows would duplicate what the winner already wrote.
+        superseded = true;
+        throw SUPERSEDED;
       }
 
-      if (row.action === 'keep') continue;
-
-      const existing = await db.categories.get(Number(row.id));
-      if (!existing) {
-        // Validated moments ago against the same data — if it is gone now,
-        // something else is writing concurrently and this transaction must not
-        // paper over it.
-        throw new Error(`Category ${row.id} disappeared while the budget config was being applied.`);
+      // ── Variables first: category formulas dereference them. ──
+      const variableIdByName = new Map();
+      for (const row of plan.variables) {
+        if (row.action === 'create') {
+          const newId = await db.variables.add({ accountId: id, name: row.name, value: row.value });
+          undo.createdVariableIds.push(newId);
+          variableIdByName.set(row.name, newId);
+        } else if (row.action === 'update') {
+          await db.variables.update(Number(row.id), { name: row.name, value: row.value });
+          variableIdByName.set(row.name, Number(row.id));
+        } else {
+          variableIdByName.set(row.name, Number(row.id));
+        }
       }
 
-      const fields = { ...row.fields };
+      // ── Then categories. ──
+      for (const row of plan.categories) {
+        if (row.action === 'create') {
+          const newId = await db.categories.add({
+            accountId: id,
+            ...row.fields,
+            // A new category starts its life with a clean counter. This is the
+            // only place an import writes runtime state, and only because there
+            // is no prior state to preserve.
+            spent: 0,
+            spentByIncome: {},
+            incomeResetAt: {},
+            temporaryBoost: 0,
+            boostSources: [],
+            rolloverBalance: 0,
+            cycleClearedSpend: 0,
+            lastReset: appliedAt,
+          });
+          undo.createdCategoryIds.push(newId);
+          continue;
+        }
 
-      // Turning rollover off releases the accumulated balance, matching what
-      // the category editor does. Turning it on, or leaving it on, keeps every
-      // penny already banked — that balance is the user's money, not config.
-      if (fields.rolloverEnabled === false) fields.rolloverBalance = 0;
+        if (row.action === 'keep') continue;
 
-      // Funding split changed: the spend already counted has to be re-bucketed
-      // against the new split, which is what `updateCategory` exists to do.
-      if (Object.prototype.hasOwnProperty.call(fields, 'incomeAllocations')) {
-        fields.spentByIncome = allocateAmountByIncome({ ...existing, ...fields }, existing.spent || 0);
+        const existing = await db.categories.get(Number(row.id));
+        if (!existing) {
+          // Validated moments ago against the same data — if it is gone now,
+          // something else is writing concurrently and this transaction must not
+          // paper over it.
+          throw new Error(`Category ${row.id} disappeared while the budget config was being applied.`);
+        }
+
+        const fields = { ...row.fields };
+
+        // Turning rollover off releases the accumulated balance, matching what
+        // the category editor does. Turning it on, or leaving it on, keeps every
+        // penny already banked — that balance is the user's money, not config.
+        if (fields.rolloverEnabled === false) fields.rolloverBalance = 0;
+
+        // Funding split changed: the spend already counted has to be re-bucketed
+        // against the new split, which is what `updateCategory` exists to do.
+        if (Object.prototype.hasOwnProperty.call(fields, 'incomeAllocations')) {
+          fields.spentByIncome = allocateAmountByIncome({ ...existing, ...fields }, existing.spent || 0);
+        }
+
+        await db.categories.update(Number(row.id), fields);
       }
 
-      await db.categories.update(Number(row.id), fields);
-    }
-
-    const current = await db.settings.where('accountId').equals(id).toArray();
-    const row = current[0];
-    if (row) {
-      await db.settings.update(row.id, {
+      // Same row the claim above read, still held by this transaction.
+      await db.settings.update(claimRows[0].id, {
         stagedBudgetConfig: null,
         budgetConfigUndo: undo,
         lastBudgetConfigAppliedAt: appliedAt,
         lastAutoBackupAt: appliedAt,
       });
+    });
+  } catch (error) {
+    if (superseded) {
+      // Not a failure: the budget the user approved is live, written by the
+      // apply that got here first. Nothing of this one's was written.
+      return { applied: false, reason: 'superseded' };
     }
-  });
+    throw error;
+  }
 
   return { applied: true, plan, undo, appliedAt };
 }
