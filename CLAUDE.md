@@ -115,6 +115,27 @@ All DB operations live in `db.js`. When adding a new operation:
 
 The `categories.spent` field is a **counter maintained by the helpers**, not derived from transactions at query time. `addTransaction` increments it, `deleteTransaction` decrements it, `resetBudget` zeros it. Do not recompute it by scanning transactions — keep this pattern.
 
+### Settings — patch one field, don't write the row back
+
+The settings row holds the user's own preferences next to machine-managed state
+the reset path rewrites on its own schedule: `stagedBudgetConfig`, `lastReset`,
+`budgetConfigUndo`, `notifiedNudges`. So `saveSettings({ ...settings, oneField })`
+does not write one field — it writes *every* field, at whatever values the
+spread copy was taken with, and silently undoes anything that landed since.
+
+**Use `patchSettings(accountId, changes)` for any write that changes some of the
+row.** It merges inside IndexedDB, so nothing the caller didn't name can be
+clobbered. `saveSettings` is the replace-the-whole-row primitive underneath it
+and currently has no callers outside the tests — reach for it only when the
+caller really does hold the entire current row, which in practice means never
+from a view.
+
+This is not a style preference. A Settings toggle carrying a React snapshot of
+the row put an already-applied `stagedBudgetConfig` back after the apply had
+cleared it, leaving the account with a live budget *and* the same config still
+queued to apply again at the next reset. Views send the fields they changed,
+never a copy of `settings`.
+
 ### Pure utils
 
 `utils.js` contains only pure functions. No Dexie imports, no React hooks, no side effects. If you need a new calculation, add it here as a named export.
@@ -229,6 +250,29 @@ Four invariants worth keeping:
   staged and reported rather than written at numbers the user didn't approve.
 - **Import never deletes.** A category the config omits is left untouched and
   the user is told so.
+- **Apply lands at most once.** The plan and the backup are built outside the
+  write transaction, so two callers arriving together — the reset path fires
+  more than once as live queries settle, and a PWA can be open in two tabs —
+  both planned against the same pre-apply categories and both wrote, running
+  every `create` row twice. The transaction therefore *claims* the staged
+  record before touching a category, aborting if it is no longer the one on
+  disk; `applyStagedBudgetConfig` also chains calls per account so the loser
+  doesn't pay for a plan and a full backup it can't use. Duplicate categories
+  are not a cosmetic problem: `evaluateFormula` resolves `$Name` and `[Name]`
+  by whichever row Dexie returns first, and every allowance total counts them
+  twice.
+
+`reconcileStagedBudgetConfig` runs at startup and clears a staged record that
+has already been applied — the state the stale-write bug left behind, which
+would otherwise apply a second time at the next reset. It identifies it exactly
+(`undo.stagedAt`, or `undo.backup.exportedAt` for records written before that
+field existed) rather than assuming both fields being set means trouble; a
+config staged *after* the last apply is a genuine new import.
+
+Both paths that reset an income apply a due config — the scheduled one and
+`handleIncomeFastForward`. Getting paid early is still getting paid, and a
+fast-forward writes `lastPaid`, so a config that doesn't land there never lands
+at all. Everything acting on a reset goes through App's one reset queue.
 
 Apply runs in one Dexie transaction and takes an `exportSnapshot()` backup
 first. Undo is offered for one cycle (`undoExpiresAt`) — long enough to catch a

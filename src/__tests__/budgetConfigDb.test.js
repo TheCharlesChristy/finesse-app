@@ -9,10 +9,12 @@ import {
   stageBudgetConfig,
   cancelStagedBudgetConfig,
   applyStagedBudgetConfig,
+  reconcileStagedBudgetConfig,
   undoBudgetConfigApply,
   getBudgetConfigContext,
   getSettings,
   saveSettings,
+  patchSettings,
   resetCategoriesForIncome,
 } from '../db';
 import { buildBudgetConfigPlan } from '../budgetConfig';
@@ -236,6 +238,224 @@ describe('applying', () => {
 
     expect(result.undo.backup.categories.find(c => c.id === 10).name).toBe('Household Bills');
     expect((await getSettings(ACCOUNT_ID)).lastAutoBackupAt).toBeTruthy();
+  });
+});
+
+/**
+ * A reset can reach `applyStagedBudgetConfig` more than once — the reset path
+ * fires again as live queries settle, and an installed PWA can have two tabs
+ * open on the same database. Applying twice is not a near-miss: every `create`
+ * row runs again, so the account ends up with two categories of one name and
+ * two variables of one name, and from there `evaluateFormula` resolves `$Name`
+ * and `[Name]` by whichever row Dexie returns first while every allowance total
+ * counts the duplicates twice.
+ */
+describe('applying twice', () => {
+  it('writes one budget when two applies race for the same reset', async () => {
+    await stageReference();
+
+    const results = await Promise.all([
+      applyStagedBudgetConfig(ACCOUNT_ID, { incomeId: INCOME_ID }),
+      applyStagedBudgetConfig(ACCOUNT_ID, { incomeId: INCOME_ID }),
+    ]);
+
+    // Exactly one wrote. The other is not an error — the budget the user
+    // approved is live either way.
+    expect(results.filter(r => r.applied)).toHaveLength(1);
+    expect(results.find(r => !r.applied).reason).toMatch(/nothing-staged|superseded/);
+
+    const names = (await db.categories.where('accountId').equals(ACCOUNT_ID).toArray())
+      .map(c => c.name);
+    expect(names).toHaveLength(new Set(names).size);
+
+    const varNames = (await db.variables.where('accountId').equals(ACCOUNT_ID).toArray())
+      .map(v => v.name);
+    expect(varNames).toHaveLength(new Set(varNames).size);
+  });
+
+  it('refuses a plan whose staged config was already applied', async () => {
+    await stageReference();
+    // A plan built and held while another apply lands first — which is what an
+    // overlapping reset does, the backup step being long enough to fit one.
+    const context = await getBudgetConfigContext(ACCOUNT_ID);
+    const stale = buildBudgetConfigPlan(REFERENCE, context);
+    expect(stale.ok).toBe(true);
+
+    await applyStagedBudgetConfig(ACCOUNT_ID, { incomeId: INCOME_ID });
+    const after = await snapshotBudget();
+
+    const second = await applyStagedBudgetConfig(ACCOUNT_ID, { incomeId: INCOME_ID });
+    expect(second.applied).toBe(false);
+    expect(await snapshotBudget()).toBe(after);
+  });
+
+  it('does not apply again at the next reset', async () => {
+    await stageReference();
+    await applyStagedBudgetConfig(ACCOUNT_ID, { incomeId: INCOME_ID });
+
+    // Nothing is queued any more, so the following cycle changes nothing.
+    const afterFirst = await snapshotBudget();
+    const next = await applyStagedBudgetConfig(ACCOUNT_ID, { incomeId: INCOME_ID });
+
+    expect(next.applied).toBe(false);
+    expect(next.reason).toBe('nothing-staged');
+    expect(await snapshotBudget()).toBe(afterFirst);
+  });
+});
+
+/**
+ * The settings row holds the user's own preferences next to machine-managed
+ * state the reset path rewrites on its own schedule — `stagedBudgetConfig`,
+ * `lastReset`, `budgetConfigUndo`. Writing one field through a copy of the row
+ * therefore writes the others too, at whatever values the copy was taken with.
+ *
+ * That is how an applied config came back from the dead: apply cleared
+ * `stagedBudgetConfig`, and a settings write built from a snapshot taken before
+ * it put the config straight back, leaving the account holding a live budget
+ * *and* a config still queued to apply again at the next reset.
+ */
+describe('settings patches', () => {
+  /** The state the bug produced: applied and still queued, both at once. */
+  const bothAtOnce = (settings) =>
+    Boolean(settings.stagedBudgetConfig) && Boolean(settings.budgetConfigUndo);
+
+  it('never leaves a live budget and a queued config at once', async () => {
+    await stageReference();
+
+    // Held across the apply, exactly as a React snapshot in a Settings toggle
+    // or an overlapping reset run would hold it.
+    const stale = await getSettings(ACCOUNT_ID);
+    expect(stale.stagedBudgetConfig).not.toBeNull();
+
+    await applyStagedBudgetConfig(ACCOUNT_ID, { incomeId: INCOME_ID });
+
+    // Everything the app writes to settings around a reset.
+    await patchSettings(ACCOUNT_ID, { lastReset: new Date().toISOString() });
+    await patchSettings(ACCOUNT_ID, { themeMode: 'light' });
+    await patchSettings(ACCOUNT_ID, { notificationsEnabled: true });
+
+    const after = await getSettings(ACCOUNT_ID);
+    expect(bothAtOnce(after)).toBe(false);
+    expect(after.stagedBudgetConfig).toBeNull();
+    expect(after.budgetConfigUndo).toBeTruthy();
+    expect(after.themeMode).toBe('light');
+  });
+
+  it('is not interchangeable with saveSettings, which replaces the row', async () => {
+    // Pins the difference, so collapsing the two back together is caught here
+    // rather than by a budget applying twice. `saveSettings` is a replace and
+    // is correct only when the caller really does hold the whole current row.
+    await stageReference();
+    const stale = await getSettings(ACCOUNT_ID);
+    await applyStagedBudgetConfig(ACCOUNT_ID, { incomeId: INCOME_ID });
+
+    await saveSettings({ ...stale, lastReset: '2026-08-24T00:00:00.000Z' }, ACCOUNT_ID);
+    expect(bothAtOnce(await getSettings(ACCOUNT_ID))).toBe(true);
+
+    // The same write through `patchSettings` touches nothing else.
+    await patchSettings(ACCOUNT_ID, { stagedBudgetConfig: null });
+    await patchSettings(ACCOUNT_ID, { lastReset: '2026-08-25T00:00:00.000Z' });
+
+    const after = await getSettings(ACCOUNT_ID);
+    expect(bothAtOnce(after)).toBe(false);
+    expect(after.lastReset).toBe('2026-08-25T00:00:00.000Z');
+  });
+
+  it('changes only the fields it is given', async () => {
+    await patchSettings(ACCOUNT_ID, { themeMode: 'light' });
+    const after = await getSettings(ACCOUNT_ID);
+
+    expect(after.themeMode).toBe('light');
+    expect(after.payDayOfMonth).toBe(24);
+    expect(after.accountId).toBe(ACCOUNT_ID);
+  });
+
+  it('creates the row when an account has no settings yet', async () => {
+    await db.settings.clear();
+    await patchSettings(ACCOUNT_ID, { lastReset: '2026-08-24T00:00:00.000Z' });
+
+    const after = await getSettings(ACCOUNT_ID);
+    expect(after.lastReset).toBe('2026-08-24T00:00:00.000Z');
+    expect(after.accountId).toBe(ACCOUNT_ID);
+  });
+});
+
+/**
+ * Databases that already hold the impossible state — a budget applied, and the
+ * config that applied it still sitting in the staged slot — have to come back
+ * on their own. Left there it applies a second time at the next reset, running
+ * every `create` row again.
+ */
+describe('reconciling an already-applied config', () => {
+  /** Put the staged record back after the apply, as the stale write used to. */
+  async function resurrect() {
+    const stale = await getSettings(ACCOUNT_ID);
+    await applyStagedBudgetConfig(ACCOUNT_ID, { incomeId: INCOME_ID });
+    await saveSettings({ ...stale, lastReset: new Date().toISOString() }, ACCOUNT_ID);
+    return getSettings(ACCOUNT_ID);
+  }
+
+  it('clears the ghost so it cannot apply a second time', async () => {
+    await stageReference();
+    const broken = await resurrect();
+    expect(broken.stagedBudgetConfig).not.toBeNull();
+    expect(broken.budgetConfigUndo).toBeTruthy();
+
+    const result = await reconcileStagedBudgetConfig(ACCOUNT_ID);
+    expect(result.cleared).toBe(true);
+
+    const after = await getSettings(ACCOUNT_ID);
+    expect(after.stagedBudgetConfig).toBeNull();
+    // The applied budget is untouched — this cancels a queued copy, nothing more.
+    expect(after.budgetConfigUndo).toBeTruthy();
+    expect((await cat(10)).name).toBe('Bills');
+
+    // Which is the whole point: the next reset now changes nothing.
+    const snapshot = await snapshotBudget();
+    const next = await applyStagedBudgetConfig(ACCOUNT_ID, { incomeId: INCOME_ID });
+    expect(next.applied).toBe(false);
+    expect(await snapshotBudget()).toBe(snapshot);
+  });
+
+  it('identifies the ghost on undo records written before it was marked', async () => {
+    await stageReference();
+    await resurrect();
+
+    // An undo record from the old code has no `stagedAt`; the backup's
+    // `exportedAt` dates the apply on the real clock instead.
+    const settings = await getSettings(ACCOUNT_ID);
+    const { stagedAt, ...legacyUndo } = settings.budgetConfigUndo;
+    expect(stagedAt).toBeTruthy();
+    expect(legacyUndo.backup.exportedAt).toBeTruthy();
+    await patchSettings(ACCOUNT_ID, { budgetConfigUndo: legacyUndo });
+
+    expect((await reconcileStagedBudgetConfig(ACCOUNT_ID)).cleared).toBe(true);
+    expect((await getSettings(ACCOUNT_ID)).stagedBudgetConfig).toBeNull();
+  });
+
+  it('leaves a config imported after the apply alone', async () => {
+    await stageReference();
+    await applyStagedBudgetConfig(ACCOUNT_ID, { incomeId: INCOME_ID });
+
+    // A genuine new import, staged against the budget the apply just wrote.
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const { plan } = await stageReference(clone(REFERENCE));
+    expect(plan.ok).toBe(true);
+
+    const result = await reconcileStagedBudgetConfig(ACCOUNT_ID);
+    expect(result.cleared).toBe(false);
+    expect(result.reason).toBe('staged-after-apply');
+    expect((await getSettings(ACCOUNT_ID)).stagedBudgetConfig).not.toBeNull();
+  });
+
+  it('does nothing on an account in a good state', async () => {
+    expect((await reconcileStagedBudgetConfig(ACCOUNT_ID)).cleared).toBe(false);
+
+    await stageReference();
+    const staged = await snapshotBudget();
+    expect((await reconcileStagedBudgetConfig(ACCOUNT_ID)).cleared).toBe(false);
+    expect((await getSettings(ACCOUNT_ID)).stagedBudgetConfig).not.toBeNull();
+    expect(await snapshotBudget()).toBe(staged);
   });
 });
 

@@ -133,7 +133,7 @@ export default function Settings({
         setPinError('This browser can’t derive a PIN securely.');
         return;
       }
-      onSaveSettings?.({ ...(settings || {}), ...patch });
+      onSaveSettings?.(patch);
       // The lock gate reads straight from the database, so without this the
       // PIN you just chose would lock you out of the page you chose it on.
       onPinSet?.();
@@ -150,7 +150,7 @@ export default function Settings({
       { title: 'Remove PIN', confirmText: 'Remove', danger: true },
     );
     if (!ok) return;
-    onSaveSettings?.({ ...(settings || {}), pinHash: null, pinSalt: null });
+    onSaveSettings?.({ pinHash: null, pinSalt: null });
   };
 
   const handleUpdateApp = async () => {
@@ -172,7 +172,7 @@ export default function Settings({
 
   const handleToggleNotifications = async () => {
     if (notificationsOn) {
-      onSaveSettings?.({ ...(settings || {}), notificationsEnabled: false });
+      onSaveSettings?.({ notificationsEnabled: false });
       return;
     }
     // Requested from a click, never on load: iOS only grants from a gesture,
@@ -180,7 +180,7 @@ export default function Settings({
     const result = await requestNotificationPermission();
     setPermission(result);
     if (result === 'granted') {
-      onSaveSettings?.({ ...(settings || {}), notificationsEnabled: true });
+      onSaveSettings?.({ notificationsEnabled: true });
     }
   };
 
@@ -268,14 +268,11 @@ export default function Settings({
   };
 
   const handleDefaultCategoryChange = (categoryId) => {
-    onSaveSettings?.({
-      ...(settings || {}),
-      defaultCategoryId: categoryId ? Number(categoryId) : null,
-    });
+    onSaveSettings?.({ defaultCategoryId: categoryId ? Number(categoryId) : null });
   };
 
   const handleThemeChange = (value) => {
-    onSaveSettings?.({ ...(settings || {}), themeMode: value });
+    onSaveSettings?.({ themeMode: value });
   };
 
   const handleFullReset = async () => {
@@ -588,7 +585,7 @@ export default function Settings({
           <input
             type="checkbox"
             checked={settings?.privacyScreenEnabled !== false}
-            onChange={e => onSaveSettings?.({ ...(settings || {}), privacyScreenEnabled: e.target.checked })}
+            onChange={e => onSaveSettings?.({ privacyScreenEnabled: e.target.checked })}
             style={{ marginTop: 2, width: 16, height: 16, accentColor: 'var(--accent-mint)' }}
           />
           <span>
@@ -613,7 +610,7 @@ export default function Settings({
               <label className="field-label" htmlFor="lock-delay">Ask for it again</label>
               <select id="lock-delay" className="glass-input"
                 value={String(settings?.lockDelayMs ?? DEFAULT_LOCK_DELAY_MS)}
-                onChange={e => onSaveSettings?.({ ...(settings || {}), lockDelayMs: Number(e.target.value) })}>
+                onChange={e => onSaveSettings?.({ lockDelayMs: Number(e.target.value) })}>
                 {LOCK_DELAYS.map(([ms, label]) => (
                   <option key={ms} value={ms}>{label} in the background</option>
                 ))}
