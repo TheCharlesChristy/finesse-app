@@ -356,6 +356,31 @@ is exactly what a PWA's content-security policy should be free to forbid.
 `evaluateFormulaDetailed` is the same thing with a reason attached, so the config
 importer can say *which* reference failed rather than only that something did.
 
+### Derived allowances — one resolver, one writer
+
+Two things can compute a category's allowance: a **pace** (`£5/day`, scaled to
+the funding income's cycle) and an **`allowanceFormula`**. Both go through
+`resolveCategoryAllowance(category, { variables, categories, incomes })`, and
+exactly one effect in `App.jsx` writes what it returns. `null` means nothing
+derives this allowance — a plain typed amount, or a formula whose references
+don't resolve — and the stored value is left alone.
+
+**Never add a second writer of `category.allowance`.** There used to be two
+effects, one per source, each writing on its own terms. A category carrying
+both had them overwrite each other in turn, and since every write re-fires the
+live query that re-runs them, the allowance flipped between the two values
+indefinitely — a write per flip, for as long as the app was open.
+
+Pacing wins over a formula, because that is what the category editor already
+does (it clears `allowanceFormula` when pacing is switched on). Any other order
+would make opening a category and saving it change its allowance. The editor
+cannot produce a category with both; the config importer could, so it now
+refuses one — which of the two the user meant changes the budget, so it is
+theirs to say. `buildNudges` names any rows already in that state.
+
+Compare to the penny (`0.005`), never exactly: a pace divides through a cycle
+length, and an exact test rewrites the row on float noise.
+
 ### Schema changes
 
 If you change the Dexie schema, increment the version number and add a new `db.version(N).stores({...})` call. Do not modify the existing `version(1)` call. See DEV_GUIDE.md for the migration pattern. The current version is **9**.

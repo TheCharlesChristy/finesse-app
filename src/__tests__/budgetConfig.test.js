@@ -366,3 +366,57 @@ describe('contract constants', () => {
     expect(REFERENCE.applyAt).toBe(APPLY_NEXT_CYCLE);
   });
 });
+
+/**
+ * A category cannot have two things deciding its allowance. When one did, the
+ * runtime wrote it from the pace and from the formula in turn, so the value
+ * flipped between them for as long as the app was open.
+ */
+describe('one source for an allowance', () => {
+  it('refuses a category that sets both a formula and pacing', () => {
+    const config = withCategory('Eating Out', {
+      pacedAllowanceEnabled: true,
+      pacedAllowanceAmount: 5,
+      pacedAllowanceInterval: 1,
+      pacedAllowanceUnit: 'day',
+    });
+    const plan = buildBudgetConfigPlan(config, makeContext());
+
+    expect(plan.ok).toBe(false);
+    const failure = plan.errors.find(e => e.code === 'category-allowance-source');
+    expect(failure).toBeTruthy();
+    // Names the category and both fields, so the config can actually be fixed.
+    expect(failure.message).toContain('Eating Out');
+    expect(failure.message).toContain('allowanceFormula');
+    expect(failure.message).toContain('pacedAllowanceEnabled');
+  });
+
+  it('accepts pacing on its own', () => {
+    const config = withCategory('Eating Out', {
+      allowanceFormula: undefined,
+      allowance: 155,
+      pacedAllowanceEnabled: true,
+      pacedAllowanceAmount: 5,
+      pacedAllowanceInterval: 1,
+      pacedAllowanceUnit: 'day',
+    });
+    const plan = buildBudgetConfigPlan(config, makeContext());
+    const eatingOut = plan.categories.find(c => c.name === 'Eating Out');
+
+    expect(plan.errors.some(e => e.code === 'category-allowance-source')).toBe(false);
+    expect(eatingOut.fields.pacedAllowanceEnabled).toBe(true);
+    expect(eatingOut.fields.allowanceFormula).toBeNull();
+  });
+
+  it('accepts a formula on its own', () => {
+    const plan = buildBudgetConfigPlan(clone(REFERENCE), makeContext());
+    expect(plan.ok).toBe(true);
+    expect(plan.errors.some(e => e.code === 'category-allowance-source')).toBe(false);
+  });
+
+  it('ignores pacing set to false alongside a formula', () => {
+    const config = withCategory('Eating Out', { pacedAllowanceEnabled: false });
+    const plan = buildBudgetConfigPlan(config, makeContext());
+    expect(plan.ok).toBe(true);
+  });
+});

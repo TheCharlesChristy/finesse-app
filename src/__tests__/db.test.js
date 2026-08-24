@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   db,
   addAccount,
+  updateCategory,
   addCategory,
   addTransaction,
   addTransactionsBulk,
@@ -29,6 +30,7 @@ import {
   contributeToGoal,
   autoContributeGoals,
 } from '../db';
+import { resolveCategoryAllowance } from '../utils';
 
 const getCategory = (id) => db.categories.get(id);
 const getAccount = (id) => db.accounts.get(id);
@@ -681,5 +683,74 @@ describe('recalculateSpendCounters day boundaries', () => {
 
     await recalculateSpendCounters(accountId);
     expect((await getCategory(catId)).spent).toBe(25);
+  });
+});
+
+
+/**
+ * The derived-allowance effect in App, at the database level: resolve, compare
+ * to the penny, write if it moved. A category carrying both a pace and a
+ * formula used to be written by two such effects with different answers, and
+ * because every write re-fires the live query that re-runs them, the stored
+ * allowance flipped between the two values for as long as the app was open.
+ *
+ * What matters is that a second pass writes nothing. Reached a fixed point, the
+ * loop cannot start.
+ */
+describe('derived allowances settle', () => {
+  const INCOME = { id: 1, name: 'LM', amount: 2400, resetFrequency: 'monthly' };
+
+  /** One pass of the effect. Returns the ids it wrote. */
+  async function runEffectPass() {
+    const categories = await db.categories.where('accountId').equals(accountId).toArray();
+    const variables = await db.variables.where('accountId').equals(accountId).toArray();
+    const written = [];
+
+    for (const cat of categories) {
+      const derived = resolveCategoryAllowance(cat, { variables, categories, incomes: [INCOME] });
+      if (derived === null) continue;
+      if (Math.abs((Number(cat.allowance) || 0) - derived) > 0.005) {
+        await updateCategory(cat.id, { allowance: derived });
+        written.push(cat.id);
+      }
+    }
+    return written;
+  }
+
+  it('a category with both a pace and a formula stops moving after one pass', async () => {
+    const catId = await makeCategory({
+      name: 'Eating Out',
+      allowance: 192,
+      allowanceFormula: '{LM}*.08',
+      pacedAllowanceEnabled: true,
+      pacedAllowanceAmount: 5,
+      pacedAllowanceInterval: 1,
+      pacedAllowanceUnit: 'day',
+    });
+
+    expect(await runEffectPass()).toEqual([catId]);
+    const settled = (await getCategory(catId)).allowance;
+
+    // Five more passes, as the live query would re-run it: nothing writes, and
+    // the value never leaves where it landed.
+    for (let pass = 0; pass < 5; pass++) {
+      expect(await runEffectPass()).toEqual([]);
+      expect((await getCategory(catId)).allowance).toBe(settled);
+    }
+  });
+
+  it('a formula category converges and then holds', async () => {
+    const catId = await makeCategory({ name: 'Groceries', allowance: 0, allowanceFormula: '{LM}*.15' });
+
+    expect(await runEffectPass()).toEqual([catId]);
+    expect((await getCategory(catId)).allowance).toBe(360);
+    expect(await runEffectPass()).toEqual([]);
+  });
+
+  it('never touches a category with a plain allowance', async () => {
+    const catId = await makeCategory({ name: 'Petrol', allowance: 180 });
+
+    expect(await runEffectPass()).toEqual([]);
+    expect((await getCategory(catId)).allowance).toBe(180);
   });
 });
