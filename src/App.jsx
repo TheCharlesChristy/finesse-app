@@ -20,7 +20,7 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   undoBudgetConfigApply, getBudgetConfigContext, initEncryption, lockDatabase } from './db';
 import { useFinesseData } from './hooks/useFinesseData';
 import { describeStagedConfig, isBudgetConfigUndoExpired } from './budgetConfig';
-import { buildNudges, calcNextReset, evaluateFormula, filterDismissedNudges, fmt, getGoalCommitment, getIncomeCycleDays, getPacedAllowanceConfig, getPacedAllowanceMonthlyTotal, normalizeIncomeAllocations, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
+import { buildNudges, calcNextReset, filterDismissedNudges, fmt, getGoalCommitment, resolveCategoryAllowance, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
 
 const Dashboard      = lazy(() => import('./views/Dashboard'));
 const Accounts       = lazy(() => import('./views/Accounts'));
@@ -339,28 +339,6 @@ export default function App() {
     })();
   }, [categories]);
 
-  // Paced allowance categories derive their period allowance from a repeating amount.
-  // The period is the income reset cycle (weekly, fortnightly, etc.) rather than
-  // the calendar month, so that the stored allowance is consistent with income.amount.
-  useEffect(() => {
-    if (!categories.length) return;
-    (async () => {
-      for (const cat of categories) {
-        const pace = getPacedAllowanceConfig(cat);
-        if (!pace) continue;
-        const allocs = normalizeIncomeAllocations(cat.incomeAllocations);
-        const linkedFreqs = [...new Set(
-          allocs.map(a => incomes.find(i => Number(i.id) === a.incomeId)?.resetFrequency).filter(Boolean)
-        )];
-        const cycleDays = linkedFreqs.length === 1 ? getIncomeCycleDays(linkedFreqs[0]) : null;
-        const expectedAllowance = getPacedAllowanceMonthlyTotal(pace.amount, pace.interval, pace.unit, undefined, cycleDays);
-        if (Math.abs((Number(cat.allowance) || 0) - expectedAllowance) > 0.005) {
-          await updateCategory(cat.id, { allowance: expectedAllowance });
-        }
-      }
-    })();
-  }, [categories, incomes]);
-
   // Subscriptions are logged automatically when their due date arrives. Say so:
   // money leaving a budget without the user doing anything should never be
   // silent, or a subscription charge looks like a discrepancy.
@@ -503,15 +481,25 @@ export default function App() {
     enqueueResetWork(() => runDueIncomeResets(activeAccountId));
   }, [incomes, activeAccountId, enqueueResetWork, runDueIncomeResets]);
 
-  // Formula recomputation: runs whenever variables or categories change
+  // Derived allowances: pacing and formulas both compute one, so both go
+  // through `resolveCategoryAllowance` and one effect writes the result.
+  //
+  // They used to be two effects, each writing `category.allowance` on its own
+  // terms. A category carrying both — which the config importer could write,
+  // though the category editor cannot — had them overwrite each other in turn,
+  // and since every write re-fires the live query that re-runs them, the
+  // allowance flipped between the two values indefinitely. One writer, one
+  // precedence, and the loop cannot form.
   useEffect(() => {
     if (!categories.length) return;
     (async () => {
       for (const cat of categories) {
-        if (!cat.allowanceFormula) continue;
-        const computed = evaluateFormula(cat.allowanceFormula, variables, categories, incomes);
-        if (computed !== null && computed !== cat.allowance) {
-          await updateCategory(cat.id, { allowance: computed });
+        const derived = resolveCategoryAllowance(cat, { variables, categories, incomes });
+        if (derived === null) continue;
+        // Compared to the penny rather than exactly: a pace divides through a
+        // cycle length and an exact test would rewrite the row on float noise.
+        if (Math.abs((Number(cat.allowance) || 0) - derived) > 0.005) {
+          await updateCategory(cat.id, { allowance: derived });
         }
       }
     })();

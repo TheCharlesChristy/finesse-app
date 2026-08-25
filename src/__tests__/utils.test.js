@@ -45,6 +45,7 @@ import {
   suggestCategoryForNote,
   hasMixedIncomeFrequencies,
   projectedEndBalance,
+  resolveCategoryAllowance,
   wishlistAffordability,
 } from '../utils';
 
@@ -1356,5 +1357,105 @@ describe('buildReview', () => {
     expect(review.categories).toEqual([]);
     expect(review.busiest).toBeNull();
     expect(review.series).toHaveLength(12);
+  });
+});
+
+/**
+ * Pacing and a formula both derive an allowance. When one category carried
+ * both, two separate effects wrote it in turn and the stored value flipped
+ * between them for as long as the app was open. One resolver, one answer.
+ */
+describe('resolveCategoryAllowance', () => {
+  const MONTHLY = { id: 1, name: 'LM', amount: 2400, resetFrequency: 'monthly' };
+  const WEEKLY = { id: 2, name: 'Wage', amount: 500, resetFrequency: 'weekly' };
+  const fundedBy = (id) => [{ incomeId: id, percent: 100 }];
+
+  it('settles on one value for a category carrying a formula and pacing', () => {
+    const category = {
+      id: 10, name: 'Eating Out',
+      allowanceFormula: '{LM}*.08',
+      pacedAllowanceEnabled: true, pacedAllowanceAmount: 5,
+      pacedAllowanceInterval: 1, pacedAllowanceUnit: 'day',
+      incomeAllocations: fundedBy(1),
+    };
+    const context = { variables: [], categories: [category], incomes: [MONTHLY] };
+
+    // Pacing wins, matching what the category editor does when both are set.
+    const first = resolveCategoryAllowance(category, context);
+    expect(first).not.toBeNull();
+    expect(first).not.toBe(192);
+
+    // And feeding the answer back gives the same answer — no second value to
+    // flip to, which is the property that was missing.
+    const settled = resolveCategoryAllowance({ ...category, allowance: first }, context);
+    expect(settled).toBe(first);
+  });
+
+  it('paces against the funding income\'s cycle, not the calendar month', () => {
+    const paced = {
+      name: 'Coffee', pacedAllowanceEnabled: true, pacedAllowanceAmount: 5,
+      pacedAllowanceInterval: 1, pacedAllowanceUnit: 'day',
+      incomeAllocations: fundedBy(2),
+    };
+    // £5/day on a weekly wage is a week's worth, not a month's.
+    expect(resolveCategoryAllowance(paced, { incomes: [WEEKLY] })).toBe(35);
+  });
+
+  it('waits rather than guessing while the funding income is still loading', () => {
+    const paced = {
+      name: 'Coffee', pacedAllowanceEnabled: true, pacedAllowanceAmount: 5,
+      pacedAllowanceInterval: 1, pacedAllowanceUnit: 'day',
+      incomeAllocations: fundedBy(2),
+    };
+    // Allocations that resolve to no income mean the cycle length is unknown.
+    // Pacing it to the calendar month here would write a month's allowance to a
+    // weekly category and correct it a moment later.
+    expect(resolveCategoryAllowance(paced, { incomes: [] })).toBeNull();
+  });
+
+  it('evaluates a formula when there is no pacing', () => {
+    const category = { name: 'Eating Out', allowanceFormula: '{LM}*.08' };
+    expect(resolveCategoryAllowance(category, { incomes: [MONTHLY] })).toBe(192);
+  });
+
+  it('leaves a plain allowance and an unresolvable formula alone', () => {
+    expect(resolveCategoryAllowance({ name: 'Petrol', allowance: 180 }, {})).toBeNull();
+    expect(resolveCategoryAllowance(
+      { name: 'Petrol', allowanceFormula: '$Nope * 2' }, { incomes: [MONTHLY] },
+    )).toBeNull();
+  });
+});
+
+describe('a category with two allowance sources is surfaced', () => {
+  const paced = {
+    id: 10, name: 'Eating Out', allowance: 155, spent: 0,
+    allowanceFormula: '{LM}*.08',
+    pacedAllowanceEnabled: true, pacedAllowanceAmount: 5,
+    pacedAllowanceInterval: 1, pacedAllowanceUnit: 'day',
+  };
+
+  const find = (nudges) => nudges.find(n => n.id.startsWith('allowance-source-'));
+
+  it('names the categories and where to fix them', () => {
+    const nudge = find(buildNudges({ categories: [paced] }));
+
+    expect(nudge).toBeTruthy();
+    expect(nudge.title).toContain('Eating Out');
+    expect(nudge.body).toContain('Eating Out');
+    expect(nudge.view).toBe('dashboard');
+  });
+
+  it('counts them when there is more than one', () => {
+    const nudge = find(buildNudges({
+      categories: [paced, { ...paced, id: 11, name: 'Personal' }],
+    }));
+    expect(nudge.title).toContain('2 categories');
+    expect(nudge.body).toContain('Personal');
+  });
+
+  it('says nothing about a category with only one of the two', () => {
+    const formulaOnly = { ...paced, pacedAllowanceEnabled: false };
+    const pacedOnly = { ...paced, id: 12, allowanceFormula: null };
+    expect(find(buildNudges({ categories: [formulaOnly, pacedOnly] }))).toBeUndefined();
   });
 });

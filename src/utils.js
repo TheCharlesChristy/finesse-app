@@ -623,6 +623,52 @@ export function evaluateFormula(formula, variables = [], categories = [], income
   return evaluateFormulaDetailed(formula, variables, categories, incomes).value;
 }
 
+/**
+ * The allowance a category should be holding, from whatever derives it.
+ *
+ * Returns `null` when nothing does — a plain typed amount, or a formula whose
+ * references don't resolve — meaning "leave the stored allowance alone".
+ *
+ * There is exactly one of these because there can only be one answer. Pacing
+ * and a formula both *derive* an allowance, and when a category carried both
+ * they were applied by two separate effects that each overwrote the other, so
+ * the stored allowance flipped between the two values forever, a write per
+ * flip. Precedence has to live in one place, and this is it.
+ *
+ * Pacing wins, because that is what the category editor already does:
+ * `allowanceValue = pacedAllowanceEnabled ? pacedMonthlyAllowance : …`, and it
+ * clears `allowanceFormula` when pacing is switched on. Any other order here
+ * would make opening a category and saving it change its allowance.
+ */
+export function resolveCategoryAllowance(category, { variables = [], categories = [], incomes = [] } = {}) {
+  const pace = getPacedAllowanceConfig(category);
+
+  if (pace) {
+    // The pace is per income cycle, not per calendar month, so a £5/day
+    // category funded weekly is £35 — not £150. Resolution needs the funding
+    // income, and `incomes` can still be empty while the query settles: with
+    // allocations that resolve to nothing, the cycle length is unknown rather
+    // than monthly, and a guess written now is a wrong allowance on screen.
+    const allocations = normalizeIncomeAllocations(category.incomeAllocations);
+    const funding = allocations
+      .map(allocation => incomes.find(income => Number(income.id) === allocation.incomeId))
+      .filter(Boolean);
+    if (allocations.length && !funding.length) return null;
+
+    const frequencies = [...new Set(funding.map(income => income.resetFrequency).filter(Boolean))];
+    // Several funding incomes on different frequencies have no single cycle to
+    // pace against, so the calendar month stands in — same as no funding at all.
+    const cycleDays = frequencies.length === 1 ? getIncomeCycleDays(frequencies[0]) : null;
+    return getPacedAllowanceMonthlyTotal(pace.amount, pace.interval, pace.unit, undefined, cycleDays);
+  }
+
+  if (category?.allowanceFormula) {
+    return evaluateFormula(category.allowanceFormula, variables, categories, incomes);
+  }
+
+  return null;
+}
+
 // ── Budget cycles ────────────────────────────────────────────────────────────
 
 /**
@@ -1658,6 +1704,29 @@ export function buildNudges({
       title: `You've paid ${fmt(total)} for ${sub.name}`,
       body: `${charges.length} charges so far. Still worth it?`,
       view: 'subscriptions',
+    });
+  }
+
+  // ── Categories with two things deciding their allowance ──
+  //
+  // The category editor cannot produce this, but a config import could, and
+  // the rows it wrote are still out there. Pacing decides the allowance and the
+  // formula is ignored, which silently changes the number the budget was
+  // designed around — so say which categories, rather than leaving the user to
+  // notice their totals no longer add up.
+  const contested = categories.filter(cat => cat.allowanceFormula && getPacedAllowanceConfig(cat));
+  if (contested.length) {
+    const names = contested.map(cat => cat.name).join(', ');
+    nudges.push({
+      id: `allowance-source-${contested.map(c => c.id).sort().join('-')}`,
+      severity: NUDGE_WARN,
+      title: contested.length === 1
+        ? `${contested[0].name} has two allowances`
+        : `${contested.length} categories have two allowances`,
+      body: `${names} ${contested.length === 1 ? 'sets' : 'set'} a spending pace and a formula. `
+        + 'The pace is deciding the allowance and the formula is ignored — open the category and '
+        + 'pick one.',
+      view: 'dashboard',
     });
   }
 

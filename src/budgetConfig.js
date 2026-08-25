@@ -293,6 +293,21 @@ function planCategories(config, context, resolvedVariables, baseline, errors, wa
     }
     seenNames.set(key, true);
 
+    // Pacing and a formula both *derive* the allowance, so a category setting
+    // both says two different things about the same number. The category editor
+    // cannot express it — switching pacing on clears the formula — and a row
+    // that did carry both had the app rewriting it between the two values
+    // indefinitely. Refused rather than guessed at: which one the user meant
+    // changes the budget, so it is theirs to say.
+    if (raw.pacedAllowanceEnabled
+        && typeof raw.allowanceFormula === 'string' && raw.allowanceFormula.trim()) {
+      errors.push(err('category-allowance-source',
+        `${label} sets both "allowanceFormula" and "pacedAllowanceEnabled", and each of them `
+        + 'decides the allowance on its own. Keep the formula, or keep the pacing and drop the '
+        + 'formula — a paced category works out its allowance from the amount per period.'));
+      return;
+    }
+
     let previous = null;
     if (action === ACTION_CREATE) {
       if (raw.id != null) {
