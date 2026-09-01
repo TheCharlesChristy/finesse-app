@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addDays, format, subMonths } from 'date-fns';
+import { addDays, format, startOfDay, subMonths } from 'date-fns';
 
 import {
   AVERAGE_MONTH_DAYS,
@@ -21,6 +21,7 @@ import {
   getGoalCommitment,
   getGoalEta,
   getGoalProgress,
+  getPacedPeriodStatus,
   getRolloverForNextCycle,
   isGoalOffTrack,
   getIncomeCycleAverageDays,
@@ -242,6 +243,104 @@ describe('getCategoryCycle', () => {
     expect(cycle.days).toBeGreaterThan(0);
     expect(cycle.remaining).toBeGreaterThanOrEqual(0);
     expect(cycle.end.getTime()).toBeGreaterThan(cycle.start.getTime());
+  });
+});
+
+describe('getPacedPeriodStatus', () => {
+  // A 30-day cycle that started 3 days ago, so "today" is the fourth day of it.
+  const cycle = (days = 30, startedDaysAgo = 3) => ({
+    start: startOfDay(addDays(new Date(), -startedDaysAgo)),
+    end: startOfDay(addDays(new Date(), days - startedDaysAgo)),
+  });
+
+  const paced = (rest = {}) => ({
+    id: 1,
+    allowance: 150,
+    pacedAllowanceEnabled: true,
+    pacedAllowanceAmount: 5,
+    pacedAllowanceInterval: 1,
+    pacedAllowanceUnit: 'day',
+    ...rest,
+  });
+
+  it('returns null for a category with no pace', () => {
+    expect(getPacedPeriodStatus({ id: 1, allowance: 150 }, [], cycle())).toBeNull();
+  });
+
+  it('returns null without a usable cycle', () => {
+    expect(getPacedPeriodStatus(paced(), [], null)).toBeNull();
+    expect(getPacedPeriodStatus(paced(), [], { start: 'nope', end: 'nope' })).toBeNull();
+  });
+
+  it("counts only today's spend against a daily pace", () => {
+    const transactions = [
+      { categoryId: 1, amount: 1.8, type: 'expense', date: iso(new Date()) },
+      { categoryId: 1, amount: 40, type: 'expense', date: iso(addDays(new Date(), -1)) },
+      { categoryId: 2, amount: 3, type: 'expense', date: iso(new Date()) },
+    ];
+
+    const status = getPacedPeriodStatus(paced(), transactions, cycle());
+
+    expect(status.allowance).toBe(5);
+    expect(status.spent).toBe(1.8);
+    expect(status.left).toBe(3.2);
+    expect(status.days).toBe(1);
+    expect(status.prorated).toBe(false);
+    expect(status.scopeLabel).toBe('today');
+  });
+
+  it('credits a refund back into the period it landed in', () => {
+    const transactions = [
+      { categoryId: 1, amount: 4, type: 'expense', date: iso(new Date()) },
+      { categoryId: 1, amount: 1.5, type: 'refund', date: iso(new Date()) },
+    ];
+
+    expect(getPacedPeriodStatus(paced(), transactions, cycle()).left).toBe(2.5);
+  });
+
+  it('goes negative once the period is overspent', () => {
+    const transactions = [{ categoryId: 1, amount: 8, type: 'expense', date: iso(new Date()) }];
+    expect(getPacedPeriodStatus(paced(), transactions, cycle()).left).toBe(-3);
+  });
+
+  it('tiles weeks from the cycle start, not the calendar week', () => {
+    // Cycle started 10 days ago: day 7 begins the second week, so today (day 11)
+    // sits in the window running from 7 days after the start.
+    const weekly = paced({ pacedAllowanceAmount: 50, pacedAllowanceUnit: 'week' });
+    const transactions = [
+      { categoryId: 1, amount: 12, type: 'expense', date: iso(addDays(new Date(), -2)) }, // day 9 — this week
+      { categoryId: 1, amount: 30, type: 'expense', date: iso(addDays(new Date(), -8)) }, // day 3 — last week
+    ];
+
+    const status = getPacedPeriodStatus(weekly, transactions, cycle(30, 10));
+
+    expect(status.days).toBe(7);
+    expect(status.start.getTime()).toBe(startOfDay(addDays(new Date(), -3)).getTime());
+    expect(status.spent).toBe(12);
+    expect(status.left).toBe(38);
+    expect(status.scopeLabel).toBe('this week');
+  });
+
+  it('prorates the stub period the cycle ends on', () => {
+    // A 30-day cycle holds four whole weeks and two days. On day 29 the current
+    // window is those two days, worth 2/7 of a week.
+    const weekly = paced({ pacedAllowanceAmount: 70, pacedAllowanceUnit: 'week' });
+
+    const status = getPacedPeriodStatus(weekly, [], cycle(30, 29));
+
+    expect(status.days).toBe(2);
+    expect(status.prorated).toBe(true);
+    expect(status.allowance).toBe(20);
+    expect(status.left).toBe(20);
+  });
+
+  it('names a multi-interval pace generically', () => {
+    const status = getPacedPeriodStatus(
+      paced({ pacedAllowanceInterval: 3, pacedAllowanceAmount: 15 }), [], cycle(),
+    );
+    expect(status.periodLabel).toBe('3 days');
+    expect(status.scopeLabel).toBe('this period');
+    expect(status.allowance).toBe(15);
   });
 });
 

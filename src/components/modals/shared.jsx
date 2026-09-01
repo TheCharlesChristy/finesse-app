@@ -223,7 +223,7 @@ export function IncomeAllocationEditor({
               No funding sources selected.
             </div>
           ) : (
-            <div style={{
+            <div className="scroll-region" style={{
               display: 'flex',
               flexDirection: 'column',
               gap: 8,

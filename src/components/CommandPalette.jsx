@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { ArrowRight, Search } from 'lucide-react';
 
 import { fmt } from '../utils';
+import { useScrollLock } from './useScrollLock';
 
 /**
  * Keyboard-first way to reach anything: jump to a view, start an action, or
@@ -15,6 +16,8 @@ export default function CommandPalette({ onClose, commands = [], transactions = 
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef(null);
   const restoreRef = useRef(null);
+
+  useScrollLock();
 
   const catMap = useMemo(
     () => new Map(categories.map(category => [Number(category.id), category])),
@@ -78,8 +81,7 @@ export default function CommandPalette({ onClose, commands = [], transactions = 
   };
 
   return createPortal(
-    <div className="modal-overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}
-      style={{ alignItems: 'flex-start', paddingTop: '12vh' }}>
+    <div className="modal-overlay command-palette-overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
       <div className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette">
         <div className="command-palette-search">
           <Search size={15} aria-hidden="true" style={{ color: 'var(--text-muted)', flexShrink: 0 }} />

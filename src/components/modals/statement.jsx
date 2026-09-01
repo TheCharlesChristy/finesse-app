@@ -294,7 +294,7 @@ export function ImportStatementModal({
           </div>
         )}
 
-        <div style={{ maxHeight: 340, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className="scroll-region" style={{ maxHeight: 340, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
           {rows.map(row => {
             const invalid = row.status === ROW_INVALID;
             const style = STATUS_STYLES[row.status];

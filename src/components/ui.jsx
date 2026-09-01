@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef } from 'react';
 import { X } from 'lucide-react';
 
+import { useScrollLock } from './useScrollLock';
+
 // ── Focus management ──────────────────────────────────────────────────────────
 const FOCUSABLE = [
   'a[href]', 'button:not([disabled])', 'textarea:not([disabled])',
@@ -22,6 +24,8 @@ export function Modal({ title, subtitle, onClose, children, maxWidth, headerExtr
   const restoreRef = useRef(null);
   const onCloseRef = useRef(onClose);
   const titleId = useId();
+
+  useScrollLock();
 
   // Keep the ref current so the stable event listener always calls the latest onClose.
   useEffect(() => { onCloseRef.current = onClose; });

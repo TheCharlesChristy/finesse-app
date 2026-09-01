@@ -12,6 +12,7 @@ import {
   getNormalisedCategoryAllowance,
   getNormalisedIncomeTotal,
   getPacedAllowanceStatus,
+  getPacedPeriodStatus,
   getUpcomingSubscriptionCost,
   hasMixedIncomeFrequencies,
   normalizeIncomeAllocations,
@@ -21,7 +22,7 @@ import {
   getSafeToSpend,
   isRefund,
 } from '../utils';
-import { format } from 'date-fns';
+import { addDays, format } from 'date-fns';
 import { CardTitle, IconButton } from '../components/ui';
 import Wizard from '../components/Wizard';
 
@@ -446,6 +447,9 @@ export default function Dashboard({
               // Both of these are cycle-bound, and this category's cycle follows
               // the income funding it — not the account-wide pay day.
               const catCycle = getCategoryCycle(cat, incomes, settings);
+              // What's left of *this* repeat — today's £5, this week's £50 —
+              // rather than the whole cycle the tags either side of it measure.
+              const pacedPeriod = pacedStatus ? getPacedPeriodStatus(cat, transactions, catCycle) : null;
               const catSubCost = getUpcomingSubscriptionCost(subscriptions, cat.id, settings, undefined, catCycle.end);
               const projectedLeft = roundMoney(left - catSubCost);
               const cumulativeOverspend = isRollover ? 0 : getCumulativeOverspend(cat.id, cat.allowance, transactions, {
@@ -537,6 +541,24 @@ export default function Dashboard({
                                 borderRadius: 10,
                               }}>
                                 {fmt(Math.max(0, pacedStatus.availablePerPeriod))}/{pacedStatus.periodLabel}
+                              </span>
+                            )}
+                            {pacedPeriod && (
+                              <span
+                                title={`${fmt(pacedPeriod.allowance)} for ${format(pacedPeriod.start, 'd MMM')}`
+                                  + (pacedPeriod.days > 1 ? ` – ${format(addDays(pacedPeriod.end, -1), 'd MMM')}` : '')
+                                  + (pacedPeriod.prorated ? ` (part of a ${pacedPeriod.periodLabel}, the cycle ends first)` : '')
+                                  + ` · ${fmt(pacedPeriod.spent)} spent`}
+                                style={{
+                                  fontSize: 10,
+                                  color: pacedPeriod.left > 0.005 ? 'var(--good)' : pacedPeriod.left < -0.005 ? 'var(--danger)' : 'var(--warn)',
+                                  background: pacedPeriod.left > 0.005 ? 'rgba(79,255,176,0.12)' : pacedPeriod.left < -0.005 ? 'rgba(255,107,138,0.1)' : 'rgba(251,191,112,0.12)',
+                                  padding: '1px 6px',
+                                  borderRadius: 10,
+                                }}>
+                                {pacedPeriod.left >= -0.005
+                                  ? `${fmt(Math.max(0, pacedPeriod.left))} left ${pacedPeriod.scopeLabel}`
+                                  : `${fmt(Math.abs(pacedPeriod.left))} over ${pacedPeriod.scopeLabel}`}
                               </span>
                             )}
                             {pacedStatus && pacedStatus.paceBalance !== 0 && (
@@ -654,7 +676,7 @@ export default function Dashboard({
       {recentTxs.length > 0 && (
         <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
           <CardTitle as="h2" style={{ marginBottom: 14 }}>Recent Transactions</CardTitle>
-          <div style={{ maxHeight: 400, overflowY: 'auto', paddingRight: 4, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div className="scroll-region" style={{ maxHeight: 400, overflowY: 'auto', paddingRight: 4, display: 'flex', flexDirection: 'column', gap: 10 }}>
             {recentTxs.map(tx => {
               const refund = isRefund(tx);
               return (

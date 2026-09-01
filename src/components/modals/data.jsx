@@ -71,7 +71,7 @@ export function ExportChatSummaryOptionsModal({ schema, onConfirm, onClose }) {
     <Modal title="Chat Summary Export"
       subtitle="Choose what to include. Free-text fields are unchecked by default since they may contain personal detail."
       onClose={onClose}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxHeight: '55vh', overflowY: 'auto', paddingRight: 4 }}>
+      <div className="scroll-region" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxHeight: '55vh', overflowY: 'auto', paddingRight: 4 }}>
         {tableEntries.map(([table, fields]) => {
           const allKeys = fields.map(f => f.key);
           const selected = selection.tables[table] || [];

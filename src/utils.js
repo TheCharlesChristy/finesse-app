@@ -415,6 +415,84 @@ export function getPacedAllowanceStatus(category, date = new Date(), cycleDays =
   };
 }
 
+// "today" and "this week" read better on a 10px tag than "day" and "week", and
+// a pace that repeats every 3 days has no natural word at all.
+function pacedPeriodScope(interval = 1, unit = 'day') {
+  if (Math.max(1, Number(interval) || 1) !== 1) return 'this period';
+  if (unit === 'week') return 'this week';
+  if (unit === 'month') return 'this month';
+  return 'today';
+}
+
+/**
+ * What is left of the *current* repeat period for a paced category.
+ *
+ * `getPacedAllowanceStatus` answers "how am I doing against this cycle" — a
+ * whole month at a time. This answers the smaller question a pace was set up to
+ * ask: of the £5 I gave myself for today, how much is still there?
+ *
+ * Periods tile forward from the start of the cycle funding the category rather
+ * than from the calendar, so a category paid on a Monday starts its weeks on a
+ * Monday. The last one is normally a stub — a 31-day cycle holds four whole
+ * weeks and three days — and its allowance is prorated to the days it actually
+ * covers: offering a full week's money for the three days before pay day would
+ * invite exactly the overspend a pace exists to prevent.
+ *
+ * Spend is read from the transaction log rather than `category.spent`, which is
+ * a per-cycle counter and cannot answer a question about part of a cycle.
+ * Refunds credit back through `getSignedAmount`.
+ *
+ * Returns null for a category with no pace, or with no usable cycle.
+ */
+export function getPacedPeriodStatus(category, transactions = [], cycle = null, now = new Date()) {
+  const config = getPacedAllowanceConfig(category);
+  if (!config) return null;
+
+  const cycleStart = toValidDate(cycle?.start);
+  const cycleEnd = toValidDate(cycle?.end);
+  if (!cycleStart || !cycleEnd) return null;
+
+  const firstStart = startOfDay(cycleStart);
+  const lastEnd = startOfDay(cycleEnd);
+  if (!(lastEnd > firstStart)) return null;
+
+  const today = startOfDay(now);
+  let start = firstStart;
+  let end = startOfDay(addRecurringInterval(start, config.unit, config.interval));
+  let guard = 0;
+  while (end <= today && end < lastEnd && guard < 400) {
+    start = end;
+    end = startOfDay(addRecurringInterval(start, config.unit, config.interval));
+    guard += 1;
+  }
+  if (end > lastEnd) end = lastEnd;
+
+  const intervalDays = getPacedAllowanceIntervalDays(config.interval, config.unit, start);
+  const days = Math.max(1, differenceInDays(end, start));
+  const allowance = roundMoney(config.amount * Math.min(1, days / intervalDays));
+
+  const spent = roundMoney(transactions.reduce((total, transaction) => {
+    if (Number(transaction?.categoryId) !== Number(category?.id)) return total;
+    const date = toValidDate(transaction?.date);
+    if (!date || date < start || date >= end) return total;
+    return total + getSignedAmount(transaction);
+  }, 0));
+
+  return {
+    start,
+    end,
+    days,
+    intervalDays,
+    amount: config.amount,
+    allowance,
+    spent,
+    left: roundMoney(allowance - spent),
+    prorated: days < intervalDays,
+    periodLabel: formatPacedAllowancePeriod(config.interval, config.unit),
+    scopeLabel: pacedPeriodScope(config.interval, config.unit),
+  };
+}
+
 // ── Formula evaluation ───────────────────────────────────────────────────────
 
 /**

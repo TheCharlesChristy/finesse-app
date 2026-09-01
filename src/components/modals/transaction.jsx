@@ -473,7 +473,7 @@ export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCatego
           <div>Date</div>
           <div />
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
+        <div className="scroll-region" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
           {rows.map((row, index) => (
             <div key={index} className="bulk-expense-row">
               <input className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={row.amount}
