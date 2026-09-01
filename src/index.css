@@ -586,6 +586,15 @@ html[data-theme="light"] .privacy-veil {
     #dde6f5;
 }
 
+/* The dialog scrolls, the overlay does not.
+   Both used to: the box capped itself against the viewport while the overlay
+   scrolled whatever spilled out. On a phone that cap ignored the safe-area
+   padding the overlay was carrying, so the box was always taller than the space
+   it had — and a flex container drops its bottom padding in the overflow it
+   scrolls, so the last inch of a tall modal (which is where the buttons are)
+   could not be reached at all. Capping the box at the overlay's *content* box
+   means it can never overflow, which removes the second scroll container, the
+   dropped padding and the unreachable footer together. */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -596,6 +605,7 @@ html[data-theme="light"] .privacy-veil {
   align-items: center;
   justify-content: center;
   padding: 20px;
+  overflow: hidden;
   animation: fadeIn 0.2s ease;
 }
 .modal-box {
@@ -606,9 +616,21 @@ html[data-theme="light"] .privacy-veil {
   box-shadow: 0 40px 80px rgba(0,0,0,0.5), 0 1px 0 rgba(255,255,255,0.1) inset;
   width: 100%;
   max-width: 480px;
-  max-height: 90vh;
+  /* 100% is the overlay minus its padding; 90vh keeps the desktop proportions. */
+  max-height: min(90vh, 100%);
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 28px;
+}
+
+/* A list that scrolls inside something else — a dialog, or a card on a page.
+   Sized for a desktop window and released below 620px: a scroll box inside a
+   scroll box on a phone swallows the gesture and hides everything after it
+   behind a window a couple of rows tall. */
+.scroll-region {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* ── Quick add (floating action button) ─────────────────────────────────── */
@@ -669,9 +691,19 @@ html[data-theme="light"] .privacy-veil {
 }
 
 /* ── Command palette ────────────────────────────────────────────────────── */
+/* Sits below the top of the screen rather than centred — the results list grows
+   downwards, and a centred palette would shift under the typing. The offset is
+   a class rather than an inline style so the phone can have a smaller one. */
+.command-palette-overlay {
+  align-items: flex-start;
+  padding-top: calc(12vh + var(--safe-area-top));
+}
 .command-palette {
   width: 100%;
   max-width: 560px;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
   background: rgba(18, 26, 48, 0.97);
   backdrop-filter: blur(30px);
   -webkit-backdrop-filter: blur(30px);
@@ -707,7 +739,27 @@ html[data-theme="light"] .privacy-veil {
   border: 1px solid rgba(255,255,255,0.1);
   flex-shrink: 0;
 }
-.command-palette-results { max-height: 52vh; overflow-y: auto; }
+.command-palette-results {
+  max-height: 52vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* On a phone the palette is nearly the whole screen already, so let the results
+   take whatever the search row leaves rather than a fixed slice of the viewport
+   — 52vh plus a 12vh offset plus the search row overflows a short screen, and
+   an overlay that no longer scrolls would simply clip the tail off. */
+@media (max-width: 620px) {
+  .command-palette-overlay {
+    padding-top: calc(6vh + var(--safe-area-top));
+  }
+  .command-palette-results {
+    max-height: none;
+    flex: 1;
+    min-height: 0;
+  }
+}
 .command-palette-item {
   width: 100%;
   display: flex;
@@ -914,13 +966,22 @@ html[data-theme="light"] .privacy-veil {
     align-items: flex-start;
     justify-content: center;
     padding: calc(10px + var(--safe-area-top)) calc(10px + var(--safe-area-right)) calc(10px + var(--safe-area-bottom)) calc(10px + var(--safe-area-left));
-    overflow-y: auto;
   }
 
   .modal-box {
-    max-height: calc(100dvh - 20px);
+    /* The full height the overlay's padding leaves — safe areas already
+       subtracted, so nothing lands under the notch or the home indicator. */
+    max-height: 100%;
     padding: 18px !important;
     border-radius: 16px;
+  }
+
+  /* One scroll container per screen: the dialog, or the page. Whatever follows
+     the list stays reachable however long the list gets. */
+  .scroll-region {
+    max-height: none !important;
+    overflow-y: visible !important;
+    padding-right: 0 !important;
   }
 
   .modal-box > div:first-child {

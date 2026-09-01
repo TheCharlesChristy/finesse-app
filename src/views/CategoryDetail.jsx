@@ -8,6 +8,7 @@ import {
   getCumulativeOverspend,
   getEffectiveAllowance,
   getMerchantBreakdown,
+  getPacedPeriodStatus,
   getSignedAmount,
   getUpcomingSubscriptionCost,
   isRefund,
@@ -86,6 +87,10 @@ export default function CategoryDetail({
     anchor: cycle?.start,
   });
   const perDay = cycle && cycle.remaining > 0 ? roundMoney(Math.max(0, left - upcomingSubs) / cycle.remaining) : 0;
+  // A rollover category accumulates rather than resetting, so a pace measured
+  // against one repeat says nothing useful about it — same call the Dashboard
+  // tags make.
+  const pacedPeriod = category.rolloverEnabled ? null : getPacedPeriodStatus(category, transactions, cycle);
 
   const stat = (label, value, hint, color) => (
     <div className="glass" style={{ borderRadius: 14, padding: '15px 16px' }}>
@@ -133,6 +138,12 @@ export default function CategoryDetail({
 
       <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
         {stat('Left this cycle', fmt(left), `of ${fmt(allowance)}`, left < 0 ? 'var(--danger)' : 'var(--text-primary)')}
+        {pacedPeriod && stat(
+          `Left ${pacedPeriod.scopeLabel}`,
+          fmt(pacedPeriod.left),
+          `of ${fmt(pacedPeriod.allowance)}${pacedPeriod.prorated ? ` — a part ${pacedPeriod.periodLabel}` : ` per ${pacedPeriod.periodLabel}`}`,
+          pacedPeriod.left < 0 ? 'var(--danger)' : 'var(--good)',
+        )}
         {stat('Spent', fmt(spent), `${thisCycle.length} transaction${thisCycle.length === 1 ? '' : 's'}`)}
         {stat('Safe per day', fmt(perDay), cycle ? `for ${cycle.remaining} more day${cycle.remaining === 1 ? '' : 's'}` : '—', 'var(--good)')}
         {upcomingSubs > 0 && stat('Subscriptions due', fmt(upcomingSubs), 'before the next reset', 'var(--accent-purple)')}
@@ -201,7 +212,7 @@ export default function CategoryDetail({
             Nothing logged in this category yet.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 7, maxHeight: 420, overflowY: 'auto', paddingRight: 4 }}>
+          <div className="scroll-region" style={{ display: 'flex', flexDirection: 'column', gap: 7, maxHeight: 420, overflowY: 'auto', paddingRight: 4 }}>
             {categoryTransactions.slice(0, 60).map(tx => {
               const inCycle = cycle && new Date(tx.date) >= cycle.start && new Date(tx.date) < cycle.end;
               const refund = isRefund(tx);

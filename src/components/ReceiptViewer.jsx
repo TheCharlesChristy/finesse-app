@@ -1,6 +1,7 @@
 import { Receipt, X } from 'lucide-react';
 
 import { useBlobUrl } from './useBlobUrl';
+import { useScrollLock } from './useScrollLock';
 import { hasReceipt } from '../receipts';
 
 /**
@@ -47,11 +48,16 @@ export function ReceiptViewer({ transaction, onClose }) {
   const url = useBlobUrl(transaction?.receipt || transaction?.receiptThumb || null,
     transaction?.receiptMeta?.type);
 
+  useScrollLock();
+
   return (
     <div
       className="modal-overlay"
       onMouseDown={e => e.target === e.currentTarget && onClose()}
-      style={{ padding: 16, zIndex: 60 }}
+      style={{
+        padding: 'calc(16px + var(--safe-area-top)) calc(16px + var(--safe-area-right)) calc(16px + var(--safe-area-bottom)) calc(16px + var(--safe-area-left))',
+        zIndex: 60,
+      }}
     >
       <div
         role="dialog"

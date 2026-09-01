@@ -381,6 +381,14 @@ theirs to say. `buildNudges` names any rows already in that state.
 Compare to the penny (`0.005`), never exactly: a pace divides through a cycle
 length, and an exact test rewrites the row on float noise.
 
+`getPacedPeriodStatus` reads the *current repeat* of a pace — what is left of
+today's £5, or this week's £50 — as against `getPacedAllowanceStatus`, which
+measures the whole cycle. It writes nothing. Periods tile forward from the
+funding cycle's start rather than the calendar, and the stub the cycle ends on
+is prorated to the days it covers; spend comes from the transaction log, because
+`category.spent` is a per-cycle counter and cannot answer a question about part
+of a cycle.
+
 ### Schema changes
 
 If you change the Dexie schema, increment the version number and add a new `db.version(N).stores({...})` call. Do not modify the existing `version(1)` call. See DEV_GUIDE.md for the migration pattern. The current version is **9**.
@@ -427,6 +435,31 @@ So the rule sets `flex: 0 0 auto` on every child, which is what a stacked row
 wants anyway — `align-items: stretch` already gives each child the full width,
 and the height should come from the content. **If you add a `.mobile-row-stack`,
 size its children for the row case and let the media query handle the column.**
+
+### One scroll container per screen
+
+A dialog scrolls; the overlay behind it does not, and neither does the page
+behind that. `.modal-box` is capped at `min(90vh, 100%)` — `100%` being the
+overlay's *content* box, safe-area padding already subtracted — so it can never
+overflow the overlay and the overlay never needs a scrollbar of its own.
+
+That cap used to be `calc(100dvh - 20px)`, which ignored the safe-area insets
+the overlay was carrying. On a notched iPhone the box came out 81px taller than
+the space it had, the overlay scrolled to make up the difference, and a flex
+container drops its bottom padding in the overflow it scrolls — so the footer of
+a tall modal sat below the fold with nothing left to scroll to reach it.
+
+Two rules follow:
+
+- **A list that scrolls inside something else gets `.scroll-region`,** which
+  releases its `max-height` below 620px. A scroll box inside a scroll box on a
+  phone swallows the gesture and hides everything after it. This applies to
+  cards on a page as much as to dialogs.
+- **Every overlay calls `useScrollLock`.** `overflow: hidden` on the body is not
+  enough on iOS; the page is pinned with `position: fixed` at its current offset
+  and restored on release. The count is shared, because these nest — a receipt
+  viewer opened from inside the transaction modal must not hand the page back
+  when it alone closes.
 
 ---
 
