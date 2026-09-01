@@ -796,6 +796,46 @@ describe('goals', () => {
     expect(getGoalCommitment([taken], incomes)).toBe(0);
   });
 
+  // Both reset paths stamp `lastAutoContributeAt` with the same timestamp they
+  // write to `lastPaid`, so the contribution lands exactly on the cycle start.
+  // Reconstructing that start instead of reading it used to put it a day late in
+  // a 31-day month, and the goal was charged for twice. Fixed dates, because the
+  // whole point is a month that does not match the average.
+  it('sees a contribution stamped on the pay day itself', () => {
+    const lastPaid = '2026-08-25T00:00:00.000Z';
+    const incomes = [{
+      id: 10, name: 'Salary', amount: 2000,
+      resetFrequency: 'monthly', payDayOfMonth: 25, lastPaid,
+    }];
+    const goal = {
+      target: 1000, saved: 100, perCycleContribution: 100,
+      incomeId: 10, lastAutoContributeAt: lastPaid,
+    };
+
+    expect(getGoalCommitment([goal], incomes)).toBe(0);
+  });
+
+  it('still charges for a contribution belonging to the previous pay event', () => {
+    const incomes = [{
+      id: 10, name: 'Salary', amount: 2000,
+      resetFrequency: 'monthly', payDayOfMonth: 25,
+      lastPaid: '2026-08-25T00:00:00.000Z',
+    }];
+    const goal = {
+      target: 1000, saved: 100, perCycleContribution: 100,
+      incomeId: 10, lastAutoContributeAt: '2026-07-25T00:00:00.000Z',
+    };
+
+    expect(getGoalCommitment([goal], incomes)).toBe(100);
+  });
+
+  it('treats an income that has never been paid as still pending', () => {
+    const incomes = [{ id: 10, name: 'Salary', amount: 2000, resetFrequency: 'monthly', payDayOfMonth: 25 }];
+    const goal = { target: 1000, saved: 0, perCycleContribution: 100, incomeId: 10 };
+
+    expect(getGoalCommitment([goal], incomes)).toBe(100);
+  });
+
   it('never commits more than the goal still needs, and skips finished goals', () => {
     const incomes = [makeIncome({ id: 10 })];
     expect(getGoalCommitment([{ target: 100, saved: 80, perCycleContribution: 100, incomeId: 10 }], incomes)).toBe(20);

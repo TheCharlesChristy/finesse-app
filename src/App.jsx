@@ -1385,7 +1385,7 @@ export default function App() {
               incomes={incomes}
               subscriptions={subscriptions}
               variables={variables}
-              goalCommitment={getGoalCommitment(goals, incomes, settings)}
+              goalCommitment={getGoalCommitment(goals, incomes)}
               onAddTx={() => setModal('addTx')}
               onAddCategory={() => setModal('addCategory')}
               onAddIncome={() => setModal('addIncome')}

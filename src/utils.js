@@ -1479,8 +1479,23 @@ export function isGoalOffTrack(goal, incomes = [], now = new Date()) {
  * Only counts goals that haven't yet had this cycle's contribution taken —
  * money already moved into a goal has left the spendable pool once, and
  * charging for it twice would understate what's actually free.
+ *
+ * "Already taken" is answered against the income's own `lastPaid`, not against
+ * a reconstructed cycle. Both reset paths stamp `lastAutoContributeAt` with the
+ * very timestamp they write to `lastPaid` — the scheduled one in
+ * `runDueIncomeResets`, the early one in `handleIncomeFastForward` — so the two
+ * are directly comparable, and `lastAutoContributeAt` is written by nothing
+ * else (a manual `contributeToGoal` touches only `lastContributedAt`).
+ *
+ * This used to derive the cycle start by handing `getCategoryCycle` a synthetic
+ * category, which has no `lastReset` and so fell through to its guess of "the
+ * end, minus an average cycle". For an income paid on the 25th that guess lands
+ * on the 26th of a 31-day month — one day *after* the real cycle start, and
+ * therefore after the contribution stamped on the pay day itself. The goal read
+ * as still pending and safe-to-spend was quietly short by a whole cycle's
+ * savings, every month that ran 31 days.
  */
-export function getGoalCommitment(goals = [], incomes = [], settings = null, now = new Date()) {
+export function getGoalCommitment(goals = [], incomes = []) {
   let total = 0;
 
   for (const goal of goals) {
@@ -1491,15 +1506,9 @@ export function getGoalCommitment(goals = [], incomes = [], settings = null, now
     if (complete) continue;
 
     const income = incomes.find(item => Number(item.id) === Number(goal.incomeId));
-    if (income) {
-      // Already taken for this cycle? Then it's no longer pending.
-      const cycle = getCategoryCycle(
-        { incomeAllocations: [{ incomeId: Number(goal.incomeId), percent: 100 }] },
-        incomes, settings, now,
-      );
-      const lastTaken = toValidDate(goal.lastAutoContributeAt);
-      if (lastTaken && lastTaken >= cycle.start) continue;
-    }
+    const paidAt = toValidDate(income?.lastPaid);
+    const lastTaken = toValidDate(goal.lastAutoContributeAt);
+    if (paidAt && lastTaken && lastTaken >= paidAt) continue;
 
     total = roundMoney(total + Math.min(perCycle, remaining));
   }
