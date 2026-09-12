@@ -10,8 +10,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildDedupeKey, buildImportRows, detectDelimiter, guessColumnMapping,
-  inferClosingBalance, normaliseDescription, parseAmount, parseCsv,
-  parseStatementDate, reconcile, summariseRows, toTransactionPayload,
+  hasUsableTextLayer, inferClosingBalance, normaliseDescription, parseAmount, parseCsv,
+  parseStatementDate, parseStatementText, reconcile, similarDescriptions, summariseRows,
+  toTransactionPayload,
   ROW_DUPLICATE, ROW_INVALID, ROW_NEW, ROW_SIMILAR,
 } from '../csv';
 
@@ -296,6 +297,64 @@ describe('buildImportRows', () => {
 
     expect(rows[0].categoryId).toBe(3);
   });
+
+  it('flags a same-amount row a few days apart as similar, not a silent duplicate', () => {
+    const rows = buildImportRows({
+      rows: [['08/01/2026', 'TESCO STORES 3294', '-12.40']],
+      mapping,
+      // Logged the day of the purchase; the card statement posts it three
+      // days later — the classic clearing-lag case.
+      existingTransactions: [
+        { date: '2026-01-05T12:00:00.000Z', amount: 12.4, merchant: 'Tesco', type: 'expense' },
+      ],
+    });
+
+    expect(rows[0].status).toBe(ROW_SIMILAR);
+    expect(rows[0].include).toBe(true);
+    expect(rows[0].dateDrift).toBe(3);
+    expect(rows[0].problem).toMatch(/3 days earlier/);
+  });
+
+  it('never auto-excludes a cross-date match, even with a matching description', () => {
+    // A daily coffee at the same place for the same price is real, recurring
+    // spend — not a duplicate import — so it must stay selected by default.
+    const rows = buildImportRows({
+      rows: [['03/01/2026', 'Costa Coffee', '-3.20']],
+      mapping,
+      existingTransactions: [
+        { date: '2026-01-01T12:00:00.000Z', amount: 3.2, merchant: 'Costa Coffee', type: 'expense' },
+      ],
+    });
+
+    expect(rows[0].status).toBe(ROW_SIMILAR);
+    expect(rows[0].include).toBe(true);
+  });
+
+  it('leaves a same-amount row outside the tolerance window untouched', () => {
+    const rows = buildImportRows({
+      rows: [['20/01/2026', 'Tesco', '-12.40']],
+      mapping,
+      dateToleranceDays: 3,
+      existingTransactions: [
+        { date: '2026-01-05T12:00:00.000Z', amount: 12.4, merchant: 'Tesco', type: 'expense' },
+      ],
+    });
+
+    expect(rows[0].status).toBe(ROW_NEW);
+  });
+
+  it('can have the tolerance window switched off entirely', () => {
+    const rows = buildImportRows({
+      rows: [['06/01/2026', 'Tesco', '-12.40']],
+      mapping,
+      dateToleranceDays: 0,
+      existingTransactions: [
+        { date: '2026-01-05T12:00:00.000Z', amount: 12.4, merchant: 'Tesco', type: 'expense' },
+      ],
+    });
+
+    expect(rows[0].status).toBe(ROW_NEW);
+  });
 });
 
 describe('toTransactionPayload', () => {
@@ -519,5 +578,101 @@ describe('end to end, on statements shaped like real ones', () => {
     const total = payload.reduce((sum, tx) => sum + tx.amount, 0);
     // 1.5 + 2.5 + … + 28.5
     expect(total).toBeCloseTo(28 * (1.5 + 28.5) / 2, 2);
+  });
+});
+
+describe('similarDescriptions', () => {
+  it('matches a bank\'s verbose text against the user\'s own short note', () => {
+    expect(similarDescriptions('Tesco', 'TESCO STORES 3294 LONDON GB')).toBe(true);
+  });
+
+  it('matches on shared words even without a clean substring', () => {
+    expect(similarDescriptions('Amazon Prime', 'AMAZON PRIME*2K3F9')).toBe(true);
+  });
+
+  it('does not match unrelated merchants', () => {
+    expect(similarDescriptions('Tesco', 'Shell Petrol Station')).toBe(false);
+  });
+
+  it('treats an empty description as no match either way', () => {
+    expect(similarDescriptions('', 'Tesco')).toBe(false);
+    expect(similarDescriptions('Tesco', '')).toBe(false);
+  });
+});
+
+describe('hasUsableTextLayer', () => {
+  it('accepts a page with real extracted text', () => {
+    expect(hasUsableTextLayer('05/01/2026 TESCO STORES 12.40 987.60')).toBe(true);
+  });
+
+  it('rejects a blank or near-blank page — a scan with no text layer', () => {
+    expect(hasUsableTextLayer('')).toBe(false);
+    expect(hasUsableTextLayer('   \n  \n')).toBe(false);
+    expect(hasUsableTextLayer('a b')).toBe(false);
+  });
+});
+
+describe('parseStatementText', () => {
+  it('reads a simple ledger line: date, description, trailing amount', () => {
+    const { rows, mapping } = parseStatementText('05/01/2026 TESCO STORES 12.40');
+    expect(rows).toEqual([['05/01/2026', 'TESCO STORES', '12.40', '']]);
+    expect(mapping).toEqual({ date: 0, description: 1, amount: 2, debit: null, credit: null, balance: 3 });
+  });
+
+  it('takes two trailing numbers as amount then running balance', () => {
+    const { rows } = parseStatementText('05/01/2026 TESCO STORES 12.40 987.60');
+    expect(rows[0]).toEqual(['05/01/2026', 'TESCO STORES', '12.40', '987.60']);
+  });
+
+  it('drops header lines that appear before the first date', () => {
+    const text = [
+      'Account: 12345678',
+      'Statement period: Jan 2026',
+      '05/01/2026 TESCO STORES 12.40',
+    ].join('\n');
+    const { rows } = parseStatementText(text);
+    expect(rows).toHaveLength(1);
+  });
+
+  it('folds a wrapped description onto the transaction it belongs to', () => {
+    const text = [
+      '05/01/2026 CARD PAYMENT TO',
+      'TESCO STORES 3294 12.40',
+    ].join('\n');
+    const { rows } = parseStatementText(text);
+    expect(rows).toHaveLength(1);
+    expect(rows[0][1]).toBe('CARD PAYMENT TO TESCO STORES 3294');
+    expect(rows[0][2]).toBe('12.40');
+  });
+
+  it('keeps the earlier of two dates on a line — transaction date over posting date', () => {
+    const { rows } = parseStatementText('01/09/2026 03/09/2026 TESCO STORES 12.40');
+    expect(rows[0][0]).toBe('01/09/2026');
+    expect(rows[0][1]).toBe('TESCO STORES');
+  });
+
+  it('turns a trailing CR marker into a credit, and DR into a debit', () => {
+    const text = [
+      '05/01/2026 SALARY 1500.00 CR',
+      '06/01/2026 TESCO STORES 12.40 DR',
+    ].join('\n');
+    const { rows, mapping } = parseStatementText(text);
+
+    const built = buildImportRows({ rows, mapping });
+    expect(built[0]).toMatchObject({ amount: 1500, type: 'refund' });
+    expect(built[1]).toMatchObject({ amount: 12.4, type: 'expense' });
+  });
+
+  it('feeds straight into buildImportRows like a CSV would', () => {
+    const { rows, mapping } = parseStatementText('05/01/2026 TESCO STORES -12.40 987.60');
+    const built = buildImportRows({ rows, mapping, defaultCategoryId: 1 });
+    expect(built[0]).toMatchObject({
+      date: '2026-01-05', description: 'TESCO STORES', amount: 12.4, type: 'expense', balance: 987.6,
+    });
+  });
+
+  it('returns nothing for text with no dated lines at all', () => {
+    const { rows } = parseStatementText('This is not a bank statement.');
+    expect(rows).toEqual([]);
   });
 });

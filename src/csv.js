@@ -300,6 +300,123 @@ export function guessColumnMapping(headers = []) {
   return mapping;
 }
 
+// ── Free-form statement text (OCR / a PDF's own text layer) ─────────────────
+
+const LEADING_DATE_PATTERNS = [
+  /^(\d{4}-\d{1,2}-\d{1,2})\b/,
+  /^(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\b/,
+  /^(\d{1,2}\s*[A-Za-z]{3,9}\s*\d{2,4})\b/,
+  /^([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4})\b/,
+];
+
+/** A leading date this line actually starts with, validated rather than guessed. */
+function matchLeadingDate(line, dayFirst) {
+  for (const pattern of LEADING_DATE_PATTERNS) {
+    const match = line.match(pattern);
+    if (match && parseStatementDate(match[1], { dayFirst })) {
+      return { raw: match[1], rest: line.slice(match[0].length).trim() };
+    }
+  }
+  return null;
+}
+
+// A trailing money amount: optional currency/sign/parenthesis, digits grouped
+// with commas, exactly two decimal places, and an optional CR/DR marker.
+const MONEY_TOKEN = /[£$€]?\(?-?\d[\d,]*\.\d{2}\)?\s*(?:CR|DR)?/gi;
+
+function findMoneyTokens(text) {
+  return [...text.matchAll(MONEY_TOKEN)].map(match => ({ raw: match[0], index: match.index }));
+}
+
+/** Fold a trailing "CR"/"DR" marker into the sign `parseAmount` understands. */
+function normaliseMoneyToken(token = '') {
+  const match = token.match(/^(.*?)\s*(CR|DR)$/i);
+  if (!match) return token.trim();
+  let value = match[1].trim();
+  const direction = match[2].toUpperCase();
+  if (direction === 'DR' && !/^-/.test(value) && !/^\(/.test(value)) value = `-${value}`;
+  else if (direction === 'CR') value = value.replace(/^-/, '');
+  return value;
+}
+
+/**
+ * Turn free-form text into the same `{ rows, mapping }` shape a CSV produces,
+ * so both feed `buildImportRows` unchanged. The text comes from `ocr.js` —
+ * either a PDF's own text layer or a scanned page read by Tesseract — and
+ * neither preserves real columns: a transaction can land on one line or wrap
+ * onto the next, and column gaps collapse to arbitrary runs of whitespace.
+ *
+ * The one thing every bank statement layout agrees on is that a transaction
+ * line starts with a date and ends with an amount (often followed by a
+ * running balance), so that's what this looks for. Lines before the first
+ * date are header noise — account holder, statement period, opening balance —
+ * and are dropped rather than guessed at; everything else is either the start
+ * of a new transaction or the wrapped remainder of the one before it.
+ *
+ * A card statement that prints both the purchase date and the date it posted
+ * is worth naming specifically: the earlier of the two is kept, because it's
+ * the one closer to when the user is likely to have logged the purchase
+ * themselves — the later "posted" date is exactly the drift the caller's
+ * date-tolerant matching exists to absorb, so starting from the earlier date
+ * needs less of it.
+ *
+ * A line with three trailing numbers — separate money-out, money-in and
+ * balance columns, all printed even when one reads zero — will be misread:
+ * the last two are always taken as amount and balance. Statements shaped that
+ * way are rare enough, and a misread row can be fixed or dropped at review,
+ * that this isn't worth a configuration option.
+ */
+export function parseStatementText(text = '', { dayFirst = true } = {}) {
+  const lines = String(text)
+    .split(/\r?\n/)
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+
+  const candidates = [];
+  let current = null;
+
+  for (const line of lines) {
+    const dated = matchLeadingDate(line, dayFirst);
+    if (dated) {
+      if (current) candidates.push(current);
+      let { rest } = dated;
+      const second = matchLeadingDate(rest, dayFirst);
+      if (second) rest = second.rest;
+      current = { dateRaw: dated.raw, body: rest };
+    } else if (current) {
+      current.body = `${current.body} ${line}`.trim();
+    }
+  }
+  if (current) candidates.push(current);
+
+  const rows = candidates.map(({ dateRaw, body }) => {
+    const tokens = findMoneyTokens(body);
+    if (!tokens.length) return [dateRaw, body, '', ''];
+
+    const last = tokens[tokens.length - 1];
+    const secondLast = tokens.length >= 2 ? tokens[tokens.length - 2] : null;
+    const amountToken = secondLast || last;
+    const balanceToken = secondLast ? last : null;
+
+    return [
+      dateRaw,
+      body.slice(0, amountToken.index).trim(),
+      normaliseMoneyToken(amountToken.raw),
+      balanceToken ? normaliseMoneyToken(balanceToken.raw) : '',
+    ];
+  });
+
+  return {
+    rows,
+    mapping: { date: 0, description: 1, amount: 2, debit: null, credit: null, balance: 3 },
+  };
+}
+
+/** Whether extracted text has enough on it to skip OCR — a scanned page won't. */
+export function hasUsableTextLayer(text = '') {
+  return text.replace(/\s+/g, '').length >= 20;
+}
+
 // ── Row building ─────────────────────────────────────────────────────────────
 
 /** Strip the noise banks add so two spellings of one purchase compare equal. */
@@ -329,6 +446,38 @@ export function buildLooseKey({ date, amount }) {
   return `${day}|${Math.abs(Number(amount) || 0).toFixed(2)}`;
 }
 
+/**
+ * Whether two descriptions plausibly name the same purchase.
+ *
+ * A bank's own text and whatever the user typed rarely match byte-for-byte —
+ * "Tesco" against "TESCO STORES 3294 LONDON GB" — so exact equality is too
+ * strict a bar. A safe substring either way, or most of the words in common,
+ * is close enough. This never decides whether a row gets excluded on its own;
+ * see the date-tolerant pass in `buildImportRows` for why.
+ */
+export function similarDescriptions(a = '', b = '') {
+  const normA = normaliseDescription(a);
+  const normB = normaliseDescription(b);
+  if (!normA || !normB) return false;
+  if (normA === normB) return true;
+  if (normA.includes(normB) || normB.includes(normA)) return true;
+
+  const wordsA = normA.split(' ').filter(Boolean);
+  const wordsB = normB.split(' ').filter(Boolean);
+  if (!wordsA.length || !wordsB.length) return false;
+  const setB = new Set(wordsB);
+  const shared = wordsA.filter(word => setB.has(word)).length;
+  return shared / Math.min(wordsA.length, wordsB.length) >= 0.6;
+}
+
+/** Whole days between two `yyyy-MM-dd` strings, computed in UTC to dodge DST. */
+function daysBetween(a, b) {
+  const [ay, am, ad] = a.split('-').map(Number);
+  const [by, bm, bd] = b.split('-').map(Number);
+  const msPerDay = 86400000;
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / msPerDay);
+}
+
 export const ROW_NEW = 'new';
 export const ROW_DUPLICATE = 'duplicate';
 export const ROW_SIMILAR = 'similar';
@@ -345,6 +494,18 @@ export const ROW_INVALID = 'invalid';
  * `suggestCategory` is injected rather than imported so this module stays free
  * of the rules/history plumbing; the modal passes a closure over
  * `suggestCategoryForNote`.
+ *
+ * A bank doesn't post a transaction the day it happened — a card purchase
+ * clears a day or two later, a weekend purchase clears the following Monday,
+ * a direct debit can lag longer still. Matching only on the exact day, as the
+ * two dedupe keys above do, would miss all of that and quietly re-import
+ * every transaction the user already logged by hand. So a third pass looks
+ * for the same amount within `dateToleranceDays` of the statement date and
+ * flags it as `ROW_SIMILAR` — included by default, same as a same-day loose
+ * match, never auto-excluded. A same amount at the same merchant on nearby
+ * days is exactly what a recurring charge or a daily coffee habit looks like
+ * too, and silently dropping a real second transaction is worse than asking
+ * the user to glance at one that says "similar" and confirm it's new.
  */
 export function buildImportRows({
   rows = [],
@@ -354,13 +515,24 @@ export function buildImportRows({
   defaultCategoryId = null,
   dayFirst = true,
   invertSigns = false,
+  dateToleranceDays = 3,
 } = {}) {
   const exactKeys = new Set();
   const looseKeys = new Set();
+  const byAmount = new Map();
   for (const tx of existingTransactions) {
-    const entry = { date: tx.date, amount: tx.amount, description: tx.merchant || tx.note || '' };
+    const description = tx.merchant || tx.note || '';
+    const entry = { date: tx.date, amount: tx.amount, description };
     exactKeys.add(buildDedupeKey(entry));
     looseKeys.add(buildLooseKey(entry));
+
+    const day = tx.date ? String(tx.date).slice(0, 10) : null;
+    if (day && tx.amount != null) {
+      const amountKey = Math.abs(Number(tx.amount) || 0).toFixed(2);
+      const bucket = byAmount.get(amountKey);
+      if (bucket) bucket.push({ date: day, description });
+      else byAmount.set(amountKey, [{ date: day, description }]);
+    }
   }
 
   // Duplicates *within* the file matter too — a statement re-exported over an
@@ -423,6 +595,25 @@ export function buildImportRows({
       } else if (looseKeys.has(loose)) {
         row.status = ROW_SIMILAR;
         row.problem = 'Same day and amount as something already logged';
+      } else if (dateToleranceDays > 0) {
+        const candidates = byAmount.get(row.amount.toFixed(2));
+        let closest = null;
+        if (candidates) {
+          for (const candidate of candidates) {
+            const drift = Math.abs(daysBetween(date, candidate.date));
+            if (drift > 0 && drift <= dateToleranceDays && (!closest || drift < closest.drift)) {
+              closest = { drift, description: candidate.description };
+            }
+          }
+        }
+        if (closest) {
+          row.status = ROW_SIMILAR;
+          row.dateDrift = closest.drift;
+          const days = `${closest.drift} day${closest.drift === 1 ? '' : 's'}`;
+          row.problem = similarDescriptions(description, closest.description)
+            ? `Looks like it was logged ${days} earlier — probably the same purchase, clearing late`
+            : `Same amount as something logged ${days} apart`;
+        }
       }
       seenInFile.add(exact);
 

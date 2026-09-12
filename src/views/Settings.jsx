@@ -770,7 +770,7 @@ export default function Settings({
             <input type="file" accept=".json" onChange={handleFileImport} style={{ display: 'none' }} />
           </label>
           <button className="btn-secondary" onClick={onImportStatement} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-            <FileUp size={14} /> Import Bank Statement (.csv)
+            <FileUp size={14} /> Import Bank Statement
           </button>
         </div>
         <div style={{ color: settings?.lastBackupAt ? 'var(--text-muted)' : 'var(--warn)', fontSize: 11, marginTop: 10 }}>

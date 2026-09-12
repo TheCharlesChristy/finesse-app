@@ -1,14 +1,16 @@
-import { useMemo, useState } from 'react';
-import { AlertTriangle, ArrowLeft, Check, FileUp, Scale, Upload } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  AlertTriangle, ArrowLeft, Camera, Check, FileUp, Loader2, Scale, Upload,
+} from 'lucide-react';
 
 import { Modal, Field } from '../ui';
 import CategorySelect from '../CategorySelect';
 import {
-  buildImportRows, guessColumnMapping, inferClosingBalance, parseCsv, reconcile,
-  summariseRows, toTransactionPayload,
+  buildImportRows, guessColumnMapping, inferClosingBalance, parseAmount, parseCsv,
+  parseStatementText, reconcile, summariseRows, toTransactionPayload,
   ROW_DUPLICATE, ROW_INVALID, ROW_SIMILAR,
 } from '../../csv';
-import { fmt, suggestCategoryForNote } from '../../utils';
+import { fmt, suggestCategoryForNote, TX_EXPENSE, TX_REFUND } from '../../utils';
 
 const STATUS_STYLES = {
   duplicate: { label: 'Already logged', color: 'var(--text-muted)' },
@@ -43,13 +45,59 @@ function ColumnPicker({ label, headers, value, onChange, required }) {
 }
 
 /**
- * Import a bank statement: pick the file, confirm the columns, review the rows.
+ * The amount field needs its own local text, uncommitted until blur.
  *
- * The review step is the point of the whole thing. An import that silently
- * writes two hundred rows is indistinguishable from a bug when it gets
- * something wrong, so every row arrives with its resolved category, its
- * duplicate status and a checkbox — and nothing is written until the user has
- * seen the totals.
+ * It's a post-hoc override (see `buildImportRows` below) rather than a value
+ * threaded back through `parseAmount`, so nothing re-parses it keystroke by
+ * keystroke — a controlled input bound straight to the parsed number would
+ * otherwise reformat "12.50" down to "12.5" after the first new digit.
+ */
+function AmountField({ value, disabled, onCommit }) {
+  const [text, setText] = useState(() => (value == null ? '' : String(value)));
+  // Adjusting state during render (guarded, so it only fires the one extra
+  // render React expects) rather than in an effect — resetting the typed
+  // text when the committed value changes from outside shouldn't wait a tick.
+  const [lastValue, setLastValue] = useState(value);
+  if (value !== lastValue) {
+    setLastValue(value);
+    setText(value == null ? '' : String(value));
+  }
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      className="glass-input"
+      disabled={disabled}
+      value={text}
+      onChange={e => setText(e.target.value)}
+      onBlur={() => {
+        const parsed = parseAmount(text);
+        if (parsed != null) onCommit(Math.abs(parsed));
+        else setText(value == null ? '' : String(value));
+      }}
+      aria-label="Amount"
+      style={{ padding: '4px 6px', fontSize: 12, width: 64, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+    />
+  );
+}
+
+/**
+ * Import a bank statement: pick the file, confirm the columns (or skip
+ * straight past that for a photo/PDF), review the rows.
+ *
+ * Three ways in, one shared review. A CSV export goes through column mapping
+ * because its shape genuinely varies bank to bank; a photo, screenshot or PDF
+ * doesn't have columns to map in the first place — `ocr.js` and
+ * `parseStatementText` turn it into the same `{ rows, mapping }` shape a CSV
+ * produces, so everything downstream (dedupe, category suggestion, the review
+ * table) runs unchanged.
+ *
+ * The review step is the point of the whole thing, more so than ever with a
+ * source this noisy: every row's date, description and amount stays editable
+ * right up to import, because OCR misreads a character far more often than a
+ * bank's own CSV export does, and a row that can't be fixed is a row that
+ * can't be imported. Nothing is written until the user says so.
  */
 export function ImportStatementModal({
   categories = [],
@@ -60,15 +108,24 @@ export function ImportStatementModal({
   onImport,
   onClose,
 }) {
-  const [step, setStep] = useState('file');
+  const [step, setStep] = useState('file'); // file | extracting | map | review
   const [fileName, setFileName] = useState('');
-  const [parsed, setParsed] = useState(null);
+  const [headers, setHeaders] = useState([]); // non-empty only for a CSV source
+  const [parsedRows, setParsedRows] = useState(null);
   const [mapping, setMapping] = useState(null);
   const [dayFirst, setDayFirst] = useState(true);
   const [invertSigns, setInvertSigns] = useState(false);
+  const [dateToleranceDays, setDateToleranceDays] = useState(3);
   const [overrides, setOverrides] = useState({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(null);
+
+  // The OCR worker holds a real wasm heap open; there's no reason to keep it
+  // alive once this modal is gone.
+  useEffect(() => () => {
+    import('../../ocr').then(({ terminateOcr }) => terminateOcr()).catch(() => {});
+  }, []);
 
   // Rules and history are the app's, not this module's — hence a closure rather
   // than csv.js reaching for them itself.
@@ -76,24 +133,38 @@ export function ImportStatementModal({
     (text) => suggestCategoryForNote(text, { rules, transactions, categories })
   ), [rules, transactions, categories]);
 
-  // Derived on every render rather than stored: the mapping, the date order and
-  // the sign convention all change what every row means, and keeping rows in
-  // state would mean re-deriving them from three separate effects.
+  // Edits to date or description are folded back into the raw values *before*
+  // buildImportRows runs, so a corrected date re-enters dedupe and category
+  // suggestion properly rather than just changing what's displayed.
+  const effectiveRawRows = useMemo(() => {
+    if (!parsedRows || !mapping) return [];
+    return parsedRows.map((values, index) => {
+      const fields = overrides[index]?.fields;
+      if (!fields) return values;
+      const next = [...values];
+      if (fields.date != null && mapping.date != null) next[mapping.date] = fields.date;
+      if (fields.description != null && mapping.description != null) next[mapping.description] = fields.description;
+      return next;
+    });
+  }, [parsedRows, mapping, overrides]);
+
   const rows = useMemo(() => {
-    if (!parsed || !mapping) return [];
+    if (!effectiveRawRows.length || !mapping) return [];
     const built = buildImportRows({
-      rows: parsed.rows,
+      rows: effectiveRawRows,
       mapping,
       existingTransactions: transactions,
       suggestCategory,
       defaultCategoryId,
       dayFirst,
       invertSigns,
+      dateToleranceDays,
     });
-    // User edits are layered on top by index, so changing the mapping doesn't
-    // discard the categories they have already corrected.
+    // Amount, type, category and include are layered on top rather than fed
+    // back through parsing — an amount edit fixes what gets written, not the
+    // sign or the dedupe decision already made against the parsed one.
     return built.map(row => (overrides[row.index] ? { ...row, ...overrides[row.index] } : row));
-  }, [parsed, mapping, transactions, suggestCategory, defaultCategoryId, dayFirst, invertSigns, overrides]);
+  }, [effectiveRawRows, mapping, transactions, suggestCategory, defaultCategoryId, dayFirst, invertSigns, dateToleranceDays, overrides]);
 
   const summary = useMemo(() => summariseRows(rows), [rows]);
   const closingBalance = useMemo(() => inferClosingBalance(rows), [rows]);
@@ -103,10 +174,15 @@ export function ImportStatementModal({
   );
 
   const setOverride = (index, patch) => {
-    setOverrides(current => ({ ...current, [index]: { ...current[index], ...patch } }));
+    setOverrides(current => {
+      const prev = current[index] || {};
+      const next = { ...prev, ...patch };
+      if (patch.fields) next.fields = { ...prev.fields, ...patch.fields };
+      return { ...current, [index]: next };
+    });
   };
 
-  const handleFile = async (event) => {
+  const handleCsvFile = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
@@ -125,7 +201,8 @@ export function ImportStatementModal({
         setError('Couldn’t find a date column. Check this is a statement export.');
       }
       setFileName(file.name);
-      setParsed(result);
+      setHeaders(result.headers);
+      setParsedRows(result.rows);
       setMapping(guessed);
       setOverrides({});
       setStep('map');
@@ -133,6 +210,37 @@ export function ImportStatementModal({
       setError('That file couldn’t be read.');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleOcrFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setError('');
+    setFileName(file.name);
+    setOcrProgress({ status: 'starting', progress: 0 });
+    setStep('extracting');
+    try {
+      const { extractStatementText } = await import('../../ocr');
+      const { text } = await extractStatementText(file, { onProgress: setOcrProgress });
+      const result = parseStatementText(text, { dayFirst });
+      if (!result.rows.length) {
+        setError('Couldn’t find anything that looked like a transaction in that file. A clearer photo, or your bank’s own PDF, works best.');
+        setStep('file');
+        return;
+      }
+      setHeaders([]);
+      setParsedRows(result.rows);
+      setMapping(result.mapping);
+      setOverrides({});
+      setStep('review');
+    } catch {
+      setError('Couldn’t read that file — OCR may not be supported on this device. A CSV export is the most reliable option.');
+      setStep('file');
+    } finally {
+      setOcrProgress(null);
     }
   };
 
@@ -151,27 +259,38 @@ export function ImportStatementModal({
   const hasAmountSource = mapping
     && (mapping.amount != null || mapping.debit != null || mapping.credit != null);
   const canReview = Boolean(mapping?.date != null && hasAmountSource);
+  const cameFromCsv = headers.length > 0;
 
   // ── Step: file ──
   if (step === 'file') {
     return (
-      <Modal title="Import a statement" subtitle="Bring in transactions from your bank's CSV export." onClose={onClose}>
+      <Modal title="Import a statement" subtitle="Bring in transactions from your bank." onClose={onClose}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <label className="btn-primary" style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
             padding: '16px', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1,
           }}>
             <FileUp size={16} /> {busy ? 'Reading…' : 'Choose a CSV file'}
-            <input type="file" accept=".csv,text/csv,text/plain" onChange={handleFile}
+            <input type="file" accept=".csv,text/csv,text/plain" onChange={handleCsvFile}
+              disabled={busy} style={{ display: 'none' }} />
+          </label>
+
+          <label className="btn-secondary" style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            padding: '16px', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1,
+          }}>
+            <Camera size={16} /> Choose a photo or PDF
+            <input type="file" accept="application/pdf,image/*" onChange={handleOcrFile}
               disabled={busy} style={{ display: 'none' }} />
           </label>
 
           {error && <div style={{ color: 'var(--danger)', fontSize: 12 }}>{error}</div>}
 
           <div style={{ color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.6 }}>
-            Most banks offer a CSV download on the statements page. You&rsquo;ll confirm
-            which column is which, then review every row before anything is saved —
-            nothing is written until you say so.
+            A CSV export is the most reliable option, if your bank offers one. A PDF
+            statement is read directly; a photo or screenshot is read with OCR that
+            runs on your device — nothing is uploaded anywhere either way. You&rsquo;ll
+            confirm every row before anything is saved.
           </div>
 
           {categories.length === 0 && (
@@ -184,7 +303,25 @@ export function ImportStatementModal({
     );
   }
 
-  // ── Step: mapping ──
+  // ── Step: extracting (photo/PDF only) ──
+  if (step === 'extracting') {
+    const pct = typeof ocrProgress?.progress === 'number' ? Math.round(ocrProgress.progress * 100) : null;
+    return (
+      <Modal title="Reading your statement" subtitle={fileName} onClose={onClose}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '22px 0 8px' }}>
+          <Loader2 size={26} className="spin" style={{ color: 'var(--accent-mint)' }} aria-hidden="true" />
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', textTransform: 'capitalize' }}>
+            {(ocrProgress?.status || 'starting').replace(/-/g, ' ')}{pct != null ? ` — ${pct}%` : ''}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 320 }}>
+            A scanned or photographed statement can take a little while to read on a phone.
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  // ── Step: mapping (CSV only) ──
   if (step === 'map') {
     return (
       <Modal title="Which column is which?" subtitle={fileName} onClose={onClose} maxWidth={560}>
@@ -195,7 +332,7 @@ export function ImportStatementModal({
                 key={field}
                 label={label}
                 required={required}
-                headers={parsed.headers}
+                headers={headers}
                 value={mapping[field]}
                 onChange={index => setMapping(current => ({ ...current, [field]: index }))}
               />
@@ -221,7 +358,7 @@ export function ImportStatementModal({
             </label>
           </div>
 
-          {parsed.rows[0] && (
+          {parsedRows[0] && (
             <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 10, padding: '10px 12px', fontSize: 11, color: 'var(--text-muted)' }}>
               <div style={{ marginBottom: 4, fontWeight: 600, color: 'var(--text-secondary)' }}>First row reads as</div>
               {rows[0]?.status === ROW_INVALID
@@ -240,7 +377,7 @@ export function ImportStatementModal({
           <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 4 }}>
             <button className="btn-secondary" onClick={() => setStep('file')} style={{ flex: 1 }}>Back</button>
             <button className="btn-primary" onClick={() => setStep('review')} style={{ flex: 2 }} disabled={!canReview}>
-              Review {parsed.rows.length} row{parsed.rows.length === 1 ? '' : 's'}
+              Review {parsedRows.length} row{parsedRows.length === 1 ? '' : 's'}
             </button>
           </div>
           {!canReview && (
@@ -255,7 +392,7 @@ export function ImportStatementModal({
 
   // ── Step: review ──
   return (
-    <Modal title="Review before importing" subtitle={fileName} onClose={onClose} maxWidth={720}>
+    <Modal title="Review before importing" subtitle={fileName} onClose={onClose} maxWidth={760}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           {[
@@ -287,6 +424,17 @@ export function ImportStatementModal({
           </div>
         )}
 
+        <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 11, color: 'var(--text-secondary)' }}>
+          Flag a same-amount transaction as a possible match within
+          <input
+            type="number" min={0} max={14} className="glass-input"
+            value={dateToleranceDays}
+            onChange={e => setDateToleranceDays(Math.max(0, Math.min(14, Number(e.target.value) || 0)))}
+            style={{ width: 46, padding: '4px 6px', fontSize: 12, textAlign: 'center' }}
+          />
+          day{dateToleranceDays === 1 ? '' : 's'} — a card purchase often clears a few days after it happened
+        </label>
+
         {summary.uncategorised > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--warn)' }}>
             <AlertTriangle size={13} aria-hidden="true" />
@@ -302,7 +450,7 @@ export function ImportStatementModal({
               <div key={row.index} style={{
                 display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px',
                 background: 'rgba(255,255,255,0.035)', borderRadius: 10,
-                opacity: invalid ? 0.55 : 1,
+                opacity: invalid ? 0.7 : 1,
               }}>
                 <input
                   type="checkbox"
@@ -312,22 +460,57 @@ export function ImportStatementModal({
                   aria-label={`Import ${row.description || 'row'} on ${row.date || 'unknown date'}`}
                   style={{ width: 15, height: 15, flexShrink: 0, accentColor: 'var(--accent-mint)' }}
                 />
-                <div style={{ flex: '1 1 130px', minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {row.description || <span style={{ color: 'var(--text-muted)' }}>No description</span>}
-                  </div>
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-                    {row.date || row.rawDate || '—'}
-                    {style && <span style={{ color: style.color }}> · {row.problem || style.label}</span>}
-                    {row.suggestion?.source === 'rule' && <span> · matched a rule</span>}
+                <div style={{ flex: '1 1 150px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <input
+                    type="text"
+                    className="glass-input"
+                    value={row.description}
+                    onChange={e => setOverride(row.index, { fields: { description: e.target.value } })}
+                    placeholder="No description"
+                    aria-label="Description"
+                    style={{ padding: '5px 8px', fontSize: 12, fontWeight: 500 }}
+                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      className="glass-input"
+                      value={row.rawDate}
+                      onChange={e => setOverride(row.index, { fields: { date: e.target.value } })}
+                      placeholder="Date"
+                      aria-label="Date"
+                      style={{ padding: '3px 6px', fontSize: 10, width: 96 }}
+                    />
+                    {style && <span style={{ fontSize: 10, color: style.color }}>{row.problem || style.label}</span>}
+                    {row.suggestion?.source === 'rule' && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>· matched a rule</span>}
                   </div>
                 </div>
-                <div style={{
-                  fontSize: 13, fontWeight: 600, flexShrink: 0, minWidth: 74, textAlign: 'right',
-                  fontVariantNumeric: 'tabular-nums',
-                  color: row.type === 'refund' ? 'var(--good)' : 'var(--accent-warm)',
-                }}>
-                  {invalid ? '—' : `${row.type === 'refund' ? '+' : '−'}${fmt(row.amount)}`}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+                  <button
+                    type="button"
+                    onClick={() => setOverride(row.index, { type: row.type === TX_REFUND ? TX_EXPENSE : TX_REFUND })}
+                    disabled={invalid}
+                    title={row.type === TX_REFUND ? 'Refund — click to flip to spending' : 'Spending — click to flip to a refund'}
+                    style={{
+                      background: 'none', border: 'none', padding: '0 2px', cursor: invalid ? 'default' : 'pointer',
+                      fontSize: 15, fontWeight: 700, lineHeight: 1,
+                      color: row.type === TX_REFUND ? 'var(--good)' : 'var(--accent-warm)',
+                    }}
+                  >
+                    {row.type === TX_REFUND ? '+' : '−'}
+                  </button>
+                  {mapping.amount != null
+                    ? (
+                      <AmountField
+                        value={row.amount}
+                        disabled={invalid}
+                        onCommit={amount => setOverride(row.index, { amount })}
+                      />
+                    )
+                    : (
+                      <div style={{ fontSize: 13, fontWeight: 600, minWidth: 64, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                        {invalid ? '—' : fmt(row.amount)}
+                      </div>
+                    )}
                 </div>
                 <div style={{ flex: '0 1 150px', minWidth: 120 }}>
                   <CategorySelect
@@ -345,9 +528,9 @@ export function ImportStatementModal({
         </div>
 
         <div className="modal-actions" style={{ display: 'flex', gap: 10 }}>
-          <button className="btn-secondary" onClick={() => setStep('map')}
+          <button className="btn-secondary" onClick={() => setStep(cameFromCsv ? 'map' : 'file')}
             style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-            <ArrowLeft size={13} /> Columns
+            <ArrowLeft size={13} /> {cameFromCsv ? 'Columns' : 'Back'}
           </button>
           {/* Counts what will actually be written, not what is ticked — a row
               with no category is dropped on the way to the database. */}

@@ -220,7 +220,7 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
         </button>
         <button className="btn-secondary mobile-full" onClick={onImportStatement} disabled={categories.length === 0}
           style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 7 }}>
-          <FileUp size={14} /> Import CSV
+          <FileUp size={14} /> Import Statement
         </button>
         <button className="btn-secondary mobile-full" onClick={onAddSubscription} disabled={categories.length === 0}
           style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 7 }}>
