@@ -12,7 +12,7 @@ import {
   buildDedupeKey, buildImportRows, detectDelimiter, guessColumnMapping,
   hasUsableTextLayer, inferClosingBalance, normaliseDescription, parseAmount, parseCsv,
   parseStatementDate, parseStatementText, reconcile, similarDescriptions, summariseRows,
-  toTransactionPayload,
+  textFromContent, toTransactionPayload,
   ROW_DUPLICATE, ROW_INVALID, ROW_NEW, ROW_SIMILAR,
 } from '../csv';
 
@@ -609,6 +609,72 @@ describe('hasUsableTextLayer', () => {
     expect(hasUsableTextLayer('')).toBe(false);
     expect(hasUsableTextLayer('   \n  \n')).toBe(false);
     expect(hasUsableTextLayer('a b')).toBe(false);
+  });
+});
+
+describe('textFromContent', () => {
+  // A pdf.js TextItem carries `str` and a 6-number affine `transform`, of
+  // which only index 4 (x) and 5 (y) matter here.
+  const item = (str, x, y) => ({ str, transform: [1, 0, 0, 1, x, y] });
+
+  it('keeps words on the same baseline as one line', () => {
+    const content = { items: [item('TESCO', 40, 780), item('STORES', 90, 780), item('12.40', 400, 780)] };
+    expect(textFromContent(content)).toBe('TESCO STORES 12.40');
+  });
+
+  it('separates rows at different baselines into their own lines, ordered top to bottom', () => {
+    // Built out of order, and with a real statement's line spacing (~16pt) —
+    // this is the exact shape a multi-row bank statement produces once
+    // pdf.js has flattened it. Joining all of this with spaces instead of
+    // reconstructing lines was the actual bug: a real multi-row statement
+    // collapsed into one line, and parseStatementText could only ever find
+    // its first date and its very last amount.
+    const content = {
+      items: [
+        item('987.60', 460, 764),
+        item('01 Sep 2026', 40, 780),
+        item('TESCO STORES', 120, 780),
+        item('12.40', 400, 780),
+        item('02 Sep 2026', 40, 764),
+        item('BRITISH GAS', 120, 764),
+        item('45.00', 400, 764),
+      ],
+    };
+
+    expect(textFromContent(content)).toBe(
+      '01 Sep 2026 TESCO STORES 12.40\n02 Sep 2026 BRITISH GAS 45.00 987.60',
+    );
+  });
+
+  it('tolerates tiny baseline jitter within one visual line without scrambling word order', () => {
+    // A bold run or a different glyph can land a fraction of a point off the
+    // rest of the line's baseline; that must not read as a second line, and
+    // must not let that same jitter reorder the words themselves.
+    const content = { items: [item('TESCO', 40, 780.0), item('12.40', 400, 780.8)] };
+    expect(textFromContent(content)).toBe('TESCO 12.40');
+  });
+
+  it('drops empty and whitespace-only runs', () => {
+    const content = { items: [item('TESCO', 40, 780), item('   ', 90, 780), item('', 95, 780)] };
+    expect(textFromContent(content)).toBe('TESCO');
+  });
+
+  it('returns an empty string for a page with no text', () => {
+    expect(textFromContent({ items: [] })).toBe('');
+  });
+
+  it('feeds straight into parseStatementText, end to end', () => {
+    const content = {
+      items: [
+        item('01 Sep 2026', 40, 780), item('TESCO STORES', 120, 780), item('12.40', 400, 780), item('987.60', 460, 780),
+        item('02 Sep 2026', 40, 764), item('BRITISH GAS', 120, 764), item('45.00', 400, 764), item('942.60', 460, 764),
+      ],
+    };
+    const { rows } = parseStatementText(textFromContent(content));
+    expect(rows).toEqual([
+      ['01 Sep 2026', 'TESCO STORES', '12.40', '987.60'],
+      ['02 Sep 2026', 'BRITISH GAS', '45.00', '942.60'],
+    ]);
   });
 });
 

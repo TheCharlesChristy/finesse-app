@@ -214,8 +214,24 @@ which. `parseStatementText` (also `csv.js`, pure) turns whatever text comes
 back into the same `{ rows, mapping }` shape `parseCsv` produces, so
 `buildImportRows` and the review UI never know which path a row came from.
 
-Three things worth preserving if you touch this:
+Four things worth preserving if you touch this:
 
+- **A PDF's text layer has no lines of its own — `textFromContent` in
+  `csv.js` reconstructs them.** `pdf.js`'s `getTextContent()` returns text as
+  a flat list of runs positioned by (x, y), not pre-split into lines; naively
+  joining `items.map(i => i.str)` with spaces collapses an entire page into
+  one run-on string. That isn't a subtle formatting glitch — `parseStatementText`
+  is line-based, so it silently finds at most one date (whichever came first
+  on the page) and treats everything else, every other transaction, as
+  unreadable trailing noise. A one-line test PDF hides this completely; only
+  a real multi-row statement exposes it, which is exactly how it shipped once
+  before being caught. Lines must be found by clustering items on `y` within
+  a small tolerance *before* ordering by `x` — sorting on `(y, x)` together
+  lets the same sub-point jitter that separates two real lines also reorder
+  the words *within* one line, since two runs on the same baseline rarely
+  share an identical y. `textFromContent`'s tests in `csv.test.js` pin this
+  down with a synthetic multi-row `content.items` array; run any change past
+  them, not just a single-line fixture.
 - **Both libraries are dynamically imported**, never a static import from
   `ocr.js`'s callers. pdf.js and Tesseract together are hundreds of KB of
   JS plus several MB of wasm and language data that almost no session ever

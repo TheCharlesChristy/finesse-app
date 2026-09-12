@@ -27,7 +27,7 @@
 import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist';
 import pdfWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-import { hasUsableTextLayer } from './csv';
+import { hasUsableTextLayer, textFromContent } from './csv';
 
 GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 
@@ -89,7 +89,7 @@ async function extractPdfText(file, onProgress) {
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
-    const text = content.items.map(item => item.str).join(' ');
+    const text = textFromContent(content);
 
     if (hasUsableTextLayer(text)) {
       pageTexts.push(text);
