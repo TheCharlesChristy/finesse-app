@@ -417,6 +417,52 @@ export function hasUsableTextLayer(text = '') {
   return text.replace(/\s+/g, '').length >= 20;
 }
 
+// pdf.js hands back each run of text with its own (x, y) position on the
+// page, not pre-split into lines — a statement's rows, headers and footer
+// all arrive as one flat list. Joining that with spaces collapses an entire
+// page into a single run-on string, which is fatal for the line-based parser
+// above: only the very first date in the whole page is ever found, and
+// everything else — every other transaction — becomes unreadable trailing
+// noise on that one line.
+const SAME_LINE_TOLERANCE = 2;
+
+/**
+ * Reassemble a pdf.js `getTextContent()` result into real lines, ready for
+ * `parseStatementText`. Pure geometry, not pdf.js itself — this takes the
+ * plain `{ items: [{ str, transform }] }` shape the library returns, which
+ * is why it lives here rather than in `ocr.js` alongside the library import.
+ *
+ * Lines are found by clustering items whose baseline (`transform[5]`, the
+ * PDF's y-axis, increasing upward) sits within a small tolerance of each
+ * other — real line spacing on a statement is many times that, so this only
+ * ever merges runs genuinely typeset together. Each line is then read left
+ * to right by x (`transform[4]`). The two passes are deliberately separate:
+ * sorting on (y, x) together would let the same sub-point jitter that tells
+ * two real lines apart also reorder words *within* one line whenever two of
+ * them land a fraction of a point off each other on y — common wherever a
+ * run changes weight or glyph — so x only ever breaks ties within a line
+ * whose membership has already been settled by y alone.
+ */
+export function textFromContent(content) {
+  const words = content.items
+    .filter(item => item.str && item.str.trim() && item.transform)
+    .map(item => ({ x: item.transform[4], y: item.transform[5], str: item.str }));
+
+  const lines = [];
+  let current = null;
+  for (const word of [...words].sort((a, b) => b.y - a.y)) {
+    if (!current || Math.abs(word.y - current.y) > SAME_LINE_TOLERANCE) {
+      current = { y: word.y, words: [] };
+      lines.push(current);
+    }
+    current.words.push(word);
+  }
+
+  return lines
+    .map(line => [...line.words].sort((a, b) => a.x - b.x).map(w => w.str).join(' '))
+    .join('\n');
+}
+
 // ── Row building ─────────────────────────────────────────────────────────────
 
 /** Strip the noise banks add so two spellings of one purchase compare equal. */

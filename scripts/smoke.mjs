@@ -469,7 +469,10 @@ await page.waitForTimeout(500);
 
 const reviewText = await page.getByRole('dialog').innerText();
 if (!/Review before importing/i.test(reviewText)) errors.push('importer did not reach the review step');
-if (!/COFFEE HUT/.test(reviewText)) errors.push('review step lists no rows');
+// Description and date are editable <input>s, not text nodes — innerText()
+// doesn't see their value, so read the DOM directly instead.
+const reviewInputs = await page.locator('.modal-box input[type="text"]').evaluateAll(els => els.map(el => el.value));
+if (!reviewInputs.some(v => /COFFEE HUT/.test(v))) errors.push(`review step lists no rows: ${JSON.stringify(reviewInputs)}`);
 // £3.20 + £41.05 out, £18.99 back.
 if (!/£44\.25/.test(reviewText)) errors.push(`review totals wrong:\n${reviewText}`);
 if (!/£18\.99/.test(reviewText)) errors.push('refund row not recognised as money in');
@@ -488,7 +491,7 @@ for (const expected of ['COFFEE HUT', 'TESCO STORES', 'REFUND ASOS']) {
 step('imported rows land in the ledger');
 
 // Re-importing the same file must find them all as duplicates.
-await page.getByRole('button', { name: /Import CSV/ }).click();
+await page.getByRole('button', { name: /Import Statement/ }).click();
 await page.getByRole('dialog').waitFor({ timeout: 5000 });
 await page.setInputFiles('input[type="file"][accept*="csv"]', {
   name: 'statement.csv',

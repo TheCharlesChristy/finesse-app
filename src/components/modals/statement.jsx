@@ -435,6 +435,22 @@ export function ImportStatementModal({
           day{dateToleranceDays === 1 ? '' : 's'} — a card purchase often clears a few days after it happened
         </label>
 
+        {/* A photo or PDF has no mapping step of its own to carry these, and a
+            CSV's guess can still be wrong once you can see every row — so
+            both live here too, not just in the CSV-only mapping step. */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', fontSize: 11, color: 'var(--text-secondary)' }}>
+            <input type="checkbox" checked={dayFirst} onChange={e => setDayFirst(e.target.checked)}
+              style={{ width: 14, height: 14, accentColor: 'var(--accent-mint)' }} />
+            Dates are day first (05/01 is 5 January)
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', fontSize: 11, color: 'var(--text-secondary)' }}>
+            <input type="checkbox" checked={invertSigns} onChange={e => setInvertSigns(e.target.checked)}
+              style={{ width: 14, height: 14, accentColor: 'var(--accent-mint)' }} />
+            Every row below has spending and refunds swapped — flip them all
+          </label>
+        </div>
+
         {summary.uncategorised > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--warn)' }}>
             <AlertTriangle size={13} aria-hidden="true" />
