@@ -248,8 +248,24 @@ Four things worth preserving if you touch this:
 - **Only the SIMD build of tesseract-core is shipped**, and `ocr.js` points
   `corePath` at that exact file rather than a directory. Tesseract's own
   feature-detection otherwise reaches for a "relaxed SIMD" build this app
-  doesn't ship, which would 404 on a browser that happens to support it. A
-  device too old for SIMD wasm gets a clear error instead of a silent hang.
+  doesn't ship, which would 404 on a browser that happens to support it.
+- **A genuine SIMD incompatibility is confirmed before the core is even
+  fetched, never guessed from a caught exception.** `ocr.js` calls `simd()`
+  from `wasm-feature-detect` (a real dependency of tesseract.js already, now
+  also a direct one) first, and only throws `OcrUnsupportedError` — the one
+  case the review UI shows as "isn't supported" — if that comes back false.
+  Essentially every device still receiving updates supports WASM SIMD, so a
+  `WebAssembly.CompileError` reaching `createWorker` after that check has
+  passed is almost certainly a truncated download, not an incompatible
+  device — 2.86MB of core plus 3.9MB of glue is a lot to ask a phone on a
+  shaky connection for in one piece, and a response that got cut off
+  mid-download can be cached and replayed forever by the `runtimeCaching`
+  rule above, since `CacheFirst` never re-validates against the network.
+  `ocr.js` evicts that cache entry on exactly this error before rethrowing,
+  so the retry the caller offers actually fetches fresh instead of failing
+  the same way indefinitely. **Never fold this back into guessing from
+  `error.message`** — that was the previous design, and it reported a
+  working iPhone as "not supported" for what was really a bad download.
 
 A statement is genuinely noisy once it's been through OCR — a misread digit,
 a wrapped description, a swallowed decimal point — so every field in the
