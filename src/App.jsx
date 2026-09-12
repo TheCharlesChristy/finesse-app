@@ -1189,7 +1189,7 @@ export default function App() {
     { id: 'log-expense', label: 'Log an expense', keywords: 'add spend transaction new', run: () => setModal('addTx') },
     { id: 'log-refund', label: 'Log a refund', keywords: 'return money back credit', run: () => setModal('addTx') },
     { id: 'bulk-add', label: 'Bulk add expenses', keywords: 'many multiple paste import', run: () => setModal('bulkAddTx') },
-    { id: 'import-statement', label: 'Import a bank statement', keywords: 'csv statement bank import reconcile', run: () => setModal('importStatement') },
+    { id: 'import-statement', label: 'Import a bank statement', keywords: 'csv statement bank import reconcile ocr photo scan pdf', run: () => setModal('importStatement') },
     { id: 'one-off-income', label: 'Add one-off income', keywords: 'gift refund bonus paid', run: () => setModal('addOneOffIncome') },
     { id: 'add-income', label: 'Add an income source', keywords: 'salary wage pay', run: () => setModal('addIncome') },
     { id: 'add-category', label: 'Add a budget category', keywords: 'budget allowance', run: () => setModal('addCategory') },

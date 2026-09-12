@@ -20,6 +20,7 @@ A personal finance PWA (Progressive Web App) for a single user. It runs entirely
 - **Recharts 3** for charts
 - **lucide-react** for icons
 - **date-fns 4** for date arithmetic
+- **pdfjs-dist** to read a PDF statement's own text layer; **tesseract.js** to OCR a photo, screenshot or scanned page — both loaded on demand (`import()`), never from the main bundle, and both self-hosted under `public/tesseract/` rather than fetched from a CDN (see "Statement OCR" below)
 
 ---
 
@@ -31,7 +32,9 @@ src/
 ├── db.js                 # Dexie schema + every database helper function
 ├── utils.js              # Pure functions only — cycles, scheduling, forecasting, formatting
 ├── index.css             # All styling: CSS variables, glass classes, component styles
-├── csv.js                # Pure: bank-statement parsing, column mapping, dedupe, reconciliation
+├── csv.js                # Pure: bank-statement parsing (CSV and free-form OCR text),
+│                         #   column mapping, dedupe (same-day and date-tolerant), reconciliation
+├── ocr.js                # pdf.js text extraction + Tesseract OCR, both self-hosted, both lazy-loaded
 ├── budgetConfig.js       # Pure: budget-config validation and the staged preview diff
 ├── prediction.js         # Pure: Monte Carlo spend simulation and backtesting
 ├── storage.js            # navigator.storage: persistence + quota
@@ -178,6 +181,68 @@ cumulative overspend, CSV export and counter rebuilds.
 Splits are N ordinary transactions sharing a `splitGroupId` — not a parent row
 with children — so every existing query, filter and reset handles them with no
 special-casing, and a single part can be edited or deleted on its own.
+
+### Statement reconciliation — dates drift, matching must tolerate it
+
+A bank doesn't post a transaction the day it happened: a card purchase clears
+a day or two later, a weekend purchase clears the following Monday, a direct
+debit can lag longer still. `buildImportRows` in `csv.js` (shared by the CSV
+and OCR statement-import paths) therefore matches on amount within a
+`dateToleranceDays` window (default 3, adjustable in the review step), not
+just the exact day.
+
+That match is **never allowed to auto-exclude a row** — a cross-date hit
+always comes back `ROW_SIMILAR` (included by default), never `ROW_DUPLICATE`.
+The reason is the same one already written above the same-day loose match: a
+daily coffee, a weekly petrol fill-up, or any other same-amount purchase at
+the same merchant a few days apart is exactly what a genuine repeat
+transaction looks like, and silently dropping one because it resembles an
+earlier row would be worse than asking the user to glance at a row flagged
+"similar" and confirm it's new. Description similarity (`similarDescriptions`)
+only changes how confident the row's message reads, never the include default.
+
+**If you add another way to bring transactions in, route it through
+`buildImportRows`.** It is the one place this reconciliation logic lives;
+duplicating the date-window scan elsewhere means the two forget to agree.
+
+### Statement OCR — self-hosted, lazy-loaded, and why
+
+`ocr.js` reads a PDF's own text layer with pdf.js where one exists, and falls
+back to Tesseract (a scanned page, a photo, a screenshot) only where it
+doesn't — `hasUsableTextLayer` in `csv.js` is the pure predicate that decides
+which. `parseStatementText` (also `csv.js`, pure) turns whatever text comes
+back into the same `{ rows, mapping }` shape `parseCsv` produces, so
+`buildImportRows` and the review UI never know which path a row came from.
+
+Three things worth preserving if you touch this:
+
+- **Both libraries are dynamically imported**, never a static import from
+  `ocr.js`'s callers. pdf.js and Tesseract together are hundreds of KB of
+  JS plus several MB of wasm and language data that almost no session ever
+  needs; a static import would put all of it in every page load.
+- **Nothing is fetched from a CDN.** The worker script, the wasm core and the
+  English `traineddata` are committed under `public/tesseract/` and served
+  same-origin — the default for both libraries is a third-party CDN, which
+  would send a statement's contents off-device and break the "no network
+  calls at runtime" rule this app is built on. `vite.config.js` excludes
+  `public/tesseract/**` and the `vendor-pdf`/`vendor-ocr` script chunks from
+  the service worker's precache (they're multi-megabyte and rarely needed),
+  but adds a `runtimeCaching` rule so the first real use caches them for
+  offline reuse after that — the same pattern already used for Google Fonts.
+- **Only the SIMD build of tesseract-core is shipped**, and `ocr.js` points
+  `corePath` at that exact file rather than a directory. Tesseract's own
+  feature-detection otherwise reaches for a "relaxed SIMD" build this app
+  doesn't ship, which would 404 on a browser that happens to support it. A
+  device too old for SIMD wasm gets a clear error instead of a silent hang.
+
+A statement is genuinely noisy once it's been through OCR — a misread digit,
+a wrapped description, a swallowed decimal point — so every field in the
+review table (date, description, amount, expense/refund) is editable, not
+just category and the include checkbox. Date and description edits are
+folded back into the row's raw values before `buildImportRows` runs, so a
+correction re-enters dedupe and category suggestion properly; amount and
+type are layered on afterwards instead, deliberately, because re-deriving a
+sign from a retyped magnitude is a footgun `AmountField`'s comment explains.
 
 ### Goals are earmarks, not transfers
 
@@ -606,8 +671,12 @@ Find `fmt()` and `fmtShort()` in `utils.js`. Change the `currency` option in `In
 ### Import a bank statement
 
 `csv.js` is pure and self-contained: parsing, delimiter detection, amount and
-date reading, column mapping, duplicate detection and reconciliation. The modal
-(`modals/statement.jsx`) owns the three-step flow and injects
+date reading, column mapping, duplicate detection (same-day and date-tolerant)
+and reconciliation. A photo, screenshot or PDF goes through `ocr.js` first
+(pdf.js text layer, or Tesseract OCR — see "Statement OCR" above), which hands
+its text to `parseStatementText` to reach the exact same `{ rows, mapping }`
+shape a CSV produces. The modal (`modals/statement.jsx`) owns the flow —
+file → (column mapping, CSV only) → review — and injects
 `suggestCategoryForNote` as a closure, so `csv.js` never reaches for rules or
 history itself.
 

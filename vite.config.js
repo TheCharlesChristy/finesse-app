@@ -59,12 +59,38 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,woff2}'],
+        // The OCR statement import is opt-in and rarely opened, but its
+        // worker script and wasm core sit under public/tesseract/, and pdf.js
+        // plus tesseract.js are real weight (pdf.js alone is ~130KB gzipped)
+        // — all of it would otherwise match the glob above and get pulled
+        // into every install and every update. It's fetched (and then cached
+        // below) only the first time someone actually opens that flow.
+        globIgnores: ['tesseract/**', 'assets/vendor-pdf-*.js', 'assets/vendor-ocr-*.js'],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\/.*/i,
             handler: 'CacheFirst',
             options: {
               cacheName: 'google-fonts',
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            // Tesseract's worker/core/language files, pdf.js's worker, and
+            // the vendor-pdf/vendor-ocr script chunks — all same-origin, none
+            // precached (see globIgnores above), all cached after first use
+            // so OCR import keeps working offline from then on.
+            urlPattern: ({ url, sameOrigin }) => (
+              sameOrigin && (
+                url.pathname.includes('/tesseract/')
+                || /\/pdf\.worker[^/]*\.mjs$/.test(url.pathname)
+                || /\/(vendor-pdf|vendor-ocr)-[^/]*\.js$/.test(url.pathname)
+              )
+            ),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'ocr-assets',
               expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
               cacheableResponse: { statuses: [0, 200] },
             },
@@ -87,6 +113,11 @@ export default defineConfig({
           // unlock path pulls them in on every launch — worth its own chunk so
           // an app update doesn't re-download them.
           if (id.includes('/@noble/')) return 'vendor-crypto';
+          // pdf.js and tesseract.js are only ever reached via a dynamic
+          // import() from the statement-OCR flow — their own chunk keeps them
+          // out of every other page's download.
+          if (id.includes('/pdfjs-dist/')) return 'vendor-pdf';
+          if (id.includes('/tesseract.js/') || id.includes('/tesseract.js-core/')) return 'vendor-ocr';
         },
       },
     },

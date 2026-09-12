@@ -39,11 +39,14 @@ Six pages, three of which carry tabs.
 - **Settings** — income, categories, variables, privacy, encryption, storage, and import/export
 
 ## Getting your data in and out
-- **Import a bank statement** — Settings or Transactions → Import CSV. Confirm which
-  column is which, review every row with its category and duplicate status, then commit.
-  Already-logged rows are detected and skipped, so re-importing an overlapping
-  statement is safe. If your export has a balance column, Finesse checks its own
-  figure against it.
+- **Import a bank statement** — Settings or Transactions → Import Statement. A CSV
+  export, a PDF statement, or a photo or screenshot all work — a PDF's own text is
+  read directly, and anything else is read with on-device OCR, never uploaded
+  anywhere. Confirm the columns (CSV only), review every row with its category and
+  duplicate status, then commit. Already-logged rows are detected and skipped —
+  including ones posted a few days later than you logged them, since that's how a
+  card payment usually clears — so re-importing an overlapping statement is safe.
+  If your export has a balance column, Finesse checks its own figure against it.
 - **Export a backup** — opens the share sheet where supported, so the file can go
   straight to Files, iCloud or another device. Receipt photos aren't included;
   the app tells you how many it left behind.
