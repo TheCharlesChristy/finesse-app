@@ -222,9 +222,13 @@ export function ImportStatementModal({
     setFileName(file.name);
     setOcrProgress({ status: 'starting', progress: 0 });
     setStep('extracting');
+    // Declared outside the try so the catch block — a separate scope — can
+    // still reach OcrUnsupportedError to tell a real incompatibility apart
+    // from everything else.
+    let ocrModule;
     try {
-      const { extractStatementText } = await import('../../ocr');
-      const { text } = await extractStatementText(file, { onProgress: setOcrProgress });
+      ocrModule = await import('../../ocr');
+      const { text } = await ocrModule.extractStatementText(file, { onProgress: setOcrProgress });
       const result = parseStatementText(text, { dayFirst });
       if (!result.rows.length) {
         setError('Couldn’t find anything that looked like a transaction in that file. A clearer photo, or your bank’s own PDF, works best.');
@@ -236,8 +240,17 @@ export function ImportStatementModal({
       setMapping(result.mapping);
       setOverrides({});
       setStep('review');
-    } catch {
-      setError('Couldn’t read that file — OCR may not be supported on this device. A CSV export is the most reliable option.');
+    } catch (err) {
+      // A genuine incompatibility is confirmed by feature-detection before
+      // the OCR core is even fetched (see ocr.js) — anything else is far
+      // more likely a bad download than a bad device, and is worth retrying
+      // rather than steering someone away from a perfectly good phone.
+      if (ocrModule && err instanceof ocrModule.OcrUnsupportedError) {
+        setError('OCR isn’t supported on this device or browser. A CSV export, or your bank’s own PDF, will still work.');
+      } else {
+        const detail = err?.message ? String(err.message).slice(0, 140) : (err?.name || 'unknown error');
+        setError(`Couldn’t read that file — likely an interrupted download rather than the file itself. Please try again. (${detail})`);
+      }
       setStep('file');
     } finally {
       setOcrProgress(null);

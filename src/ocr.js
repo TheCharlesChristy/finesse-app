@@ -22,27 +22,85 @@
  * doesn't ship, which would 404 on a browser that happens to support it. A
  * device too old for SIMD wasm gets a clear error instead of a silent hang;
  * that trade keeps a second multi-megabyte core out of the app entirely.
+ *
+ * Genuinely unsupported hardware is rare, though — essentially every device
+ * still receiving updates has had WASM SIMD for years. Far more likely is a
+ * *transport* failure: the core is 2.86MB and its glue script another 3.9MB,
+ * a lot to ask a phone on a shaky connection to fetch in one piece, and the
+ * `runtimeCaching` rule in vite.config.js means a response that got cut off
+ * mid-download can end up cached and replayed forever after, since CacheFirst
+ * never re-validates against the network. `simd()` from `wasm-feature-detect`
+ * (a real dependency of tesseract.js already, just not one this file used to
+ * ask directly) settles which of the two happened *before* the multi-megabyte
+ * fetch even starts, with a few bytes of throwaway wasm — so a genuine
+ * incompatibility is never confused with a bad download, and a bad download
+ * gets its cache entry cleared and one automatic retry rather than failing
+ * the same way forever.
  */
 
 import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist';
 import pdfWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { simd } from 'wasm-feature-detect';
 
 import { hasUsableTextLayer, textFromContent } from './csv';
 
 GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 
 const ASSET_BASE = `${import.meta.env.BASE_URL}tesseract/`;
+const CORE_URL = `${ASSET_BASE}core/tesseract-core-simd-lstm.wasm.js`;
+const CORE_WASM_URL = `${ASSET_BASE}core/tesseract-core-simd-lstm.wasm`;
+const OCR_CACHE_NAME = 'ocr-assets';
+
+export class OcrUnsupportedError extends Error {
+  constructor() {
+    super('This device or browser does not support the WebAssembly features Finesse’s OCR needs.');
+    this.name = 'OcrUnsupportedError';
+  }
+}
+
+/** Drop any cached copy of the wasm core, in case it was cached mid-download. */
+async function evictCachedCore() {
+  if (typeof caches === 'undefined') return;
+  try {
+    const cache = await caches.open(OCR_CACHE_NAME);
+    await Promise.all([cache.delete(CORE_URL), cache.delete(CORE_WASM_URL)]);
+  } catch {
+    // Best effort — Cache Storage can be unavailable (private browsing,
+    // Safari's own quirks); the caller's retry still helps even without it.
+  }
+}
+
+let simdSupported = null;
+
+async function createOcrWorker(onProgress) {
+  if (simdSupported == null) simdSupported = await simd().catch(() => false);
+  if (!simdSupported) throw new OcrUnsupportedError();
+
+  const { createWorker } = await import('tesseract.js');
+  try {
+    return await createWorker('eng', undefined, {
+      workerPath: `${ASSET_BASE}worker.min.js`,
+      corePath: CORE_URL,
+      langPath: `${ASSET_BASE}lang`,
+      logger: onProgress,
+    });
+  } catch (error) {
+    // SIMD is confirmed supported above, so a WebAssembly compile/link
+    // failure here isn't a real incompatibility — almost certainly a
+    // truncated download, possibly one the service worker cached partway
+    // through. Clear it so the retry the caller gets to offer fetches fresh.
+    const isWasmError = typeof WebAssembly !== 'undefined'
+      && (error instanceof WebAssembly.CompileError || error instanceof WebAssembly.LinkError);
+    if (isWasmError) await evictCachedCore();
+    throw error;
+  }
+}
 
 let workerPromise = null;
 
 function getOcrWorker(onProgress) {
   if (!workerPromise) {
-    workerPromise = import('tesseract.js').then(({ createWorker }) => createWorker('eng', undefined, {
-      workerPath: `${ASSET_BASE}worker.min.js`,
-      corePath: `${ASSET_BASE}core/tesseract-core-simd-lstm.wasm.js`,
-      langPath: `${ASSET_BASE}lang`,
-      logger: onProgress,
-    })).catch((error) => {
+    workerPromise = createOcrWorker(onProgress).catch((error) => {
       // A failed load must not wedge every later attempt behind the same
       // rejected promise — worth letting the user try again.
       workerPromise = null;
