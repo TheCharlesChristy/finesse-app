@@ -267,6 +267,42 @@ Four things worth preserving if you touch this:
   `error.message`** — that was the previous design, and it reported a
   working iPhone as "not supported" for what was really a bad download.
 
+That still wasn't the end of it: a real bank-generated PDF is far more
+complex than anything hand-built for a test fixture, and both `pdf.js` and
+Tesseract can fail deep inside code this app doesn't own, on a real
+statement, in ways no synthetic PDF exposes. `withStage` in `ocr.js` wraps
+every named step (opening the PDF, reading each page, rendering a page for
+OCR, recognising it) so a failure names *which* step broke, not just that
+one did — the only diagnosis a phone with no attached devtools can give.
+Three things follow from that:
+
+- **One bad page must not cost transactions already read from good ones.**
+  `extractPdfText` catches per page, not once around the whole loop, and
+  only throws outright if every page failed; a partial result surfaces as a
+  warning naming the failed pages, not a dead end. `OcrUnsupportedError` is
+  the one exception let straight through this — a real incompatibility
+  should stop the whole file, not fail page by page.
+- **The production build writes a *hidden* sourcemap** (`vite.config.js`,
+  `sourcemap: 'hidden'` — no `sourceMappingURL` comment, so browsers never
+  fetch it). It exists purely so a raw stack trace copied out of an error
+  message can be mapped back to real source by whoever has the matching
+  `dist` output; without on-device devtools, that's the only way a genuinely
+  new failure becomes more than a stage name. `describeOcrFailure` in
+  `statement.jsx` appends a few lines of `error.cause?.stack` for exactly
+  this reason — resist trimming it as noise.
+- **A render for OCR is capped below iOS Safari's per-canvas pixel-area
+  ceiling** (`MAX_CANVAS_PIXELS` in `ocr.js`) by lowering the scale for an
+  unusually large page rather than leaving it fixed, since that limit fails
+  silently (`toBlob` returning `null`) rather than throwing something a
+  `catch` could ever report.
+
+A stage name and a mapped stack trace are what turned "OCR isn't supported"
+into a solvable bug once, and are the only realistic path to solving the
+next one — this pipeline touches libraries this app doesn't control, running
+on hardware and a browser engine no CI here can reproduce. **Don't remove
+the stage wrapping or the sourcemap to tidy up "unnecessary" error
+handling; they're load-bearing for anyone debugging this blind.**
+
 A statement is genuinely noisy once it's been through OCR — a misread digit,
 a wrapped description, a swallowed decimal point — so every field in the
 review table (date, description, amount, expense/refund) is editable, not

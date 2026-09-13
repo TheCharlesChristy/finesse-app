@@ -101,6 +101,13 @@ export default defineConfig({
   ],
   build: {
     target: 'esnext',
+    // 'hidden' writes .map files without a //# sourceMappingURL comment, so
+    // browsers never fetch them — they exist only for a developer who has
+    // the dist output (or CI artefact) from this exact build to map a raw
+    // stack trace back to real source. A device that can't run devtools
+    // (an iPhone with no Mac to hand) can still report a stack; this is
+    // what makes that report worth anything.
+    sourcemap: 'hidden',
     rollupOptions: {
       output: {
         manualChunks(id) {
