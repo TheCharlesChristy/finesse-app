@@ -42,7 +42,7 @@ import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist';
 import pdfWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { simd } from 'wasm-feature-detect';
 
-import { hasUsableTextLayer, textFromContent } from './csv';
+import { hasUsableTextLayer, linesFromContent, textFromLines } from './csv';
 
 /**
  * Safari's `ReadableStream` went for years without `Symbol.asyncIterator` —
@@ -217,24 +217,37 @@ async function renderPdfPageToCanvas(page, scale = 2) {
  * Read every page, but don't let one bad page sink transactions already
  * read from good ones — a statement generator that trips up pdf.js or
  * Tesseract on, say, its final summary page shouldn't cost the rest.
+ *
+ * Pages are kept as positioned lines as well as text. The lines are what let
+ * `parseStatementLines` read the statement's real columns — separate money-out
+ * and money-in columns, which is how every UK bank states the direction of a
+ * transaction — instead of guessing at a flattened row. They are collected per
+ * page and concatenated in reading order, never re-sorted: y starts again at
+ * the top of every page, so a page-two row would otherwise cluster with a
+ * page-one line at the same height.
  */
 async function extractPdfText(file, onProgress) {
   const buffer = await withStage('reading the file', () => file.arrayBuffer());
   const pdf = await withStage('opening the PDF', () => getDocument({ data: buffer }).promise);
   const pageTexts = [];
+  const pageLines = [];
   const pageErrors = [];
+  let ocrUsed = false;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     try {
       const page = await withStage(`reading page ${pageNumber}`, () => pdf.getPage(pageNumber));
       const content = await withStage(`reading text on page ${pageNumber}`, () => page.getTextContent());
-      const text = await withStage(`laying out text on page ${pageNumber}`, () => textFromContent(content));
+      const lines = await withStage(`laying out text on page ${pageNumber}`, () => linesFromContent(content));
+      const text = textFromLines(lines);
 
       if (hasUsableTextLayer(text)) {
         pageTexts.push(text);
+        pageLines.push(...lines);
       } else {
         // No text layer on this page — it's a scan. Render it and OCR the
         // image rather than giving up on the whole statement over one page.
+        ocrUsed = true;
         const canvas = await withStage(`rendering page ${pageNumber} for OCR`, () => renderPdfPageToCanvas(page));
         const ocrText = await withStage(`recognising text on page ${pageNumber}`, () => ocrSource(canvas, onProgress));
         pageTexts.push(ocrText);
@@ -251,7 +264,15 @@ async function extractPdfText(file, onProgress) {
     throw pageErrors[0].error;
   }
 
-  return { text: pageTexts.join('\n'), pageErrors };
+  return {
+    text: pageTexts.join('\n'),
+    // Geometry is offered only when every page that was read came from a text
+    // layer. One scanned page among typeset ones has no usable x positions, so
+    // a column read of the document would silently drop its rows — and half a
+    // statement that looks complete is worse than a whole one read less well.
+    lines: ocrUsed || !pageLines.length ? null : pageLines,
+    pageErrors,
+  };
 }
 
 const PDF_TYPES = ['application/pdf'];
@@ -261,6 +282,11 @@ const PDF_TYPES = ['application/pdf'];
  * where it has a text layer; anything else — a photo, a screenshot, a
  * scanned PDF page — goes through OCR.
  *
+ * `lines` carries the positioned text of a PDF read entirely from its own
+ * text layer, for `parseStatementLines` to read as real columns; it is null
+ * wherever only flattened text is available, and the caller falls back to
+ * `parseStatementText`.
+ *
  * `pageErrors` is non-empty when some (not all) pages failed — the caller
  * can still show whatever rows the good pages produced, with a warning
  * naming which pages and why, rather than discarding a partly-good result.
@@ -268,9 +294,11 @@ const PDF_TYPES = ['application/pdf'];
 export async function extractStatementText(file, { onProgress } = {}) {
   const isPdf = PDF_TYPES.includes(file.type) || /\.pdf$/i.test(file.name || '');
   if (isPdf) {
-    const { text, pageErrors } = await extractPdfText(file, onProgress);
-    return { text, method: 'pdf', pageErrors };
+    const { text, lines, pageErrors } = await extractPdfText(file, onProgress);
+    return { text, lines, method: 'pdf', pageErrors };
   }
   const text = await withStage('recognising the image', () => ocrSource(file, onProgress));
-  return { text, method: 'ocr', pageErrors: [] };
+  // A photo has no geometry to offer: Tesseract's text is all the caller gets,
+  // so the statement has to be read line by line.
+  return { text, lines: null, method: 'ocr', pageErrors: [] };
 }

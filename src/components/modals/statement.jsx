@@ -1,16 +1,56 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, ArrowLeft, Camera, Check, FileUp, Loader2, Scale, Upload,
+  AlertTriangle, ArrowLeft, Camera, Check, Columns3, FileUp, Loader2, Scale, Upload,
 } from 'lucide-react';
 
 import { Modal, Field } from '../ui';
 import CategorySelect from '../CategorySelect';
 import {
   buildImportRows, guessColumnMapping, inferClosingBalance, parseAmount, parseCsv,
-  parseStatementText, reconcile, summariseRows, toTransactionPayload,
+  parseStatementLines, parseStatementText, reconcile, summariseRows, toTransactionPayload,
   ROW_DUPLICATE, ROW_INVALID, ROW_SIMILAR,
 } from '../../csv';
 import { fmt, suggestCategoryForNote, TX_EXPENSE, TX_REFUND } from '../../utils';
+
+const LAYOUT_TONES = {
+  good: { background: 'rgba(79,255,176,0.08)', color: 'var(--good)' },
+  warn: { background: 'rgba(251,191,112,0.09)', color: 'var(--warn)' },
+  neutral: { background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)' },
+};
+
+/**
+ * What to tell the user about how their statement was read.
+ *
+ * There is no way to show the PDF beside the rows on a phone, so the
+ * statement's own running balance is the only check available — and it is a
+ * real one: it confirms both the amount and which way the money went. Where it
+ * verifies, say so; where there is nothing to verify against, say that too,
+ * rather than presenting a guess with the same confidence as a checked read.
+ */
+function describeLayout(layout) {
+  if (!layout) return null;
+  const { checked, agreed } = layout.balance;
+
+  const heading = layout.method === 'columns'
+    ? `Read using your statement’s own columns — ${layout.columns.join(' · ')}.`
+    : 'No column headings were found, so each row was read as a date at the start and its amounts at the end.';
+
+  if (!checked) {
+    return { tone: 'neutral', heading, detail: 'It has no running balance to check those amounts against, so give them a glance before importing.' };
+  }
+  if (agreed === checked) {
+    return {
+      tone: 'good',
+      heading,
+      detail: `Its running balance adds up on every row that could be checked (${checked}), so the amounts and whether each is spending or a refund match the statement itself.`,
+    };
+  }
+  return {
+    tone: 'warn',
+    heading,
+    detail: `Its running balance doesn’t add up on ${checked - agreed} of the ${checked} rows that could be checked — worth looking over those amounts, and whether they’re spending or refunds.`,
+  };
+}
 
 const STATUS_STYLES = {
   duplicate: { label: 'Already logged', color: 'var(--text-muted)' },
@@ -171,6 +211,10 @@ export function ImportStatementModal({
   const [invertSigns, setInvertSigns] = useState(false);
   const [dateToleranceDays, setDateToleranceDays] = useState(3);
   const [overrides, setOverrides] = useState({});
+  // How a photo or PDF was read, and whether the statement's own running
+  // balance agrees with the result. Null for a CSV, where the user chose the
+  // columns themselves and has nothing to be told.
+  const [layout, setLayout] = useState(null);
   const [error, setError] = useState('');
   // Set when some (not all) pages of a PDF failed to read — non-blocking,
   // shown alongside whatever rows the readable pages still produced.
@@ -229,6 +273,7 @@ export function ImportStatementModal({
     () => reconcile(closingBalance, account?.balance),
     [closingBalance, account?.balance],
   );
+  const layoutNote = useMemo(() => describeLayout(layout), [layout]);
 
   const setOverride = (index, patch) => {
     setOverrides(current => {
@@ -262,6 +307,7 @@ export function ImportStatementModal({
       setHeaders(result.headers);
       setParsedRows(result.rows);
       setMapping(guessed);
+      setLayout(null);
       setOverrides({});
       setStep('map');
     } catch {
@@ -287,8 +333,12 @@ export function ImportStatementModal({
     let ocrModule;
     try {
       ocrModule = await import('../../ocr');
-      const { text, pageErrors } = await ocrModule.extractStatementText(file, { onProgress: setOcrProgress });
-      const result = parseStatementText(text, { dayFirst });
+      const { text, lines, pageErrors } = await ocrModule.extractStatementText(file, { onProgress: setOcrProgress });
+      // Real columns where the PDF's own geometry offers them — that is what
+      // tells money out from money in — and the flattened reading otherwise.
+      const result = lines
+        ? parseStatementLines(lines, { dayFirst })
+        : parseStatementText(text, { dayFirst });
       if (!result.rows.length) {
         setError('Couldn’t find anything that looked like a transaction in that file. A clearer photo, or your bank’s own PDF, works best.');
         setStep('file');
@@ -304,6 +354,7 @@ export function ImportStatementModal({
       setHeaders([]);
       setParsedRows(result.rows);
       setMapping(result.mapping);
+      setLayout(result.layout);
       setOverrides({});
       setStep('review');
     } catch (err) {
@@ -481,6 +532,16 @@ export function ImportStatementModal({
             </div>
           ))}
         </div>
+
+        {layoutNote && (
+          <div style={{
+            display: 'flex', alignItems: 'flex-start', gap: 9, fontSize: 12, lineHeight: 1.6,
+            padding: '11px 13px', borderRadius: 10, ...LAYOUT_TONES[layoutNote.tone],
+          }}>
+            <Columns3 size={14} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden="true" />
+            <span>{layoutNote.heading} {layoutNote.detail}</span>
+          </div>
+        )}
 
         {reconciliation && (
           <div style={{

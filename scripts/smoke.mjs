@@ -27,6 +27,56 @@ function findChromium() {
   return existsSync(bin) ? bin : undefined;
 }
 
+/**
+ * A statement PDF with a real text layer, laid out in columns the way a UK
+ * bank prints one: Date | Payment type | Details | Paid out | Paid in |
+ * Balance, with the amount unsigned in whichever money column applies.
+ *
+ * Built by hand rather than with a PDF library so this stays dependency-free.
+ * It only needs to be a valid PDF with positioned text in Helvetica — a
+ * standard font pdf.js already has metrics for, which is what lets it report
+ * the run widths the column reader slices on.
+ *
+ * This is the one path unit tests genuinely cannot reach: the lazy
+ * `import('../../ocr')`, pdf.js and its worker actually loading from the built
+ * bundle, and the column reader running against a document rather than a
+ * fixture. It has broken in production more than once.
+ */
+function statementPdf(rows) {
+  const COLUMNS = [40, 100, 170, 360, 430, 500];
+  const show = (cells, y) => cells
+    .map((cell, i) => (cell ? `BT /F1 9 Tf 1 0 0 1 ${COLUMNS[i]} ${y} Tm (${cell}) Tj ET\n` : ''))
+    .join('');
+
+  let content = show(['Your statement 1 August 2026 to 31 August 2026'], 800);
+  content += show(['Date', 'Payment type', 'Details', 'Paid out', 'Paid in', 'Balance'], 740);
+  let y = 720;
+  for (const row of rows) { content += show(row, y); y -= 16; }
+  content += show(['', '', 'BALANCE CARRIED FORWARD', '', '', '974.74'], y - 10);
+
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] '
+      + '/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${content.length} >>\nstream\n${content}endstream`,
+  ];
+
+  let pdf = '%PDF-1.4\n';
+  const offsets = [];
+  objects.forEach((body, i) => {
+    offsets.push(pdf.length);
+    pdf += `${i + 1} 0 obj\n${body}\nendobj\n`;
+  });
+
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(pdf, 'latin1');
+}
+
 const errors = [];
 const step = (msg) => console.log(`  ✓ ${msg}`);
 
@@ -514,6 +564,48 @@ if (await page.getByRole('button', { name: /^Import \d+ transactions?$/ }).isEna
 await page.getByRole('button', { name: 'Close dialog' }).click();
 await page.waitForTimeout(300);
 step('re-importing the same statement imports nothing twice');
+
+// ── A PDF statement, read as the columns it was printed in ──────────────────
+
+await page.getByRole('button', { name: /Import Statement/ }).click();
+await page.getByRole('dialog').waitFor({ timeout: 5000 });
+await page.setInputFiles('input[type="file"][accept*="pdf"]', {
+  name: 'statement.pdf',
+  mimeType: 'application/pdf',
+  buffer: statementPdf([
+    ['01 Aug 2026', 'DEB', 'COSTA COFFEE', '3.20', '', '996.80'],
+    ['02 Aug 2026', 'DEB', 'ALDI STORES', '41.05', '', '955.75'],
+    ['03 Aug 2026', 'FPI', 'REFUND VINTED', '', '18.99', '974.74'],
+  ]),
+});
+// pdf.js loads its worker on demand, so this step is slower than the CSV one.
+await page.getByRole('button', { name: /^Import \d+ transactions?$/ }).waitFor({ timeout: 30000 });
+
+const pdfReview = await page.getByRole('dialog').innerText();
+if (!/using your statement’s own columns/i.test(pdfReview)) {
+  errors.push(`PDF was not read as columns:\n${pdfReview}`);
+}
+if (!/Paid out/.test(pdfReview) || !/Paid in/.test(pdfReview)) {
+  errors.push(`money columns not named in the review:\n${pdfReview}`);
+}
+// The running balance is the only check available on a phone, and it has to
+// pass on a statement whose own arithmetic is consistent.
+if (!/adds up on every row/i.test(pdfReview)) {
+  errors.push(`running balance did not verify:\n${pdfReview}`);
+}
+// £3.20 + £41.05 out, £18.99 in — separate columns, so direction comes from
+// the column a row's amount sits in rather than from a sign it doesn't have.
+if (!/£44\.25/.test(pdfReview)) errors.push(`PDF spending total wrong:\n${pdfReview}`);
+if (!/£18\.99/.test(pdfReview)) errors.push('money-in column not read as a refund');
+if (/BALANCE CARRIED FORWARD/i.test(pdfReview)) errors.push('carried-forward row was offered as a transaction');
+
+const pdfInputs = await page.locator('.modal-box input[type="text"]').evaluateAll(els => els.map(el => el.value));
+if (!pdfInputs.some(v => /COSTA COFFEE/.test(v))) errors.push(`PDF review lists no rows: ${JSON.stringify(pdfInputs)}`);
+if (pdfInputs.some(v => /^DEB /.test(v))) errors.push(`payment-type code left in a description: ${JSON.stringify(pdfInputs)}`);
+
+await page.getByRole('button', { name: 'Close dialog' }).click();
+await page.waitForTimeout(300);
+step('PDF statement read as real columns, with money in and out told apart');
 
 // ── Looking back ─────────────────────────────────────────────────────────
 

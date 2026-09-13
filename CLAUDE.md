@@ -32,8 +32,9 @@ src/
 ├── db.js                 # Dexie schema + every database helper function
 ├── utils.js              # Pure functions only — cycles, scheduling, forecasting, formatting
 ├── index.css             # All styling: CSS variables, glass classes, component styles
-├── csv.js                # Pure: bank-statement parsing (CSV and free-form OCR text),
-│                         #   column mapping, dedupe (same-day and date-tolerant), reconciliation
+├── csv.js                # Pure: bank-statement parsing (CSV, a PDF's own column
+│                         #   geometry, and free-form OCR text), column mapping,
+│                         #   dedupe (same-day and date-tolerant), reconciliation
 ├── ocr.js                # pdf.js text extraction + Tesseract OCR, both self-hosted, both lazy-loaded
 ├── budgetConfig.js       # Pure: budget-config validation and the staged preview diff
 ├── prediction.js         # Pure: Monte Carlo spend simulation and backtesting
@@ -216,8 +217,9 @@ back into the same `{ rows, mapping }` shape `parseCsv` produces, so
 
 Four things worth preserving if you touch this:
 
-- **A PDF's text layer has no lines of its own — `textFromContent` in
-  `csv.js` reconstructs them.** `pdf.js`'s `getTextContent()` returns text as
+- **A PDF's text layer has no lines of its own — `linesFromContent` in
+  `csv.js` reconstructs them** (and `textFromContent` flattens those to text).
+  `pdf.js`'s `getTextContent()` returns text as
   a flat list of runs positioned by (x, y), not pre-split into lines; naively
   joining `items.map(i => i.str)` with spaces collapses an entire page into
   one run-on string. That isn't a subtle formatting glitch — `parseStatementText`
@@ -331,6 +333,90 @@ folded back into the row's raw values before `buildImportRows` runs, so a
 correction re-enters dedupe and category suggestion properly; amount and
 type are layered on afterwards instead, deliberately, because re-deriving a
 sign from a retyped magnitude is a footgun `AmountField`'s comment explains.
+
+### A statement's columns, and the check that proves the read
+
+Getting text off the page was only half of it. The rows that came back were
+badly partitioned — and the reason is that **a UK bank does not express the
+direction of a transaction as a sign.** Lloyds, Halifax, Bank of Scotland,
+Barclays, HSBC, NatWest and Santander all print *separate* money columns —
+"Paid out"/"Paid in", "Money out"/"Money in", "Debit"/"Credit" — with the
+amount unsigned in whichever one applies. So on a flattened row, the single
+most important fact about a transaction is the one thing not written anywhere
+on the line. The shipped parser read the last number as a balance, the one
+before it as the amount, and every unsigned amount as **positive** — which
+`buildImportRows` reads as a refund. A whole statement therefore imported as a
+page of refunds, every row crediting a category instead of spending from it.
+On a generated Lloyds-shaped statement, 2 of 14 rows came out fully correct.
+
+There are now two readings, and they share everything downstream:
+
+- **`parseStatementLines(lines)` — the accurate one.** It finds the table's
+  header row and slices every later row on that header's own x boundaries.
+  Naming the cells is `guessColumnMapping`, the *same* function the CSV path
+  uses on a CSV's header row, so the vocabulary a bank might use is described
+  once rather than twice. Money out and money in then land in different cells
+  and direction is structural, with nothing inferred. Same PDF: 14 of 14.
+- **`parseStatementText(text)` — the fallback.** Still needed, and not going
+  away: a photo or a scan has no geometry at all, and some PDFs emit a whole
+  row as one undifferentiated run. It infers what the other one reads.
+
+**The running balance is the arbiter, and the honest thing to show the user.**
+A statement that prints a balance is checking itself: each row's balance is the
+one before it plus that row's signed amount. `scoreRunningBalance` measures
+exactly that, and it is the only check available to a phone that cannot show
+the PDF beside the rows. It does three jobs — it picks between the two readings
+(geometry wins unless the statement's own arithmetic says it's wrong), it
+settles direction for an unsigned amount column, and it tells the user in the
+review step whether the read verified or merely parsed. `layout` carries that
+verdict out of `csv.js`; `describeLayout` in `statement.jsx` words it. **Don't
+reduce that to "rows found" — a parse that nothing checked and a parse the
+document confirms are not the same claim,** and the difference is what the user
+needs in order to trust an import they cannot otherwise audit.
+
+Six things a real statement forces, none of them visible in a hand-built
+fixture — every one of them found by running a generated multi-page
+Lloyds-shaped PDF through the real pipeline, not by reasoning:
+
+- **A wrap must be adjacent.** A continuation line has no date and no amounts,
+  under the details column alone. That test alone is not enough: the statement
+  period reprinted at the top of page two matches it exactly, and got appended
+  to page one's last transaction. So a wrap must also be on the same page and
+  within a few lines' spacing (`CONTINUATION_GAP_FACTOR`). Page boundaries are
+  detected from y *increasing*, since baselines only ever run down a page —
+  which is why `ocr.js` must concatenate each page's lines in reading order and
+  nothing may re-sort them globally.
+- **Money columns hold money.** Most statements let the details column overflow
+  to the right, since nothing is printed beside it on most rows. Its tail lands
+  in "paid out", displaces the amount, and the row reaches review with nothing
+  to import. `repairMoneyColumns` sorts the words by what they are once their
+  column is known.
+- **The payment-type code is not part of the merchant.** `DD`, `SO`, `FPI`,
+  `FPO`, `DEB`, `BGC`, `CPT`, `TFR`, `CHQ`, `INT` — Lloyds gives it a column,
+  other banks put it in front of the merchant, and a narrow gap between two
+  columns merges the two anyway. It is the same string on every direct debit
+  you have, so leaving it in makes unrelated rows look alike and none of them
+  look like what the user typed by hand. `PAYMENT_TYPE_CODE` deliberately omits
+  codes that double as real merchants — `BP` is a bill payment to Lloyds and a
+  petrol station to everyone else.
+- **Not every row is a transaction.** "Balance brought forward" carries a date
+  and a balance and nothing else, so nothing structural tells it from a real
+  row; `NON_TRANSACTION_ROW` names those. Keep that list *narrow* — "TOTAL
+  FITNESS" is a real gym, so a bare leading "total" can't be grounds for
+  dropping a row.
+- **Money columns are flush right and adjacent.** `trailingMoneyRun` only
+  accepts a run of money tokens reaching the end of the line, which is what
+  keeps a money-shaped reference number ("PLUMBER REF INVOICE 100.00") out of
+  the amount.
+- **A header carries no money.** That is the cheap guard against mistaking a
+  transaction for a header: "Balance brought forward … 1,234.56" matches
+  `/balance/i` as surely as the real header does.
+
+`scripts/smoke.mjs` builds a column-laid-out PDF by hand and imports it through
+the UI, because the lazy `import('../../ocr')`, pdf.js loading its worker from
+the built bundle, and the column reader running against a document rather than
+a fixture are exactly what unit tests cannot reach — and exactly what has
+broken in production before.
 
 ### Goals are earmarks, not transfers
 
@@ -761,9 +847,12 @@ Find `fmt()` and `fmtShort()` in `utils.js`. Change the `currency` option in `In
 `csv.js` is pure and self-contained: parsing, delimiter detection, amount and
 date reading, column mapping, duplicate detection (same-day and date-tolerant)
 and reconciliation. A photo, screenshot or PDF goes through `ocr.js` first
-(pdf.js text layer, or Tesseract OCR — see "Statement OCR" above), which hands
-its text to `parseStatementText` to reach the exact same `{ rows, mapping }`
-shape a CSV produces. The modal (`modals/statement.jsx`) owns the flow —
+(pdf.js text layer, or Tesseract OCR — see "Statement OCR" above). Where the
+PDF offers positioned text, `parseStatementLines` reads its real columns;
+otherwise `parseStatementText` reads it line by line. Either way the result is
+the exact same `{ rows, mapping }` shape a CSV produces, plus a `layout` saying
+which reading was used and whether the statement's own running balance
+confirms it. The modal (`modals/statement.jsx`) owns the flow —
 file → (column mapping, CSV only) → review — and injects
 `suggestCategoryForNote` as a closure, so `csv.js` never reaches for rules or
 history itself.
