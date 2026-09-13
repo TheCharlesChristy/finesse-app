@@ -11,8 +11,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDedupeKey, buildImportRows, detectDelimiter, guessColumnMapping,
   hasUsableTextLayer, inferClosingBalance, normaliseDescription, parseAmount, parseCsv,
-  parseStatementDate, parseStatementText, reconcile, similarDescriptions, summariseRows,
-  textFromContent, toTransactionPayload,
+  linesFromContent, parseStatementDate, parseStatementLines, parseStatementText, reconcile,
+  scoreRunningBalance, similarDescriptions, summariseRows, textFromContent, toTransactionPayload,
   ROW_DUPLICATE, ROW_INVALID, ROW_NEW, ROW_SIMILAR,
 } from '../csv';
 
@@ -671,9 +671,14 @@ describe('textFromContent', () => {
       ],
     };
     const { rows } = parseStatementText(textFromContent(content));
+    // Signed money-out: the amounts are unsigned on the page, as they are on
+    // every real statement, and parseStatementText resolves the direction
+    // rather than leaving it to be read as a refund. Row two is settled by
+    // the running balance falling by exactly 45.00; row one has nothing
+    // before it to compare against and takes the money-out default.
     expect(rows).toEqual([
-      ['01 Sep 2026', 'TESCO STORES', '12.40', '987.60'],
-      ['02 Sep 2026', 'BRITISH GAS', '45.00', '942.60'],
+      ['01 Sep 2026', 'TESCO STORES', '-12.40', '987.60'],
+      ['02 Sep 2026', 'BRITISH GAS', '-45.00', '942.60'],
     ]);
   });
 });
@@ -681,13 +686,13 @@ describe('textFromContent', () => {
 describe('parseStatementText', () => {
   it('reads a simple ledger line: date, description, trailing amount', () => {
     const { rows, mapping } = parseStatementText('05/01/2026 TESCO STORES 12.40');
-    expect(rows).toEqual([['05/01/2026', 'TESCO STORES', '12.40', '']]);
+    expect(rows).toEqual([['05/01/2026', 'TESCO STORES', '-12.40', '']]);
     expect(mapping).toEqual({ date: 0, description: 1, amount: 2, debit: null, credit: null, balance: 3 });
   });
 
   it('takes two trailing numbers as amount then running balance', () => {
     const { rows } = parseStatementText('05/01/2026 TESCO STORES 12.40 987.60');
-    expect(rows[0]).toEqual(['05/01/2026', 'TESCO STORES', '12.40', '987.60']);
+    expect(rows[0]).toEqual(['05/01/2026', 'TESCO STORES', '-12.40', '987.60']);
   });
 
   it('drops header lines that appear before the first date', () => {
@@ -708,7 +713,7 @@ describe('parseStatementText', () => {
     const { rows } = parseStatementText(text);
     expect(rows).toHaveLength(1);
     expect(rows[0][1]).toBe('CARD PAYMENT TO TESCO STORES 3294');
-    expect(rows[0][2]).toBe('12.40');
+    expect(rows[0][2]).toBe('-12.40');
   });
 
   it('keeps the earlier of two dates on a line — transaction date over posting date', () => {
@@ -740,5 +745,367 @@ describe('parseStatementText', () => {
   it('returns nothing for text with no dated lines at all', () => {
     const { rows } = parseStatementText('This is not a bank statement.');
     expect(rows).toEqual([]);
+  });
+});
+
+describe('parseStatementText, on the shapes real statements print', () => {
+  it('ignores a money-shaped reference and takes the amount flush to the right', () => {
+    // Money columns are always the rightmost thing on a row and always
+    // adjacent; a figure with words after it is part of the description, not
+    // a column. Reading right-to-left without that rule imported the £100
+    // reference instead of the £12.40 purchase.
+    const { rows } = parseStatementText('01/09/2026 DD BRITISH GAS REF 100.00 PAID 12.40');
+    // The "DD" goes too — both readings drop the payment-type code, or a
+    // description would depend on which of them ran.
+    expect(rows[0][1]).toBe('BRITISH GAS REF 100.00 PAID');
+    expect(rows[0][2]).toBe('-12.40');
+  });
+
+  it('reads the non-zero column when a statement prints money out and money in on every row', () => {
+    const text = [
+      '01/09/2026 TESCO STORES 12.40 0.00 987.60',
+      '02/09/2026 ACME LTD SALARY 0.00 1500.00 2487.60',
+    ].join('\n');
+    const { rows } = parseStatementText(text);
+
+    expect(rows[0]).toEqual(['01/09/2026', 'TESCO STORES', '-12.40', '987.60']);
+    expect(rows[1]).toEqual(['02/09/2026', 'ACME LTD SALARY', '1500.00', '2487.60']);
+  });
+
+  it('works out money in from a rising balance, and money out from a falling one', () => {
+    const text = [
+      '01/09/2026 TESCO STORES 12.40 987.60',
+      '02/09/2026 ACME LTD SALARY 1500.00 2487.60',
+      '03/09/2026 BRITISH GAS 45.00 2442.60',
+    ].join('\n');
+    const { rows, mapping, layout } = parseStatementText(text);
+    const built = buildImportRows({ rows, mapping, defaultCategoryId: 1 });
+
+    expect(built[1]).toMatchObject({ amount: 1500, type: 'refund' });
+    expect(built[2]).toMatchObject({ amount: 45, type: 'expense' });
+    // Nothing precedes the first row, so it takes the money-out default.
+    expect(built[0]).toMatchObject({ amount: 12.4, type: 'expense' });
+    expect(layout.balance).toMatchObject({ checked: 2, agreed: 2 });
+  });
+
+  it('stops reading the last column as a balance when the arithmetic says it is not one', () => {
+    // Three rows that all carry the same figure before the amount: read as a
+    // running balance it would have to change by 100.00 every row and plainly
+    // doesn't, so the last column is the amount and there is no balance.
+    const text = [
+      '01/09/2026 TESCO 100.00 12.40',
+      '02/09/2026 BOOTS 100.00 18.99',
+      '03/09/2026 SHELL 100.00 42.10',
+    ].join('\n');
+    const { rows, mapping } = parseStatementText(text);
+
+    expect(mapping.balance).toBeNull();
+    expect(rows.map(row => row[2])).toEqual(['-12.40', '-18.99', '-42.10']);
+  });
+
+  it('borrows the year from the statement header for rows that print only a day and month', () => {
+    const text = [
+      'Your statement 1 January 2026 to 31 January 2026',
+      '05 Jan TESCO STORES 12.40 987.60',
+      '06 Jan BRITISH GAS 45.00 942.60',
+    ].join('\n');
+    const { rows, mapping } = parseStatementText(text);
+    const built = buildImportRows({ rows, mapping, defaultCategoryId: 1 });
+
+    expect(built.map(row => row.date)).toEqual(['2026-01-05', '2026-01-06']);
+  });
+
+  it('will not take a bare four-digit number in a header as the year', () => {
+    // A registration number, a sort code fragment or a page count would
+    // otherwise date the whole statement to something invented.
+    const { rows } = parseStatementText('Registered in England no 2065514\n05 Jan TESCO 12.40');
+    expect(rows).toEqual([]);
+  });
+
+  it('drops a balance-carried-forward line instead of gluing it to the last transaction', () => {
+    const text = [
+      '01/09/2026 TESCO STORES 12.40 987.60',
+      'BALANCE CARRIED FORWARD 987.60',
+    ].join('\n');
+    const { rows } = parseStatementText(text);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0][1]).toBe('TESCO STORES');
+  });
+
+  it('leaves a CR-marked credit alone rather than defaulting it to money out', () => {
+    const { rows, mapping } = parseStatementText('05/01/2026 SALARY 1500.00 CR');
+    const built = buildImportRows({ rows, mapping, defaultCategoryId: 1 });
+    expect(built[0]).toMatchObject({ amount: 1500, type: 'refund' });
+  });
+});
+
+describe('scoreRunningBalance', () => {
+  const mapping = { date: 0, description: 1, amount: 2, debit: null, credit: null, balance: 3 };
+
+  it('agrees with a statement whose balance column adds up', () => {
+    const rows = [
+      ['01/09/2026', 'TESCO', '-12.40', '987.60'],
+      ['02/09/2026', 'SHELL', '-45.00', '942.60'],
+      ['03/09/2026', 'SALARY', '1500.00', '2442.60'],
+    ];
+    expect(scoreRunningBalance(rows, mapping)).toEqual({ checked: 2, agreed: 2, ratio: 1 });
+  });
+
+  it('reports nothing checked rather than a passing score when there is no balance column', () => {
+    const rows = [['01/09/2026', 'TESCO', '-12.40', '']];
+    expect(scoreRunningBalance(rows, { ...mapping, balance: null }))
+      .toEqual({ checked: 0, agreed: 0, ratio: null });
+  });
+
+  it('catches a parse that put the wrong number in the amount column', () => {
+    const rows = [
+      ['01/09/2026', 'TESCO', '-12.40', '987.60'],
+      ['02/09/2026', 'SHELL', '-99.99', '942.60'],
+    ];
+    expect(scoreRunningBalance(rows, mapping)).toMatchObject({ checked: 1, agreed: 0 });
+  });
+
+  it('reads a money-out/money-in pair the same way buildImportRows does', () => {
+    const pair = { date: 0, description: 1, amount: null, debit: 2, credit: 3, balance: 4 };
+    const rows = [
+      ['01/09/2026', 'TESCO', '12.40', '', '987.60'],
+      ['02/09/2026', 'SALARY', '', '1500.00', '2487.60'],
+    ];
+    expect(scoreRunningBalance(rows, pair)).toMatchObject({ checked: 1, agreed: 1 });
+  });
+});
+
+describe('parseStatementLines — a statement read as the columns it was printed in', () => {
+  // A pdf.js TextItem, with the `width` the library reports alongside `str`
+  // and `transform`. That width is what makes column geometry readable: it is
+  // the difference between knowing where a run starts and knowing what space
+  // it occupies.
+  const run = (str, x, y, width) => ({ str, width, transform: [1, 0, 0, 1, x, y] });
+
+  // The layout Lloyds, Halifax and Bank of Scotland share, and close to what
+  // Barclays, HSBC, NatWest and Santander print: money out and money in are
+  // separate columns and the amount in each is unsigned, so the direction of
+  // a transaction is carried by *which column it is in* and by nothing on the
+  // line itself. Flattening the page to text throws that away.
+  const header = [
+    run('Date', 40, 700, 18),
+    run('Payment type', 80, 700, 50),
+    run('Details', 140, 700, 30),
+    run('Paid out', 330, 700, 34),
+    run('Paid in', 390, 700, 28),
+    run('Balance', 445, 700, 32),
+  ];
+  const expense = [
+    run('05 Jan 2026', 40, 684, 45),
+    run('DEB', 80, 684, 14),
+    run('TESCO STORES 3294', 140, 684, 76),
+    run('12.40', 341, 684, 23),
+    run('987.60', 449, 684, 28),
+  ];
+  const wrapped = [run('LONDON GB', 140, 670, 44)];
+  const credit = [
+    run('06 Jan 2026', 40, 654, 45),
+    run('BGC', 80, 654, 14),
+    run('ACME LTD SALARY', 140, 654, 68),
+    run('1,500.00', 380, 654, 38),
+    run('2,487.60', 440, 654, 37),
+  ];
+
+  const linesOf = (...items) => linesFromContent({ items: items.flat() });
+  const parse = (...items) => parseStatementLines(linesOf(...items));
+  // Lines are clustered per page and then concatenated in reading order,
+  // exactly as ocr.js hands them over: y restarts at the top of every page,
+  // so a page-two row at the same height as page one's header must not be
+  // merged into it.
+  const parsePages = (...pages) => parseStatementLines(pages.flatMap(page => linesOf(...page)));
+
+  it('maps money out and money in to their own columns, so direction is structural', () => {
+    const { rows, mapping, layout } = parse(header, expense, credit);
+
+    expect(layout.method).toBe('columns');
+    expect(layout.fields).toEqual({
+      date: 'Date', description: 'Details', debit: 'Paid out', credit: 'Paid in', balance: 'Balance',
+    });
+    expect(mapping.amount).toBeNull();
+
+    const built = buildImportRows({ rows, mapping, defaultCategoryId: 1 });
+    expect(built[0]).toMatchObject({ date: '2026-01-05', amount: 12.4, type: 'expense', balance: 987.6 });
+    expect(built[1]).toMatchObject({ date: '2026-01-06', amount: 1500, type: 'refund', balance: 2487.6 });
+  });
+
+  it('checks itself against the statement’s own running balance', () => {
+    const { layout } = parse(header, expense, credit);
+    expect(layout.balance).toMatchObject({ checked: 1, agreed: 1, ratio: 1 });
+  });
+
+  it('leaves the payment-type column out of the description', () => {
+    // "DEB" is noise for matching a bank's wording against something the user
+    // typed by hand, and the flattened reading had no way to drop it.
+    const { rows, mapping } = parse(header, expense, credit);
+    expect(rows[0][mapping.description]).toBe('TESCO STORES 3294');
+    // The raw row keeps every column the statement printed, mapped or not —
+    // what matters is that an unmapped one never reaches the transaction.
+    const built = buildImportRows({ rows, mapping, defaultCategoryId: 1 });
+    expect(built[0].description).toBe('TESCO STORES 3294');
+  });
+
+  it('folds a wrapped description onto the row above it', () => {
+    const { rows, mapping } = parse(header, expense, wrapped, credit);
+    expect(rows[0][mapping.description]).toBe('TESCO STORES 3294 LONDON GB');
+    expect(rows).toHaveLength(2);
+  });
+
+  it('carries the header across a page break that does not reprint it', () => {
+    // A table starting mid-page and continuing past a break is the case that
+    // breaks position-by-position parsers: page two has rows and no header.
+    const page2 = [
+      run('07 Jan 2026', 40, 700, 45),
+      run('DD', 80, 700, 10),
+      run('BRITISH GAS', 140, 700, 52),
+      run('45.00', 341, 700, 23),
+      run('2,442.60', 440, 700, 37),
+    ];
+    const { rows, mapping } = parsePages([header, expense, credit], [page2]);
+    const built = buildImportRows({ rows, mapping, defaultCategoryId: 1 });
+
+    expect(built).toHaveLength(3);
+    expect(built[2]).toMatchObject({ date: '2026-01-07', amount: 45, type: 'expense' });
+  });
+
+  it('drops a dated balance-brought-forward row rather than showing it as unimportable', () => {
+    const broughtForward = [
+      run('01 Jan 2026', 40, 692, 45),
+      run('BALANCE BROUGHT FORWARD', 140, 692, 104),
+      run('900.00', 449, 692, 28),
+    ];
+    const { rows } = parse(header, broughtForward, expense, credit);
+    expect(rows).toHaveLength(2);
+  });
+
+  it('drops page furniture instead of appending it to the last transaction', () => {
+    const footer = [run('Page 1 of 2', 40, 60, 45)];
+    const { rows, mapping } = parse(header, expense, credit, footer);
+    expect(rows).toHaveLength(2);
+    expect(rows[1][mapping.description]).toBe('ACME LTD SALARY');
+  });
+
+  it('rescues an amount from a description that overflows into the money column', () => {
+    // Most statements leave the details column room to run past its own edge,
+    // since nothing is printed beside it on most rows. Its tail then lands in
+    // "paid out" and displaces the amount, and the row reaches review with
+    // nothing to import.
+    const overflowing = [
+      run('07 Jan 2026', 40, 638, 45),
+      run('A VERY LONG MERCHANT NAME INDEED', 140, 638, 220),
+      run('9.99', 346, 638, 18),
+      run('2,477.61', 440, 638, 37),
+    ];
+    const { rows, mapping } = parse(header, expense, credit, overflowing);
+    const built = buildImportRows({ rows, mapping, defaultCategoryId: 1 });
+
+    expect(built[2]).toMatchObject({ amount: 9.99, type: 'expense' });
+    expect(built[2].description).toContain('A VERY LONG MERCHANT NAME INDEED');
+  });
+
+  it('groups a header label split across two runs', () => {
+    const split = [
+      run('Date', 40, 700, 18),
+      run('Payment type', 80, 700, 50),
+      run('Details', 140, 700, 30),
+      run('Paid', 330, 700, 16),
+      run('out', 349, 700, 13),
+      run('Paid in', 390, 700, 28),
+      run('Balance', 445, 700, 32),
+    ];
+    const { layout } = parse(split, expense, credit);
+    expect(layout.fields.debit).toBe('Paid out');
+  });
+
+  it('drops the payment-type code a bank prints beside the merchant', () => {
+    // "DEB" is the same string on every card payment and no part of the
+    // merchant's name, so it makes two unrelated rows look alike and none of
+    // them look like what the user typed by hand.
+    const { rows, mapping } = parse(header, expense, credit);
+    expect(rows[0][mapping.description]).toBe('TESCO STORES 3294');
+    expect(rows[1][mapping.description]).toBe('ACME LTD SALARY');
+  });
+
+  it('does not mistake the start of a real merchant for a payment-type code', () => {
+    const interest = [
+      run('21 Jan 2026', 40, 654, 45),
+      run('INT', 80, 654, 12),
+      run('INTEREST PAID', 140, 654, 58),
+      run('1.24', 384, 654, 18),
+      run('988.84', 449, 654, 28),
+    ];
+    const { rows, mapping } = parse(header, expense, interest);
+    expect(rows[1][mapping.description]).toBe('INTEREST PAID');
+  });
+
+  it('reads a CR-marked amount in a money column as money in', () => {
+    // A credit-card statement writes direction as a trailing CR or DR rather
+    // than with separate columns, and parseAmount cannot read "12.40 CR".
+    const singleAmount = [
+      run('Date', 40, 700, 18),
+      run('Description', 140, 700, 50),
+      run('Amount', 360, 700, 30),
+      run('Balance', 445, 700, 32),
+    ];
+    const refund = [
+      run('05 Jan 2026', 40, 684, 45),
+      run('REFUND ASOS', 140, 684, 52),
+      run('18.99 CR', 350, 684, 36),
+      run('1,006.59', 440, 684, 37),
+    ];
+    const { rows, mapping, layout } = parse(singleAmount, refund);
+
+    expect(layout.method).toBe('columns');
+    const built = buildImportRows({ rows, mapping, defaultCategoryId: 1 });
+    expect(built[0]).toMatchObject({ amount: 18.99, type: 'refund' });
+  });
+
+  it('does not read a header reprinted at the top of page two as a wrapped description', () => {
+    // The statement period lands under the details column with every other
+    // column empty — indistinguishable from a wrap except that it is on the
+    // next page. Read as one it appends the whole header to page one's last
+    // transaction.
+    const page2 = [
+      [run('Your statement 1 January to 31 January 2026', 140, 800, 196)],
+      [
+        run('07 Jan 2026', 40, 760, 45),
+        run('DD', 80, 760, 10),
+        run('BRITISH GAS', 140, 760, 52),
+        run('45.00', 341, 760, 23),
+        run('2,442.60', 440, 760, 37),
+      ],
+    ];
+    const { rows, mapping } = parsePages([header, expense, credit], page2.flat());
+
+    expect(rows).toHaveLength(3);
+    expect(rows[1][mapping.description]).toBe('ACME LTD SALARY');
+    expect(rows.join(' ')).not.toContain('Your statement');
+  });
+
+  it('does not append a line far below the last transaction', () => {
+    const marketing = [run('Ways to bank with us', 140, 400, 90)];
+    const { rows, mapping } = parse(header, expense, credit, marketing);
+    expect(rows[1][mapping.description]).toBe('ACME LTD SALARY');
+  });
+
+  it('falls back to the line-by-line reading when the page has no header at all', () => {
+    const { layout, rows } = parse(expense, credit);
+    expect(layout.method).toBe('lines');
+    expect(rows).toHaveLength(2);
+  });
+
+  it('does not mistake a transaction row for a header', () => {
+    // "Balance brought forward … 900.00" matches /balance/i as surely as the
+    // real header does; carrying money is what tells them apart.
+    const { layout } = parse(
+      [run('01 Jan 2026', 40, 700, 45), run('BALANCE BROUGHT FORWARD', 140, 700, 104), run('900.00', 449, 700, 28)],
+      expense,
+    );
+    expect(layout.method).toBe('lines');
   });
 });

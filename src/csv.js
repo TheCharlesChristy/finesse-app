@@ -307,14 +307,46 @@ const LEADING_DATE_PATTERNS = [
   /^(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\b/,
   /^(\d{1,2}\s*[A-Za-z]{3,9}\s*\d{2,4})\b/,
   /^([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4})\b/,
+  // A statement that prints the year once in its header writes each row as
+  // just "05 Jan" or "05/01" — common on UK current-account statements, and
+  // unreadable as a date until the caller supplies the year.
+  /^(\d{1,2}\s*[A-Za-z]{3,9})\b/,
 ];
 
 /** A leading date this line actually starts with, validated rather than guessed. */
-function matchLeadingDate(line, dayFirst) {
+function matchLeadingDate(line, dayFirst, year = null) {
   for (const pattern of LEADING_DATE_PATTERNS) {
     const match = line.match(pattern);
-    if (match && parseStatementDate(match[1], { dayFirst })) {
-      return { raw: match[1], rest: line.slice(match[0].length).trim() };
+    if (!match) continue;
+    const raw = year && !/\d{4}|\d{2}$/.test(match[1]) ? `${match[1]} ${year}` : match[1];
+    if (parseStatementDate(raw, { dayFirst })) {
+      return { raw, rest: line.slice(match[0].length).trim() };
+    }
+  }
+  return null;
+}
+
+// The year a statement prints once, in its own header rather than on every
+// row: "Your statement 1 January to 31 January 2026". Rows written as a bare
+// "05 Jan" borrow it.
+//
+// Only a fully written date may supply it. A bare four-digit number in a
+// header is as likely to be a company registration or a sort code as a year,
+// and dating a whole statement to 2065 off one would be worse than leaving
+// its rows unreadable and saying so.
+const STATEMENT_YEAR_PATTERNS = [
+  /\b\d{1,2}[\s/.-]+[A-Za-z]{3,9}[\s/.,-]+((?:19|20)\d{2})\b/,
+  /\b[A-Za-z]{3,9}[\s/.-]+\d{1,2}[\s/.,-]+((?:19|20)\d{2})\b/,
+  /\b\d{1,2}[/.-]\d{1,2}[/.-]((?:19|20)\d{2})\b/,
+  /\b((?:19|20)\d{2})-\d{1,2}-\d{1,2}\b/,
+];
+
+function findStatementYear(lines, dayFirst) {
+  for (const line of lines) {
+    if (matchLeadingDate(line, dayFirst)) break;   // into the transactions already
+    for (const pattern of STATEMENT_YEAR_PATTERNS) {
+      const match = line.match(pattern);
+      if (match) return match[1];
     }
   }
   return null;
@@ -328,6 +360,14 @@ function findMoneyTokens(text) {
   return [...text.matchAll(MONEY_TOKEN)].map(match => ({ raw: match[0], index: match.index }));
 }
 
+/** Whether a cell holds one money value and nothing else. */
+function looksLikeMoney(value = '') {
+  const text = String(value).trim();
+  if (!text) return false;
+  const tokens = findMoneyTokens(text);
+  return tokens.length === 1 && tokens[0].raw.trim() === text;
+}
+
 /** Fold a trailing "CR"/"DR" marker into the sign `parseAmount` understands. */
 function normaliseMoneyToken(token = '') {
   const match = token.match(/^(.*?)\s*(CR|DR)$/i);
@@ -335,8 +375,219 @@ function normaliseMoneyToken(token = '') {
   let value = match[1].trim();
   const direction = match[2].toUpperCase();
   if (direction === 'DR' && !/^-/.test(value) && !/^\(/.test(value)) value = `-${value}`;
-  else if (direction === 'CR') value = value.replace(/^-/, '');
+  // A "+" rather than a bare magnitude, so the direction the statement stated
+  // outright is never mistaken for one this file has yet to work out — see
+  // `applyBalanceDirection`, which leaves an explicitly signed cell alone.
+  else if (direction === 'CR') value = `+${value.replace(/^[+-]/, '')}`;
   return value;
+}
+
+/** Whether a cell says which way the money went, rather than only how much. */
+function hasExplicitSign(value = '') {
+  const text = String(value).trim();
+  return /^[+-]/.test(text) || /^\(.*\)$/.test(text) || /\b(CR|DR)\b/i.test(text);
+}
+
+/**
+ * The run of money tokens at the end of a line — the statement's money
+ * columns, as against a reference number that happens to be money-shaped.
+ *
+ * "PAYPAL REF 100.00 12.40" is a real hazard: the old reading took the last
+ * two numbers as amount and balance, importing a £100 reference as the
+ * purchase. Money columns are always flush to the right of the row and always
+ * adjacent, so only a run that reaches the end of the line qualifies.
+ */
+function trailingMoneyRun(body) {
+  const tokens = findMoneyTokens(body);
+  const run = [];
+  let expectedEnd = body.length;
+  for (let i = tokens.length - 1; i >= 0; i -= 1) {
+    const token = tokens[i];
+    if (body.slice(token.index + token.raw.length, expectedEnd).trim() !== '') break;
+    run.unshift(token);
+    expectedEnd = token.index;
+  }
+  return run;
+}
+
+// Lines a statement prints that aren't transactions. A dated "balance brought
+// forward" is the one that matters: it carries a date and a balance, so
+// nothing structural tells it from a real row, and it would otherwise reach
+// the review table as an unimportable row with no amount. Kept deliberately
+// narrow — "TOTAL FITNESS" is a real gym, so a bare leading "total" can't be
+// grounds for dropping a row.
+const NON_TRANSACTION_ROW = [
+  /\b(brought|carried)\s+forward\b/i,
+  /\b(opening|closing|previous|start(?:ing)?|end(?:ing)?|statement)\s+balance\b/i,
+  /\bbalance\s+(?:on|as\s+at)\b/i,
+  /^totals?\s*$/i,
+  /\btotals?\s+(?:paid|payments?|debits?|credits?|money|in|out|for)\b/i,
+  /^page\s+\d+\b/i,
+  /\bcontinued\b/i,
+  /^sort\s*code\b/i,
+  /^account\s+(?:number|name)\b/i,
+];
+
+function isNonTransactionRow(text = '') {
+  return NON_TRANSACTION_ROW.some(pattern => pattern.test(text));
+}
+
+// How a UK bank says what kind of payment a row was: DD is a direct debit, SO
+// a standing order, FPI/FPO a faster payment in or out, DEB a debit card, BGC
+// a bank giro credit, CPT a cashpoint withdrawal, TFR a transfer between your
+// own accounts, CHQ a cheque. Lloyds, Halifax and Bank of Scotland print it in
+// a column of its own; plenty of banks put it in front of the merchant in the
+// description instead, and a narrow gap between two columns can merge the two
+// anyway.
+//
+// It isn't part of the merchant's name, and it is the same string on every
+// direct debit you have, so leaving it in makes two unrelated rows look alike
+// and makes none of them look like what the user typed by hand. The list is
+// deliberately short of codes that double as real merchants — "BP" means bill
+// payment to Lloyds and a petrol station to everyone else, so it is left in.
+const PAYMENT_TYPE_CODE = /^(?:DD|SO|TFR|TRF|FPI|FPO|FPS|DEB|CRD|BGC|BACS?|CPT|CHQ|CHG|INT|ATM|POS|CR|DR|SBT|MPI|MPO|ITL|CSH|TLR|OTR)\b[\s:.-]*/i;
+
+function stripPaymentTypeCode(description = '') {
+  const stripped = String(description).replace(PAYMENT_TYPE_CODE, '').trim();
+  // Never strip a row down to nothing: a description that was only a code is
+  // more use kept than blanked.
+  return stripped || String(description).trim();
+}
+
+// A penny, to absorb float noise rather than real disagreement.
+const BALANCE_TOLERANCE = 0.01;
+
+/**
+ * The signed amount a parsed row carries, by whichever convention its mapping
+ * describes: one signed column, or a pair of positive money-out / money-in
+ * columns where the column itself is the sign.
+ *
+ * Shared with `buildImportRows` deliberately. A balance check that read the
+ * columns differently from the importer would happily vouch for a parse the
+ * importer then got wrong.
+ */
+export function signedAmountFromRow(values = [], mapping = {}) {
+  if (mapping.amount != null) return parseAmount(values[mapping.amount]);
+  const debit = mapping.debit != null ? parseAmount(values[mapping.debit]) : null;
+  const credit = mapping.credit != null ? parseAmount(values[mapping.credit]) : null;
+  // Separate columns are written as positive magnitudes; the column is the
+  // sign. Only one of the pair is ever filled in on a given row.
+  if (debit) return -Math.abs(debit);
+  if (credit) return Math.abs(credit);
+  return null;
+}
+
+/**
+ * How well a parse agrees with the statement's own arithmetic.
+ *
+ * A statement that prints a running balance is checking itself: each row's
+ * balance is the one before it plus that row's amount, signed. So a parse that
+ * put the wrong number in the amount column, or read a money-out row as money
+ * in, disagrees with the document it came from — which is the only way this
+ * app can tell a good read from a plausible-looking bad one without a human
+ * comparing every row against the PDF.
+ *
+ * `checked` matters as much as `ratio`: a statement with no balance column, or
+ * one row, proves nothing either way and must not be reported as verified.
+ */
+export function scoreRunningBalance(rows = [], mapping = {}) {
+  if (mapping.balance == null) return { checked: 0, agreed: 0, ratio: null };
+
+  const entries = rows.map(values => ({
+    signed: signedAmountFromRow(values, mapping),
+    balance: parseAmount(values[mapping.balance]),
+  }));
+
+  let checked = 0;
+  let agreed = 0;
+  for (let i = 1; i < entries.length; i += 1) {
+    const previous = entries[i - 1];
+    const current = entries[i];
+    if (previous.balance == null || current.balance == null || current.signed == null) continue;
+    checked += 1;
+    if (Math.abs(roundTo2(current.balance - previous.balance) - current.signed) <= BALANCE_TOLERANCE) {
+      agreed += 1;
+    }
+  }
+
+  return { checked, agreed, ratio: checked ? agreed / checked : null };
+}
+
+/**
+ * Decide which way the money went, where the statement prints one unsigned
+ * amount column.
+ *
+ * A running balance states the direction outright: a row that took the balance
+ * down was money out, whatever its amount column looks like. Where the balance
+ * confirms the magnitude too, that isn't a guess at all.
+ *
+ * Rows it can't settle — the first one, a gap in the balance column, no
+ * balance column at all — default to money **out**, because an unsigned amount
+ * on a bank statement nearly always is. That default is the whole point of
+ * this function: `buildImportRows` reads a positive amount as a refund, so an
+ * unsigned statement used to import as a page of refunds, every row crediting
+ * a category instead of spending from it. A single wrong row is one tap to
+ * flip in the review table; a whole statement inverted looked like the feature
+ * simply didn't work.
+ *
+ * A cell that already carries a sign, accountancy parentheses or a CR/DR
+ * marker is left exactly as it is — the statement has already spoken.
+ */
+function applyBalanceDirection(rows, mapping) {
+  if (mapping.amount == null) return rows;
+
+  const balances = mapping.balance == null
+    ? []
+    : rows.map(values => parseAmount(values[mapping.balance]));
+
+  return rows.map((values, index) => {
+    const cell = values[mapping.amount];
+    if (hasExplicitSign(cell)) return values;
+    const amount = parseAmount(cell);
+    if (!amount) return values;
+
+    const balance = balances[index];
+    const previous = index > 0 ? balances[index - 1] : null;
+    if (balance != null && previous != null) {
+      const delta = roundTo2(balance - previous);
+      if (Math.abs(Math.abs(delta) - amount) <= BALANCE_TOLERANCE && delta > 0) return values;
+    }
+
+    const copy = [...values];
+    copy[mapping.amount] = `-${amount.toFixed(2)}`;
+    return copy;
+  });
+}
+
+const LINE_MAPPING = { date: 0, description: 1, amount: 2, debit: null, credit: null, balance: 3 };
+
+/**
+ * One line's four cells, on the reading that the last money column is (or
+ * isn't) a running balance.
+ */
+function lineRow(dateRaw, body, { lastIsBalance }) {
+  const run = trailingMoneyRun(body);
+  // A layout that puts the amount first has no trailing run at all; falling
+  // back to every money token on the line keeps it readable rather than
+  // dropping the row for want of a tidy right-hand column.
+  const tokens = run.length ? run : findMoneyTokens(body);
+  if (!tokens.length) return [dateRaw, stripPaymentTypeCode(body), '', ''];
+
+  const balanceToken = lastIsBalance && tokens.length >= 2 ? tokens[tokens.length - 1] : null;
+  const pool = balanceToken ? tokens.slice(0, -1) : tokens;
+  // A statement with separate money-out and money-in columns prints both on
+  // every row, one of them reading 0.00. The amount is the one that isn't.
+  const nonZero = pool.filter(token => parseAmount(normaliseMoneyToken(token.raw)));
+  const usable = nonZero.length ? nonZero : pool;
+  const amountToken = usable[usable.length - 1];
+
+  const descriptionEnd = run.length ? tokens[0].index : amountToken.index;
+  return [
+    dateRaw,
+    stripPaymentTypeCode(body.slice(0, descriptionEnd)),
+    normaliseMoneyToken(amountToken.raw),
+    balanceToken ? normaliseMoneyToken(balanceToken.raw) : '',
+  ];
 }
 
 /**
@@ -347,11 +598,11 @@ function normaliseMoneyToken(token = '') {
  * onto the next, and column gaps collapse to arbitrary runs of whitespace.
  *
  * The one thing every bank statement layout agrees on is that a transaction
- * line starts with a date and ends with an amount (often followed by a
- * running balance), so that's what this looks for. Lines before the first
- * date are header noise — account holder, statement period, opening balance —
- * and are dropped rather than guessed at; everything else is either the start
- * of a new transaction or the wrapped remainder of the one before it.
+ * line starts with a date and ends with its money columns, so that's what this
+ * looks for. Lines before the first date are header noise — account holder,
+ * statement period, opening balance — and are dropped rather than guessed at;
+ * everything else is either the start of a new transaction or the wrapped
+ * remainder of the one before it.
  *
  * A card statement that prints both the purchase date and the date it posted
  * is worth naming specifically: the earlier of the two is kept, because it's
@@ -360,11 +611,12 @@ function normaliseMoneyToken(token = '') {
  * date-tolerant matching exists to absorb, so starting from the earlier date
  * needs less of it.
  *
- * A line with three trailing numbers — separate money-out, money-in and
- * balance columns, all printed even when one reads zero — will be misread:
- * the last two are always taken as amount and balance. Statements shaped that
- * way are rare enough, and a misread row can be fixed or dropped at review,
- * that this isn't worth a configuration option.
+ * Whether the last money column on a line is a running balance or the amount
+ * itself is not decidable line by line, so it isn't decided there: both
+ * readings are built for the whole file and the statement's own arithmetic
+ * picks the winner (`scoreRunningBalance`). Prefer a geometric read over this
+ * where the page offers one — `parseStatementLines` reads real columns and
+ * doesn't have to infer any of it.
  */
 export function parseStatementText(text = '', { dayFirst = true } = {}) {
   const lines = String(text)
@@ -372,15 +624,17 @@ export function parseStatementText(text = '', { dayFirst = true } = {}) {
     .map(line => line.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 
+  const year = findStatementYear(lines, dayFirst);
   const candidates = [];
   let current = null;
 
   for (const line of lines) {
-    const dated = matchLeadingDate(line, dayFirst);
+    if (isNonTransactionRow(line)) { if (current) { candidates.push(current); current = null; } continue; }
+    const dated = matchLeadingDate(line, dayFirst, year);
     if (dated) {
       if (current) candidates.push(current);
       let { rest } = dated;
-      const second = matchLeadingDate(rest, dayFirst);
+      const second = matchLeadingDate(rest, dayFirst, year);
       if (second) rest = second.rest;
       current = { dateRaw: dated.raw, body: rest };
     } else if (current) {
@@ -389,26 +643,23 @@ export function parseStatementText(text = '', { dayFirst = true } = {}) {
   }
   if (current) candidates.push(current);
 
-  const rows = candidates.map(({ dateRaw, body }) => {
-    const tokens = findMoneyTokens(body);
-    if (!tokens.length) return [dateRaw, body, '', ''];
-
-    const last = tokens[tokens.length - 1];
-    const secondLast = tokens.length >= 2 ? tokens[tokens.length - 2] : null;
-    const amountToken = secondLast || last;
-    const balanceToken = secondLast ? last : null;
-
-    return [
-      dateRaw,
-      body.slice(0, amountToken.index).trim(),
-      normaliseMoneyToken(amountToken.raw),
-      balanceToken ? normaliseMoneyToken(balanceToken.raw) : '',
-    ];
-  });
+  const withBalance = candidates.map(({ dateRaw, body }) => lineRow(dateRaw, body, { lastIsBalance: true }));
+  const score = scoreRunningBalance(withBalance, LINE_MAPPING);
+  // Only overrule the usual reading when the statement's arithmetic says
+  // outright that it's wrong. An unverifiable balance column — too few rows,
+  // gaps in it — is no evidence either way, and the last number on a bank
+  // statement line really is the balance far more often than not.
+  const lastIsBalance = !(score.checked >= 2 && score.ratio < 0.5);
+  const chosen = lastIsBalance
+    ? withBalance
+    : candidates.map(({ dateRaw, body }) => lineRow(dateRaw, body, { lastIsBalance: false }));
+  const mapping = lastIsBalance ? { ...LINE_MAPPING } : { ...LINE_MAPPING, balance: null };
+  const rows = applyBalanceDirection(chosen, mapping);
 
   return {
     rows,
-    mapping: { date: 0, description: 1, amount: 2, debit: null, credit: null, balance: 3 },
+    mapping,
+    layout: { method: 'lines', columns: null, fields: null, balance: scoreRunningBalance(rows, mapping) },
   };
 }
 
@@ -427,10 +678,11 @@ export function hasUsableTextLayer(text = '') {
 const SAME_LINE_TOLERANCE = 2;
 
 /**
- * Reassemble a pdf.js `getTextContent()` result into real lines, ready for
- * `parseStatementText`. Pure geometry, not pdf.js itself — this takes the
- * plain `{ items: [{ str, transform }] }` shape the library returns, which
- * is why it lives here rather than in `ocr.js` alongside the library import.
+ * Reassemble a pdf.js `getTextContent()` result into lines of positioned
+ * words, ready for either statement parser. Pure geometry, not pdf.js itself —
+ * this takes the plain `{ items: [{ str, width, transform }] }` shape the
+ * library returns, which is why it lives here rather than in `ocr.js`
+ * alongside the library import.
  *
  * Lines are found by clustering items whose baseline (`transform[5]`, the
  * PDF's y-axis, increasing upward) sits within a small tolerance of each
@@ -443,10 +695,14 @@ const SAME_LINE_TOLERANCE = 2;
  * run changes weight or glyph — so x only ever breaks ties within a line
  * whose membership has already been settled by y alone.
  */
-export function textFromContent(content) {
-  const words = content.items
+export function linesFromContent(content) {
+  const words = (content?.items || [])
     .filter(item => item.str && item.str.trim() && item.transform)
-    .map(item => ({ x: item.transform[4], y: item.transform[5], str: item.str }));
+    .map((item) => {
+      const x = item.transform[4];
+      const width = Number.isFinite(item.width) ? item.width : 0;
+      return { x, endX: x + width, y: item.transform[5], str: item.str };
+    });
 
   const lines = [];
   let current = null;
@@ -458,9 +714,302 @@ export function textFromContent(content) {
     current.words.push(word);
   }
 
-  return lines
-    .map(line => [...line.words].sort((a, b) => a.x - b.x).map(w => w.str).join(' '))
-    .join('\n');
+  for (const line of lines) line.words.sort((a, b) => a.x - b.x);
+  return lines;
+}
+
+/** The same page as plain text, one line per typeset line. */
+export function textFromContent(content) {
+  return textFromLines(linesFromContent(content));
+}
+
+/**
+ * Lines back to plain text. Exported because `ocr.js` reads each page once as
+ * lines and needs its text too — for `hasUsableTextLayer`, and as the input to
+ * the flattened reading where the geometric one can't be used.
+ */
+export function textFromLines(lines = []) {
+  return lines.map(line => line.words.map(word => word.str).join(' ')).join('\n');
+}
+
+// ── A statement's own columns ───────────────────────────────────────────────
+
+// How much clear space, relative to the width of a character beside it, marks
+// a column boundary rather than a word space. A space is roughly a quarter of
+// an em and a character averages half of one, so two character-widths of gap
+// is comfortably wider than any inter-word space and far narrower than the
+// gap a table leaves between columns.
+const COLUMN_GAP_FACTOR = 2;
+// For a run whose width pdf.js didn't report, and which therefore has no
+// character width to scale from.
+const FALLBACK_COLUMN_GAP = 8;
+// A header worth trusting names at least this many of the fields we know, one
+// of which has to be the date and one an amount. Fewer than that is a line
+// with a stray "date" or "balance" in it, not a table header.
+const HEADER_MIN_FIELDS = 3;
+// How far below a transaction a wrapped description may sit, as a multiple of
+// the statement's own line spacing. A real wrap is on the very next baseline;
+// anything further down the page is something else that happens to have text
+// only under the details column.
+const CONTINUATION_GAP_FACTOR = 3;
+
+/** The statement's own line spacing, so a wrap can be told from a stray line. */
+function medianLineGap(lines) {
+  const gaps = [];
+  for (let i = 1; i < lines.length; i += 1) {
+    const gap = lines[i - 1].y - lines[i].y;
+    if (gap > 0) gaps.push(gap);
+  }
+  if (!gaps.length) return 0;
+  gaps.sort((a, b) => a - b);
+  return gaps[Math.floor(gaps.length / 2)];
+}
+
+function characterWidth(word) {
+  const length = word.str.trim().length || 1;
+  const width = word.endX - word.x;
+  return width > 0 ? width / length : 0;
+}
+
+/** Group one line's words into table cells, splitting only on column gaps. */
+function cellsFromLine(words = []) {
+  const cells = [];
+  let current = null;
+
+  for (const word of words) {
+    const text = word.str.trim();
+    if (!text) continue;
+
+    if (current) {
+      const scale = Math.max(characterWidth(word), characterWidth(current.words[current.words.length - 1]));
+      const threshold = (scale || FALLBACK_COLUMN_GAP / COLUMN_GAP_FACTOR) * COLUMN_GAP_FACTOR;
+      if (word.x - current.endX <= threshold) {
+        current.words.push(word);
+        current.text = `${current.text} ${text}`;
+        current.endX = Math.max(current.endX, word.endX);
+        continue;
+      }
+    }
+
+    current = { text, x: word.x, endX: word.endX, words: [word] };
+    cells.push(current);
+  }
+
+  return cells;
+}
+
+/**
+ * The table header, if this line is one — and with it the x boundaries every
+ * later row is sliced on.
+ *
+ * `guessColumnMapping` does the naming, exactly as it does for a CSV's header
+ * row, so the vocabulary a bank might use ("Paid out", "Money out", "Debit",
+ * "Withdrawals") is described once for both paths rather than twice.
+ *
+ * A header carries no money, which is the cheap guard against mistaking a
+ * transaction for one: a row reading "Balance brought forward … 1,234.56"
+ * matches `/balance/i` as surely as the real header does.
+ */
+function headerFromLine(line) {
+  if (line.words.some(word => looksLikeMoney(word.str))) return null;
+
+  const cells = cellsFromLine(line.words);
+  if (cells.length < HEADER_MIN_FIELDS) return null;
+
+  const mapping = guessColumnMapping(cells.map(cell => cell.text));
+  const named = Object.values(mapping).filter(index => index != null).length;
+  const hasAmount = mapping.amount != null || mapping.debit != null || mapping.credit != null;
+  if (mapping.date == null || !hasAmount || named < HEADER_MIN_FIELDS) return null;
+
+  const boundaries = [];
+  for (let i = 1; i < cells.length; i += 1) boundaries.push((cells[i - 1].endX + cells[i].x) / 2);
+
+  return { cells, mapping, boundaries, labels: cells.map(cell => cell.text) };
+}
+
+/** Slice one line into the header's columns, by where each run's middle sits. */
+function cellsForColumns(line, columns) {
+  const parts = columns.cells.map(() => []);
+
+  for (const word of line.words) {
+    const text = word.str.trim();
+    if (!text) continue;
+    const middle = (word.x + word.endX) / 2;
+    let index = 0;
+    while (index < columns.boundaries.length && middle >= columns.boundaries[index]) index += 1;
+    parts[index].push(text);
+  }
+
+  return parts.map(words => words.join(' ').trim());
+}
+
+/**
+ * Money columns hold money.
+ *
+ * A long description runs past the right-hand edge of its own column — most
+ * statements leave the details column room to overflow, since nothing is
+ * printed beside it on most rows — and its tail then lands in "paid out",
+ * where it displaces the amount and the row arrives at review with nothing to
+ * import. Sorting the words by what they are, once their column is known,
+ * costs nothing and rescues exactly that row.
+ */
+function repairMoneyColumns(cells, mapping) {
+  const spill = [];
+
+  for (const field of ['amount', 'debit', 'credit', 'balance']) {
+    const index = mapping[field];
+    if (index == null) continue;
+    const value = cells[index];
+    if (!value) continue;
+
+    const tokens = findMoneyTokens(value);
+    const leftover = tokens
+      .reduce((text, token) => text.replace(token.raw, ' '), value)
+      .replace(/\s+/g, ' ')
+      .trim();
+    // Normalised, not just extracted: a credit-card statement writes its
+    // direction as a trailing CR or DR, which `parseAmount` can't read.
+    cells[index] = tokens.length ? normaliseMoneyToken(tokens[tokens.length - 1].raw) : '';
+    if (leftover) spill.push(leftover);
+  }
+
+  if (spill.length && mapping.description != null) {
+    cells[mapping.description] = [cells[mapping.description], ...spill].filter(Boolean).join(' ');
+  }
+
+  return cells;
+}
+
+/**
+ * Read a statement the way it was laid out, from the positioned text of its
+ * own pages.
+ *
+ * This is the accurate path, and the reason it exists: a PDF has no table in
+ * it, only runs of text at (x, y), so a parser that flattens a page to lines
+ * and works right-to-left along each one has to *infer* which trailing number
+ * was the amount, which was the balance, and which way the money went. A UK
+ * statement doesn't express direction as a sign at all — Lloyds, Barclays,
+ * HSBC, NatWest and Santander all print separate "Paid out"/"Money out" and
+ * "Paid in"/"Money in" columns, with the amount unsigned in whichever one
+ * applies — so on the flattened reading the single most important fact about
+ * a transaction is the one thing that isn't on the line.
+ *
+ * Finding the header row recovers all of it: its cells name the columns
+ * (`guessColumnMapping`, shared with the CSV path) and their x extents give
+ * the boundaries every later row is sliced on. Money out and money in then
+ * land in different cells, and `buildImportRows` reads the direction
+ * structurally, with nothing inferred.
+ *
+ * Three details a real statement forces, none of them visible in a
+ * hand-built fixture:
+ *
+ * - **The header repeats, or doesn't.** A multi-page statement usually
+ *   reprints it, but a table that starts mid-page and continues past a page
+ *   break may not, so the last header seen carries forward until another
+ *   replaces it. Pages therefore have to arrive as one sequence, already in
+ *   reading order, and must not be re-sorted here: y resets on every page.
+ * - **A description wraps.** The continuation line has no date and no
+ *   amounts, sitting under the details column alone — which is precisely the
+ *   test applied, since a page footer or a totals line also lacks a date and
+ *   must not be glued onto the previous transaction's description instead.
+ *   That test alone isn't enough, though: the statement period reprinted at
+ *   the top of page two lands under the details column with every other column
+ *   empty, and read as a wrap it appends the whole header to the last
+ *   transaction of page one. So a wrap also has to be *adjacent* — same page,
+ *   and within a few lines' spacing of the row it belongs to.
+ * - **Not every row is a transaction.** "Balance brought forward" carries a
+ *   date and a balance and nothing else; `NON_TRANSACTION_ROW` names those so
+ *   they're dropped rather than shown as unimportable rows.
+ *
+ * The geometry can still be wrong — a header split over two lines, a bank
+ * that emits each row as one undifferentiated run — so the result is checked
+ * against the statement's own running balance and the flattened reading is
+ * used instead where it agrees with the document better. `layout` reports
+ * which reading won and how well it verified, because "we read this as
+ * columns and the arithmetic checks out on 41 of 42 rows" is something the
+ * user can act on, and "here are some rows" is not.
+ */
+export function parseStatementLines(lines = [], { dayFirst = true } = {}) {
+  const fallback = parseStatementText(textFromLines(lines), { dayFirst });
+
+  const year = findStatementYear(lines.map(line => line.words.map(word => word.str).join(' ')), dayFirst);
+  // A page's baselines run down it, so a baseline higher than the one before
+  // can only mean a new page has begun — which is all the page tracking a
+  // wrapped description needs, with no page numbers plumbed through.
+  const maxContinuationGap = medianLineGap(lines) * CONTINUATION_GAP_FACTOR || Infinity;
+  let columns = null;
+  let page = 0;
+  let previousY = null;
+  let openRow = null;      // the row a wrap would belong to: where, and on which page
+  const rows = [];
+
+  for (const line of lines) {
+    if (previousY != null && line.y > previousY) page += 1;
+    previousY = line.y;
+
+    const header = headerFromLine(line);
+    if (header) { columns = header; openRow = null; continue; }
+    if (!columns) continue;                      // header noise above the table
+
+    const cells = cellsForColumns(line, columns);
+    const joined = cells.join(' ').trim();
+    if (!joined || isNonTransactionRow(joined)) continue;
+
+    const { mapping } = columns;
+    const dated = matchLeadingDate(cells[mapping.date] || '', dayFirst, year);
+
+    if (!dated) {
+      // A wrapped description, and only that: text under the details column,
+      // every other column of this row empty, and close enough to the row
+      // above to be part of it.
+      const description = mapping.description == null ? '' : cells[mapping.description];
+      const elsewhere = cells.some((cell, index) => cell && index !== mapping.description);
+      const adjacent = openRow && openRow.page === page && openRow.y - line.y <= maxContinuationGap;
+      if (adjacent && description && !elsewhere) {
+        const row = openRow.row;
+        row[mapping.description] = `${row[mapping.description]} ${description}`.trim();
+        openRow.y = line.y;
+      }
+      continue;
+    }
+
+    cells[mapping.date] = dated.raw;
+    if (dated.rest && mapping.description != null) {
+      cells[mapping.description] = [dated.rest, cells[mapping.description]].filter(Boolean).join(' ');
+    }
+    const row = repairMoneyColumns(cells, mapping);
+    rows.push(row);
+    openRow = { row, page, y: line.y };
+  }
+
+  if (!columns || !rows.length) return fallback;
+
+  const { mapping } = columns;
+  if (mapping.description != null) {
+    for (const row of rows) row[mapping.description] = stripPaymentTypeCode(row[mapping.description]);
+  }
+  const signed = applyBalanceDirection(rows, mapping);
+  const score = scoreRunningBalance(signed, mapping);
+  const fallbackScore = fallback.layout.balance;
+
+  // Geometry beats a line-by-line guess unless the statement itself says
+  // otherwise: only hand back to the flattened reading when both readings can
+  // be checked, this one visibly doesn't add up, and that one does better.
+  if (score.checked >= 2 && score.ratio < 0.75
+    && fallbackScore.checked >= 2 && fallbackScore.ratio > score.ratio) {
+    return fallback;
+  }
+
+  const fields = {};
+  for (const [field, index] of Object.entries(mapping)) {
+    if (index != null) fields[field] = columns.labels[index];
+  }
+
+  return {
+    rows: signed,
+    mapping,
+    layout: { method: 'columns', columns: columns.labels, fields, balance: score },
+  };
 }
 
 // ── Row building ─────────────────────────────────────────────────────────────
@@ -590,17 +1139,7 @@ export function buildImportRows({
     const description = mapping.description != null ? String(values[mapping.description] || '').trim() : '';
     const date = parseStatementDate(rawDate, { dayFirst });
 
-    let signed = null;
-    if (mapping.amount != null) {
-      signed = parseAmount(values[mapping.amount]);
-    } else {
-      const debit = mapping.debit != null ? parseAmount(values[mapping.debit]) : null;
-      const credit = mapping.credit != null ? parseAmount(values[mapping.credit]) : null;
-      // Separate columns are written as positive magnitudes; the column is the
-      // sign. Only one of the pair is ever filled in on a given row.
-      if (debit) signed = -Math.abs(debit);
-      else if (credit) signed = Math.abs(credit);
-    }
+    let signed = signedAmountFromRow(values, mapping);
 
     if (signed != null && invertSigns) signed = -signed;
 
