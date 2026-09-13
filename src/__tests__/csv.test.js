@@ -11,8 +11,9 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDedupeKey, buildImportRows, detectDelimiter, guessColumnMapping,
   hasUsableTextLayer, inferClosingBalance, normaliseDescription, parseAmount, parseCsv,
-  linesFromContent, parseStatementDate, parseStatementLines, parseStatementText, reconcile,
-  scoreRunningBalance, similarDescriptions, summariseRows, textFromContent, toTransactionPayload,
+  descriptionSimilarity, findNearbyTransactions, linesFromContent, parseStatementDate,
+  parseStatementLines, parseStatementText, reconcile, scoreRunningBalance, similarDescriptions,
+  summariseRows, textFromContent, toTransactionPayload,
   ROW_DUPLICATE, ROW_INVALID, ROW_NEW, ROW_SIMILAR,
 } from '../csv';
 
@@ -1107,5 +1108,149 @@ describe('parseStatementLines — a statement read as the columns it was printed
       expense,
     );
     expect(layout.method).toBe('lines');
+  });
+});
+
+describe('cross-referencing a statement against what is already logged', () => {
+  const mapping = { date: 0, description: 1, amount: 2, debit: null, credit: null, balance: null };
+  const statement = (date, description, amount) => [[date, description, String(amount)]];
+  const logged = (over = {}) => ({
+    id: 7, date: '2026-09-10', amount: 42.18, type: 'expense', merchant: 'Tesco', categoryId: 3, ...over,
+  });
+
+  const build = (rows, transactions, options = {}) => buildImportRows({
+    rows, mapping, existingTransactions: transactions, defaultCategoryId: 1, ...options,
+  });
+
+  it('recognises a purchase the user typed loosely as already logged', () => {
+    // The bank calls it "TESCO STORES 3294 LONDON GB" and the user typed
+    // "Tesco". Requiring the normalised descriptions to be *identical* — which
+    // is what the old exact key did — missed every row like this, so a
+    // statement re-read after a week of hand-typing came back full of rows the
+    // user had already entered.
+    const built = build(statement('2026-09-10', 'TESCO STORES 3294 LONDON GB', -42.18), [logged()]);
+
+    expect(built[0].status).toBe('duplicate');
+    expect(built[0].include).toBe(false);
+    expect(built[0].problem).toMatch(/Looks like “Tesco”, already logged that day/);
+  });
+
+  it('names the transaction it matched, and carries it for review', () => {
+    const built = build(statement('2026-09-12', 'TESCO STORES 3294', -42.18), [logged()]);
+
+    expect(built[0].status).toBe('similar');
+    expect(built[0].problem).toMatch(/Probably “Tesco”, logged 2 days earlier/);
+    // The row carries the candidate itself, not just prose about it — the
+    // one-by-one check screen has to be able to show what it matched.
+    expect(built[0].matches).toEqual([expect.objectContaining({
+      id: 7, date: '2026-09-10', amount: 42.18, categoryId: 3, days: 2, drift: -2, sameDirection: true,
+    })]);
+  });
+
+  it('never auto-excludes a cross-date match, however confident it looks', () => {
+    // A daily coffee and a purchase clearing late are the same shape. Dropping
+    // one silently is worse than asking; "needs checking" is the asking.
+    const built = build(statement('2026-09-12', 'Tesco', -42.18), [logged()]);
+    expect(built[0].status).toBe('similar');
+    expect(built[0].include).toBe(true);
+  });
+
+  it('does not treat a refund as the same transaction as an expense', () => {
+    const built = build(statement('2026-09-10', 'Tesco', 42.18), [logged()]);
+
+    expect(built[0].type).toBe('refund');
+    expect(built[0].status).toBe('similar');
+    expect(built[0].include).toBe(true);
+    expect(built[0].problem).toMatch(/but that one is logged as spending/);
+  });
+
+  it('ranks the closest match first when several share an amount', () => {
+    const built = build(statement('2026-09-12', 'Shell filling station', -42.18), [
+      logged({ id: 1, date: '2026-09-09', merchant: 'Random other thing' }),
+      logged({ id: 2, date: '2026-09-13', merchant: 'Shell' }),
+    ]);
+
+    expect(built[0].matches[0]).toMatchObject({ id: 2, days: 1 });
+    expect(built[0].problem).toMatch(/“Shell”/);
+  });
+
+  it('flags a repeat of the same row within one file', () => {
+    const built = build([
+      ['2026-09-10', 'Tesco', '-42.18'],
+      ['2026-09-10', 'Tesco', '-42.18'],
+    ], []);
+
+    expect(built[0].status).toBe('new');
+    expect(built[1].status).toBe('duplicate');
+    expect(built[1].problem).toMatch(/appears earlier in this file/);
+  });
+
+  it('leaves a row with nothing like it alone', () => {
+    const built = build(statement('2026-09-10', 'Something new', -9.99), [logged()]);
+    expect(built[0].status).toBe('new');
+    expect(built[0].matches).toEqual([]);
+  });
+});
+
+describe('descriptionSimilarity', () => {
+  it('scores an exact match highest, a substring next, then shared words', () => {
+    expect(descriptionSimilarity('Tesco', 'TESCO')).toBe(1);
+    expect(descriptionSimilarity('Tesco', 'TESCO STORES 3294')).toBe(0.85);
+    expect(descriptionSimilarity('nothing', 'alike at all')).toBe(0);
+  });
+
+  it('is what similarDescriptions is built on, so the two cannot disagree', () => {
+    expect(similarDescriptions('Tesco', 'TESCO STORES 3294')).toBe(true);
+    expect(similarDescriptions('Tesco', 'British Gas')).toBe(false);
+  });
+});
+
+describe('findNearbyTransactions', () => {
+  const transactions = [
+    { id: 1, date: '2026-09-09', amount: 12.49, type: 'expense', merchant: 'Costa', categoryId: 2 },
+    { id: 2, date: '2026-09-10', amount: 400, type: 'expense', merchant: 'Rent', categoryId: 4 },
+    { id: 3, date: '2026-09-30', amount: 5, type: 'expense', merchant: 'Far away', categoryId: 2 },
+  ];
+
+  it('offers transactions near the date whatever they cost — the amount-matched pass cannot', () => {
+    // A purchase typed as £12.50 for a £12.49 card charge is invisible to any
+    // automatic rule and obvious to the person who made it.
+    const nearby = findNearbyTransactions(transactions, { date: '2026-09-10', windowDays: 7 });
+    expect(nearby.map(item => item.id)).toEqual([2, 1]);
+    expect(nearby[0]).toMatchObject({ days: 0, drift: 0, amount: 400 });
+    expect(nearby[1]).toMatchObject({ days: 1, drift: -1 });
+  });
+
+  it('keeps to its window, and needs a date to work from', () => {
+    expect(findNearbyTransactions(transactions, { date: '2026-09-10', windowDays: 2 })
+      .map(item => item.id)).toEqual([2, 1]);
+    expect(findNearbyTransactions(transactions, { date: null })).toEqual([]);
+  });
+});
+
+describe('descriptions a statement leaves punctuation on', () => {
+  it('drops a period stranded by an abbreviated month in the date column', () => {
+    // "05 Jan." in the date column left a bare "." in front of the merchant,
+    // which is where the ". SAINSBURYS" descriptions came from.
+    // A statement that abbreviates its month without a year on each row prints
+    // the year in its header, so that is the shape this has to be tested in.
+    const { rows } = parseStatementText([
+      'Your statement 1 January 2026 to 31 January 2026',
+      '05 Jan. SAINSBURYS 12.40 987.60',
+      '06 Jan. BOOTS 4.99 982.61',
+    ].join('\n'));
+    expect(rows[0][1]).toBe('SAINSBURYS');
+    expect(rows[1][1]).toBe('BOOTS');
+  });
+
+  it('reads a date written with an abbreviated month and a period', () => {
+    const { rows, mapping } = parseStatementText('05 Jan. 2026 SAINSBURYS 12.40');
+    const built = buildImportRows({ rows, mapping, defaultCategoryId: 1 });
+    expect(built[0]).toMatchObject({ date: '2026-01-05', description: 'SAINSBURYS' });
+  });
+
+  it('strips punctuation from either end without touching the middle', () => {
+    const { rows } = parseStatementText('05/01/2026 * AMAZON.CO.UK*MK12 - 12.40');
+    expect(rows[0][1]).toBe('AMAZON.CO.UK*MK12');
   });
 });

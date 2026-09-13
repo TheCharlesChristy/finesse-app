@@ -205,8 +205,12 @@ export function parseStatementDate(value, { dayFirst = true } = {}) {
   if (iso) return toDateString(Number(iso[1]), Number(iso[2]), Number(iso[3]));
 
   // "15 Jan 2026", "15-Jan-26", "Jan 15 2026".
-  const named = text.match(/^(\d{1,2})[\s\-/]*([A-Za-z]{3,})[\s\-/]*(\d{2,4})$/)
-    || text.match(/^([A-Za-z]{3,})[\s\-/]*(\d{1,2})[\s,\-/]*(\d{2,4})$/);
+  // The separator classes include "." because a statement that abbreviates
+  // its month often writes the period too — "05 Jan. 2026". A numeric date
+  // separated by periods ("05.01.26") is read by the branch below instead,
+  // since that one can't contain three letters.
+  const named = text.match(/^(\d{1,2})[\s\-/.]*([A-Za-z]{3,})[\s\-/.]*(\d{2,4})$/)
+    || text.match(/^([A-Za-z]{3,})[\s\-/.]*(\d{1,2})[\s,\-/.]*(\d{2,4})$/);
   if (named) {
     const monthFirst = Number.isNaN(Number(named[1]));
     const day = Number(monthFirst ? named[2] : named[1]);
@@ -305,7 +309,7 @@ export function guessColumnMapping(headers = []) {
 const LEADING_DATE_PATTERNS = [
   /^(\d{4}-\d{1,2}-\d{1,2})\b/,
   /^(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\b/,
-  /^(\d{1,2}\s*[A-Za-z]{3,9}\s*\d{2,4})\b/,
+  /^(\d{1,2}\s*[A-Za-z]{3,9}\.?\s*\d{2,4})\b/,
   /^([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4})\b/,
   // A statement that prints the year once in its header writes each row as
   // just "05 Jan" or "05/01" — common on UK current-account statements, and
@@ -454,6 +458,33 @@ function stripPaymentTypeCode(description = '') {
   return stripped || String(description).trim();
 }
 
+/**
+ * A description with the punctuation that isn't part of it removed from either
+ * end.
+ *
+ * A statement is full of characters that carry no meaning but sit hard against
+ * a merchant's name: a leader dot, a bullet from a symbol font, the period an
+ * abbreviated month leaves behind in the date column, a separator stranded by a
+ * column boundary that landed a character off. Every one of them survives into
+ * what gets written as the transaction's merchant *and* into every comparison
+ * against what the user typed by hand — a description reading ". SAINSBURYS"
+ * matches nothing and reads like a bug.
+ *
+ * Leading punctuation is never part of a name, so it goes unconditionally
+ * rather than being chased cause by cause; the causes are many and the fix is
+ * the same for all of them.
+ */
+function tidyDescription(value = '') {
+  const trim = text => String(text)
+    .replace(/\s+/g, ' ')
+    .replace(/^[^\p{L}\p{N}]+/u, '')
+    .replace(/[^\p{L}\p{N})\]]+$/u, '')
+    .trim();
+  // Twice: punctuation in front would otherwise hide the payment-type code
+  // from the pattern that strips it.
+  return trim(stripPaymentTypeCode(trim(value)));
+}
+
 // A penny, to absorb float noise rather than real disagreement.
 const BALANCE_TOLERANCE = 0.01;
 
@@ -571,7 +602,7 @@ function lineRow(dateRaw, body, { lastIsBalance }) {
   // back to every money token on the line keeps it readable rather than
   // dropping the row for want of a tidy right-hand column.
   const tokens = run.length ? run : findMoneyTokens(body);
-  if (!tokens.length) return [dateRaw, stripPaymentTypeCode(body), '', ''];
+  if (!tokens.length) return [dateRaw, tidyDescription(body), '', ''];
 
   const balanceToken = lastIsBalance && tokens.length >= 2 ? tokens[tokens.length - 1] : null;
   const pool = balanceToken ? tokens.slice(0, -1) : tokens;
@@ -584,7 +615,7 @@ function lineRow(dateRaw, body, { lastIsBalance }) {
   const descriptionEnd = run.length ? tokens[0].index : amountToken.index;
   return [
     dateRaw,
-    stripPaymentTypeCode(body.slice(0, descriptionEnd)),
+    tidyDescription(body.slice(0, descriptionEnd)),
     normaliseMoneyToken(amountToken.raw),
     balanceToken ? normaliseMoneyToken(balanceToken.raw) : '',
   ];
@@ -974,7 +1005,9 @@ export function parseStatementLines(lines = [], { dayFirst = true } = {}) {
     }
 
     cells[mapping.date] = dated.raw;
-    if (dated.rest && mapping.description != null) {
+    // A date cell reading "05 Jan." leaves a bare "." behind; prepending that
+    // to the description is where ". SAINSBURYS" came from.
+    if (/[\p{L}\p{N}]/u.test(dated.rest) && mapping.description != null) {
       cells[mapping.description] = [dated.rest, cells[mapping.description]].filter(Boolean).join(' ');
     }
     const row = repairMoneyColumns(cells, mapping);
@@ -986,7 +1019,7 @@ export function parseStatementLines(lines = [], { dayFirst = true } = {}) {
 
   const { mapping } = columns;
   if (mapping.description != null) {
-    for (const row of rows) row[mapping.description] = stripPaymentTypeCode(row[mapping.description]);
+    for (const row of rows) row[mapping.description] = tidyDescription(row[mapping.description]);
   }
   const signed = applyBalanceDirection(rows, mapping);
   const score = scoreRunningBalance(signed, mapping);
@@ -1041,28 +1074,37 @@ export function buildLooseKey({ date, amount }) {
   return `${day}|${Math.abs(Number(amount) || 0).toFixed(2)}`;
 }
 
+// Most of the words in common, or a safe substring either way. Below this two
+// descriptions are treated as naming different things.
+const SIMILAR_DESCRIPTION = 0.6;
+
 /**
- * Whether two descriptions plausibly name the same purchase.
+ * How alike two descriptions are, from 0 to 1.
  *
  * A bank's own text and whatever the user typed rarely match byte-for-byte —
  * "Tesco" against "TESCO STORES 3294 LONDON GB" — so exact equality is too
- * strict a bar. A safe substring either way, or most of the words in common,
- * is close enough. This never decides whether a row gets excluded on its own;
- * see the date-tolerant pass in `buildImportRows` for why.
+ * strict a bar. A number rather than a verdict, because the review step ranks
+ * candidate matches against each other and needs to know which is the closest,
+ * not merely that several passed a threshold.
  */
-export function similarDescriptions(a = '', b = '') {
+export function descriptionSimilarity(a = '', b = '') {
   const normA = normaliseDescription(a);
   const normB = normaliseDescription(b);
-  if (!normA || !normB) return false;
-  if (normA === normB) return true;
-  if (normA.includes(normB) || normB.includes(normA)) return true;
+  if (!normA || !normB) return 0;
+  if (normA === normB) return 1;
+  if (normA.includes(normB) || normB.includes(normA)) return 0.85;
 
   const wordsA = normA.split(' ').filter(Boolean);
   const wordsB = normB.split(' ').filter(Boolean);
-  if (!wordsA.length || !wordsB.length) return false;
+  if (!wordsA.length || !wordsB.length) return 0;
   const setB = new Set(wordsB);
   const shared = wordsA.filter(word => setB.has(word)).length;
-  return shared / Math.min(wordsA.length, wordsB.length) >= 0.6;
+  return shared / Math.min(wordsA.length, wordsB.length);
+}
+
+/** Whether two descriptions plausibly name the same purchase. */
+export function similarDescriptions(a = '', b = '') {
+  return descriptionSimilarity(a, b) >= SIMILAR_DESCRIPTION;
 }
 
 /** Whole days between two `yyyy-MM-dd` strings, computed in UTC to dodge DST. */
@@ -1071,6 +1113,103 @@ function daysBetween(a, b) {
   const [by, bm, bd] = b.split('-').map(Number);
   const msPerDay = 86400000;
   return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / msPerDay);
+}
+
+/**
+ * An existing transaction, reduced to what matching and the review UI need.
+ *
+ * One shape, so the automatic match and the by-hand comparison are looking at
+ * the same thing — including the `id`, which is what lets the review step name
+ * the transaction it thinks a row already is instead of only asserting that one
+ * exists somewhere.
+ */
+function existingEntry(tx) {
+  return {
+    id: tx.id ?? null,
+    date: tx.date ? String(tx.date).slice(0, 10) : null,
+    amount: Math.abs(Number(tx.amount) || 0),
+    type: tx.type === TX_REFUND ? TX_REFUND : TX_EXPENSE,
+    description: tx.merchant || tx.note || '',
+    categoryId: tx.categoryId ?? null,
+  };
+}
+
+/**
+ * Every transaction already logged near a date, whatever it cost.
+ *
+ * The automatic match only ever considers the same amount to the penny, which
+ * is the right bar for a decision made without asking — but useless the moment
+ * a person wants to settle a row by eye. A purchase typed as £12.50 when the
+ * card took £12.49, one statement line covering a split, a tip added after the
+ * fact: none of those will ever be offered as a candidate, and all of them are
+ * things only the user can recognise. This is the list that makes that
+ * possible, ordered by how close to the row's own date each one is.
+ */
+export function findNearbyTransactions(transactions = [], { date, windowDays = 7, limit = 40 } = {}) {
+  if (!date) return [];
+  const entries = [];
+  for (const tx of transactions) {
+    const entry = existingEntry(tx);
+    if (!entry.date) continue;
+    const drift = daysBetween(date, entry.date);
+    if (Math.abs(drift) > windowDays) continue;
+    entries.push({ ...entry, drift, days: Math.abs(drift) });
+  }
+  entries.sort((a, b) => a.days - b.days || b.amount - a.amount);
+  return entries.slice(0, limit);
+}
+
+// How many candidates a row carries for review. More than a handful is not a
+// list anyone reads; it's a sign the amount is a common one.
+const MAX_MATCHES = 5;
+
+/**
+ * The transactions that could be this row, best first.
+ *
+ * Ranked rather than merely collected, because "something with this amount
+ * exists" is not useful and "this is probably *that* one" is. Description
+ * similarity and closeness in date both count, and matching direction counts
+ * for more than either: a £50 refund and a £50 expense are not the same
+ * transaction however alike their wording.
+ */
+function rankMatches(row, candidates, dateToleranceDays) {
+  const matches = [];
+  for (const candidate of candidates) {
+    const drift = daysBetween(row.date, candidate.date);
+    const days = Math.abs(drift);
+    if (days > dateToleranceDays) continue;
+    const similarity = descriptionSimilarity(row.description, candidate.description);
+    const sameDirection = candidate.type === row.type;
+    matches.push({
+      ...candidate,
+      drift,
+      days,
+      similarity,
+      sameDirection,
+      score: similarity + (1 - days / (dateToleranceDays + 1)) + (sameDirection ? 0.5 : 0),
+    });
+  }
+  matches.sort((a, b) => b.score - a.score || a.days - b.days);
+  return matches;
+}
+
+/** Why a row is flagged, naming the transaction it was matched against. */
+function describeMatch(match) {
+  const name = match.description ? `“${match.description}”` : 'a transaction with no description';
+  const when = match.days === 0
+    ? 'the same day'
+    : `${match.days} day${match.days === 1 ? '' : 's'} ${match.drift < 0 ? 'earlier' : 'later'}`;
+
+  if (!match.sameDirection) {
+    const logged = match.type === TX_REFUND ? 'a refund' : 'spending';
+    return `Same amount as ${name} (${when}), but that one is logged as ${logged}`;
+  }
+  if (match.similarity >= SIMILAR_DESCRIPTION) {
+    return match.days === 0
+      ? `Looks like ${name}, already logged that day`
+      : `Probably ${name}, logged ${when} — the same purchase clearing late`;
+  }
+  return `Same amount as ${name}, ${match.days === 0 ? 'logged that day' : `logged ${when}`}`;
 }
 
 export const ROW_NEW = 'new';
@@ -1112,22 +1251,18 @@ export function buildImportRows({
   invertSigns = false,
   dateToleranceDays = 3,
 } = {}) {
-  const exactKeys = new Set();
-  const looseKeys = new Set();
+  // One index, bucketed by amount to the penny: every candidate for every row
+  // comes out of here, whether it lands on the same day or a few days off.
+  // There used to be three passes with three different notions of a match, and
+  // the only one that could name what it had matched was the one that ran last.
   const byAmount = new Map();
   for (const tx of existingTransactions) {
-    const description = tx.merchant || tx.note || '';
-    const entry = { date: tx.date, amount: tx.amount, description };
-    exactKeys.add(buildDedupeKey(entry));
-    looseKeys.add(buildLooseKey(entry));
-
-    const day = tx.date ? String(tx.date).slice(0, 10) : null;
-    if (day && tx.amount != null) {
-      const amountKey = Math.abs(Number(tx.amount) || 0).toFixed(2);
-      const bucket = byAmount.get(amountKey);
-      if (bucket) bucket.push({ date: day, description });
-      else byAmount.set(amountKey, [{ date: day, description }]);
-    }
+    const entry = existingEntry(tx);
+    if (!entry.date) continue;
+    const amountKey = entry.amount.toFixed(2);
+    const bucket = byAmount.get(amountKey);
+    if (bucket) bucket.push(entry);
+    else byAmount.set(amountKey, [entry]);
   }
 
   // Duplicates *within* the file matter too — a statement re-exported over an
@@ -1170,35 +1305,30 @@ export function buildImportRows({
     }
 
     if (row.status !== ROW_INVALID) {
-      const entry = { date, amount: row.amount, description };
-      const exact = buildDedupeKey(entry);
-      const loose = buildLooseKey(entry);
+      const exact = buildDedupeKey({ date, amount: row.amount, description });
+      const matches = rankMatches(row, byAmount.get(row.amount.toFixed(2)) || [], dateToleranceDays);
+      row.matches = matches.slice(0, MAX_MATCHES);
+      const best = matches[0] || null;
 
-      if (exactKeys.has(exact) || seenInFile.has(exact)) {
+      if (seenInFile.has(exact)) {
         row.status = ROW_DUPLICATE;
-        row.problem = 'Already logged';
-      } else if (looseKeys.has(loose)) {
+        row.problem = 'The same row appears earlier in this file';
+      } else if (best && best.days === 0 && best.sameDirection && best.similarity >= SIMILAR_DESCRIPTION) {
+        // Same day, same amount, same direction and a recognisable name: the
+        // one case confident enough to settle without asking. Matching on
+        // *similarity* rather than an identical string is what catches the
+        // common case of a purchase the user typed as "Tesco" and the bank
+        // calls "TESCO STORES 3294 LONDON GB".
+        row.status = ROW_DUPLICATE;
+        row.problem = describeMatch(best);
+      } else if (best) {
+        // Everything else the automatic pass found is a question, not an
+        // answer — including a cross-date hit, which must never auto-exclude a
+        // row (see the note above this function). The review step groups these
+        // as "needs checking" and walks them one at a time.
         row.status = ROW_SIMILAR;
-        row.problem = 'Same day and amount as something already logged';
-      } else if (dateToleranceDays > 0) {
-        const candidates = byAmount.get(row.amount.toFixed(2));
-        let closest = null;
-        if (candidates) {
-          for (const candidate of candidates) {
-            const drift = Math.abs(daysBetween(date, candidate.date));
-            if (drift > 0 && drift <= dateToleranceDays && (!closest || drift < closest.drift)) {
-              closest = { drift, description: candidate.description };
-            }
-          }
-        }
-        if (closest) {
-          row.status = ROW_SIMILAR;
-          row.dateDrift = closest.drift;
-          const days = `${closest.drift} day${closest.drift === 1 ? '' : 's'}`;
-          row.problem = similarDescriptions(description, closest.description)
-            ? `Looks like it was logged ${days} earlier — probably the same purchase, clearing late`
-            : `Same amount as something logged ${days} apart`;
-        }
+        row.dateDrift = best.days;
+        row.problem = describeMatch(best);
       }
       seenInFile.add(exact);
 
