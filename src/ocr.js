@@ -44,6 +44,37 @@ import { simd } from 'wasm-feature-detect';
 
 import { hasUsableTextLayer, textFromContent } from './csv';
 
+/**
+ * Safari's `ReadableStream` went for years without `Symbol.asyncIterator` —
+ * this is the exact gap pdf.js's own `getTextContent()` hits, in a plain
+ * `for await (const value of readableStream)` over the stream its message
+ * handler returns. Nothing about that failure mentions a stream: it surfaces
+ * as a bare "undefined is not a function", deep inside a library this app
+ * doesn't own, on a real statement no synthetic test PDF triggered it on.
+ * `getReader()` has been supported everywhere streams have, so the iterator
+ * protocol is built on it by hand — a strict no-op wherever the native
+ * method already exists. Called below, before pdf.js is ever asked to do
+ * anything (module evaluation always completes before any of this file's
+ * functions are called) — removing this reopens exactly the bug `withStage`
+ * further down was built to diagnose in the first place.
+ */
+export function polyfillReadableStreamAsyncIterator() {
+  if (typeof ReadableStream === 'undefined') return;
+  if (ReadableStream.prototype[Symbol.asyncIterator]) return;
+  ReadableStream.prototype[Symbol.asyncIterator] = function asyncIterator() {
+    const reader = this.getReader();
+    return {
+      next: () => reader.read(),
+      return(value) {
+        reader.releaseLock();
+        return Promise.resolve({ done: true, value });
+      },
+      [Symbol.asyncIterator]() { return this; },
+    };
+  };
+}
+polyfillReadableStreamAsyncIterator();
+
 GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 
 const ASSET_BASE = `${import.meta.env.BASE_URL}tesseract/`;
