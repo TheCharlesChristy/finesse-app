@@ -27,6 +27,60 @@ const MAPPING_FIELDS = [
   ['balance', 'Balance', false],
 ];
 
+/** A WebAssembly compile/link failure reaching here means SIMD was already
+ * confirmed supported (see ocr.js) — the one case worth calling a bad
+ * download rather than naming the pipeline stage plainly. */
+function isLikelyBadDownload(error) {
+  const cause = error?.cause;
+  return typeof WebAssembly !== 'undefined'
+    && (cause instanceof WebAssembly.CompileError || cause instanceof WebAssembly.LinkError);
+}
+
+/** Short, one-page-of-many description for the partial-failure warning list. */
+function describeOcrError(error) {
+  if (error?.name === 'StageError') {
+    return isLikelyBadDownload(error)
+      ? `${error.stage} — likely an interrupted download`
+      : `${error.stage}: ${String(error.cause?.message || error.cause || 'unknown error').slice(0, 100)}`;
+  }
+  return error?.message ? String(error.message).slice(0, 100) : (error?.name || 'unknown error');
+}
+
+// The production build writes a *hidden* sourcemap (vite.config.js) — never
+// fetched by a browser, but able to turn a raw minified stack trace back
+// into real file/line locations for whoever has the matching dist output.
+// An iPhone has no easy path to devtools, so this — copied out of the error
+// text and sent back — is the only way a genuinely new failure ever becomes
+// more than a stage name.
+function stackSnippet(error) {
+  const stack = error?.cause?.stack || error?.stack;
+  return stack ? `\n${String(stack).split('\n').slice(0, 4).join('\n')}` : '';
+}
+
+/**
+ * The full, honest message for a failure that stopped the import outright.
+ *
+ * Only the WebAssembly-compile-failure case gets to claim a cause ("likely
+ * an interrupted download") — everything else just names the stage it broke
+ * in, rather than guessing why. A real bank-generated PDF is far more
+ * complex than anything hand-built for testing here, so a genuine pdf.js or
+ * Tesseract incompatibility on someone's actual statement is a real
+ * possibility this can't rule out or explain away.
+ */
+function describeOcrFailure(err, ocrModule) {
+  if (ocrModule && err instanceof ocrModule.OcrUnsupportedError) {
+    return 'OCR isn’t supported on this device or browser. A CSV export, or your bank’s own PDF, will still work.';
+  }
+  if (isLikelyBadDownload(err)) {
+    return `Couldn’t read that file — likely an interrupted download rather than the file itself (failed while ${err.stage}). Please try again.`;
+  }
+  if (err?.name === 'StageError') {
+    return `Couldn’t read that file — it failed while ${err.stage}. (${String(err.cause?.message || '').slice(0, 120)}) A CSV export is the most reliable option.${stackSnippet(err)}`;
+  }
+  const detail = err?.message ? String(err.message).slice(0, 140) : (err?.name || 'unknown error');
+  return `Couldn’t read that file. (${detail}) A CSV export is the most reliable option.${stackSnippet(err)}`;
+}
+
 function ColumnPicker({ label, headers, value, onChange, required }) {
   return (
     <Field label={required ? `${label} *` : label}>
@@ -118,6 +172,9 @@ export function ImportStatementModal({
   const [dateToleranceDays, setDateToleranceDays] = useState(3);
   const [overrides, setOverrides] = useState({});
   const [error, setError] = useState('');
+  // Set when some (not all) pages of a PDF failed to read — non-blocking,
+  // shown alongside whatever rows the readable pages still produced.
+  const [partialWarning, setPartialWarning] = useState('');
   const [busy, setBusy] = useState(false);
   const [ocrProgress, setOcrProgress] = useState(null);
 
@@ -188,6 +245,7 @@ export function ImportStatementModal({
     if (!file) return;
 
     setError('');
+    setPartialWarning('');
     setBusy(true);
     try {
       const text = await file.text();
@@ -219,6 +277,7 @@ export function ImportStatementModal({
     if (!file) return;
 
     setError('');
+    setPartialWarning('');
     setFileName(file.name);
     setOcrProgress({ status: 'starting', progress: 0 });
     setStep('extracting');
@@ -228,12 +287,19 @@ export function ImportStatementModal({
     let ocrModule;
     try {
       ocrModule = await import('../../ocr');
-      const { text } = await ocrModule.extractStatementText(file, { onProgress: setOcrProgress });
+      const { text, pageErrors } = await ocrModule.extractStatementText(file, { onProgress: setOcrProgress });
       const result = parseStatementText(text, { dayFirst });
       if (!result.rows.length) {
         setError('Couldn’t find anything that looked like a transaction in that file. A clearer photo, or your bank’s own PDF, works best.');
         setStep('file');
         return;
+      }
+      // Some pages failed but at least one didn't — extractStatementText
+      // only throws outright when every page does. Worth a warning, not a
+      // dead end: the rows below are still real, just incomplete.
+      if (pageErrors?.length) {
+        const summary = pageErrors.map(({ page, error }) => `page ${page} (${describeOcrError(error)})`).join('; ');
+        setPartialWarning(`Couldn’t read the whole statement — ${summary}. Rows from the rest of it are below.`);
       }
       setHeaders([]);
       setParsedRows(result.rows);
@@ -241,16 +307,7 @@ export function ImportStatementModal({
       setOverrides({});
       setStep('review');
     } catch (err) {
-      // A genuine incompatibility is confirmed by feature-detection before
-      // the OCR core is even fetched (see ocr.js) — anything else is far
-      // more likely a bad download than a bad device, and is worth retrying
-      // rather than steering someone away from a perfectly good phone.
-      if (ocrModule && err instanceof ocrModule.OcrUnsupportedError) {
-        setError('OCR isn’t supported on this device or browser. A CSV export, or your bank’s own PDF, will still work.');
-      } else {
-        const detail = err?.message ? String(err.message).slice(0, 140) : (err?.name || 'unknown error');
-        setError(`Couldn’t read that file — likely an interrupted download rather than the file itself. Please try again. (${detail})`);
-      }
+      setError(describeOcrFailure(err, ocrModule));
       setStep('file');
     } finally {
       setOcrProgress(null);
@@ -297,7 +354,11 @@ export function ImportStatementModal({
               disabled={busy} style={{ display: 'none' }} />
           </label>
 
-          {error && <div style={{ color: 'var(--danger)', fontSize: 12 }}>{error}</div>}
+          {error && (
+            <div style={{ color: 'var(--danger)', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {error}
+            </div>
+          )}
 
           <div style={{ color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.6 }}>
             A CSV export is the most reliable option, if your bank offers one. A PDF
@@ -463,6 +524,16 @@ export function ImportStatementModal({
             Every row below has spending and refunds swapped — flip them all
           </label>
         </div>
+
+        {partialWarning && (
+          <div style={{
+            display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, lineHeight: 1.6,
+            padding: '10px 12px', borderRadius: 10, background: 'rgba(251,191,112,0.09)', color: 'var(--warn)',
+          }}>
+            <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden="true" />
+            <span>{partialWarning}</span>
+          </div>
+        )}
 
         {summary.uncategorised > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--warn)' }}>

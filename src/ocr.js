@@ -58,6 +58,35 @@ export class OcrUnsupportedError extends Error {
   }
 }
 
+/**
+ * An error tagged with which named step of the pipeline it happened in.
+ *
+ * A real bank-generated PDF is a much more complex document than anything
+ * hand-built for testing here — compressed cross-reference streams, embedded
+ * and subsetted fonts, content structures the simplest valid PDF never
+ * touches — and pdf.js (or Tesseract, on the OCR fallback) can fail deep
+ * inside code this app doesn't own. Without on-device devtools, a stage name
+ * shown directly in the review modal is the only diagnosis a phone can give;
+ * see `withStage` and the per-page handling in `extractPdfText` below.
+ */
+export class StageError extends Error {
+  constructor(stage, cause) {
+    super(`${stage}: ${cause?.message || String(cause)}`);
+    this.name = 'StageError';
+    this.stage = stage;
+    this.cause = cause;
+  }
+}
+
+async function withStage(stage, fn) {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error instanceof OcrUnsupportedError) throw error;
+    throw new StageError(stage, error);
+  }
+}
+
 /** Drop any cached copy of the wasm core, in case it was cached mid-download. */
 async function evictCachedCore() {
   if (typeof caches === 'undefined') return;
@@ -129,8 +158,22 @@ async function ocrSource(source, onProgress) {
   return data.text || '';
 }
 
+// iOS Safari has a hard per-canvas pixel-area ceiling (roughly 16 million
+// pixels, varying a little by device) past which 2D operations silently
+// fail or return null rather than throwing something catchable — a large or
+// non-standard page size at scale 2 can realistically approach that on a
+// statement PDF. Scale is capped down rather than left fixed so a big page
+// still renders, just at a lower resolution.
+const MAX_CANVAS_PIXELS = 4096 * 4096;
+
 async function renderPdfPageToCanvas(page, scale = 2) {
-  const viewport = page.getViewport({ scale });
+  const nativeViewport = page.getViewport({ scale: 1 });
+  const nativePixels = nativeViewport.width * nativeViewport.height;
+  const safeScale = nativePixels * scale * scale > MAX_CANVAS_PIXELS
+    ? Math.sqrt(MAX_CANVAS_PIXELS / nativePixels)
+    : scale;
+
+  const viewport = page.getViewport({ scale: safeScale });
   const canvas = document.createElement('canvas');
   canvas.width = Math.ceil(viewport.width);
   canvas.height = Math.ceil(viewport.height);
@@ -139,28 +182,45 @@ async function renderPdfPageToCanvas(page, scale = 2) {
   return canvas;
 }
 
+/**
+ * Read every page, but don't let one bad page sink transactions already
+ * read from good ones — a statement generator that trips up pdf.js or
+ * Tesseract on, say, its final summary page shouldn't cost the rest.
+ */
 async function extractPdfText(file, onProgress) {
-  const buffer = await file.arrayBuffer();
-  const pdf = await getDocument({ data: buffer }).promise;
+  const buffer = await withStage('reading the file', () => file.arrayBuffer());
+  const pdf = await withStage('opening the PDF', () => getDocument({ data: buffer }).promise);
   const pageTexts = [];
+  const pageErrors = [];
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber);
-    const content = await page.getTextContent();
-    const text = textFromContent(content);
+    try {
+      const page = await withStage(`reading page ${pageNumber}`, () => pdf.getPage(pageNumber));
+      const content = await withStage(`reading text on page ${pageNumber}`, () => page.getTextContent());
+      const text = await withStage(`laying out text on page ${pageNumber}`, () => textFromContent(content));
 
-    if (hasUsableTextLayer(text)) {
-      pageTexts.push(text);
-    } else {
-      // No text layer on this page — it's a scan. Render it and OCR the
-      // image rather than giving up on the whole statement over one page.
-      const canvas = await renderPdfPageToCanvas(page);
-      const ocrText = await ocrSource(canvas, onProgress);
-      pageTexts.push(ocrText);
+      if (hasUsableTextLayer(text)) {
+        pageTexts.push(text);
+      } else {
+        // No text layer on this page — it's a scan. Render it and OCR the
+        // image rather than giving up on the whole statement over one page.
+        const canvas = await withStage(`rendering page ${pageNumber} for OCR`, () => renderPdfPageToCanvas(page));
+        const ocrText = await withStage(`recognising text on page ${pageNumber}`, () => ocrSource(canvas, onProgress));
+        pageTexts.push(ocrText);
+      }
+    } catch (error) {
+      if (error instanceof OcrUnsupportedError) throw error;
+      pageErrors.push({ page: pageNumber, error });
     }
   }
 
-  return pageTexts.join('\n');
+  if (!pageTexts.length && pageErrors.length) {
+    // Every page failed — the first failure's stage is as good a place as
+    // any to point at, and better than a blanket "couldn't read this file".
+    throw pageErrors[0].error;
+  }
+
+  return { text: pageTexts.join('\n'), pageErrors };
 }
 
 const PDF_TYPES = ['application/pdf'];
@@ -169,9 +229,17 @@ const PDF_TYPES = ['application/pdf'];
  * Pull raw text out of an uploaded statement file. A PDF is read directly
  * where it has a text layer; anything else — a photo, a screenshot, a
  * scanned PDF page — goes through OCR.
+ *
+ * `pageErrors` is non-empty when some (not all) pages failed — the caller
+ * can still show whatever rows the good pages produced, with a warning
+ * naming which pages and why, rather than discarding a partly-good result.
  */
 export async function extractStatementText(file, { onProgress } = {}) {
   const isPdf = PDF_TYPES.includes(file.type) || /\.pdf$/i.test(file.name || '');
-  const text = isPdf ? await extractPdfText(file, onProgress) : await ocrSource(file, onProgress);
-  return { text, method: isPdf ? 'pdf' : 'ocr' };
+  if (isPdf) {
+    const { text, pageErrors } = await extractPdfText(file, onProgress);
+    return { text, method: 'pdf', pageErrors };
+  }
+  const text = await withStage('recognising the image', () => ocrSource(file, onProgress));
+  return { text, method: 'ocr', pageErrors: [] };
 }
