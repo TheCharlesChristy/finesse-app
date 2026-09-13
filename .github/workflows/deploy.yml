@@ -16,7 +16,50 @@ jobs:
           node-version: 20
       - run: npm install
       - run: npm run build
-      - uses: peaceiris/actions-gh-pages@v4
+
+      # The build writes hidden sourcemaps (vite.config.js) purely so a raw
+      # stack trace copied off a phone can be mapped back to real source —
+      # that is what found the Safari ReadableStream bug. They're worth
+      # keeping, just not in the published site: attaching them to the run
+      # keeps each build's own maps retrievable without pushing several MB of
+      # them into gh-pages history on every single merge.
+      - name: Keep this build's sourcemaps with the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: sourcemaps-${{ github.sha }}
+          path: dist/**/*.map
+          retention-days: 30
+          if-no-files-found: warn
+
+      # 6.4MB of the 18MB output is app-chunk sourcemaps that no browser ever
+      # requests: `sourcemap: 'hidden'` means none of dist/assets/*.js carries
+      # a sourceMappingURL comment, so removing their maps leaves nothing
+      # dangling. sw.js and workbox-*.js are left alone deliberately — those
+      # two do reference their own maps, and are small.
+      - name: Leave app sourcemaps out of the published site
+        run: rm -f dist/assets/*.map
+
+      # GitHub sometimes rejects the gh-pages push from its own end — the
+      # merge of #26 died on "remote: fatal error in commit_refs" with a
+      # clean build behind it, and a 9MB repo nowhere near any limit. Left
+      # unhandled that quietly leaves the live site a commit behind, which is
+      # exactly how a merged fix sat undeployed and looked like it hadn't
+      # worked. One retry, because the failure isn't ours to fix.
+      - name: Publish to gh-pages
+        id: publish
+        continue-on-error: true
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+
+      - name: Give GitHub a moment before retrying
+        if: steps.publish.outcome == 'failure'
+        run: sleep 30
+
+      - name: Publish to gh-pages (retry)
+        if: steps.publish.outcome == 'failure'
+        uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./dist

@@ -289,7 +289,12 @@ Three things follow from that:
   `dist` output; without on-device devtools, that's the only way a genuinely
   new failure becomes more than a stage name. `describeOcrFailure` in
   `statement.jsx` appends a few lines of `error.cause?.stack` for exactly
-  this reason — resist trimming it as noise.
+  this reason — resist trimming it as noise. **To map a trace, take the maps
+  from that commit's deploy run**, where `deploy.yml` uploads them as a
+  `sourcemaps-<sha>` artifact; they are deliberately *not* published to the
+  site, since 6.4MB of maps nothing ever requests would otherwise land in
+  `gh-pages` history on every merge. Rebuilding the same commit locally
+  reproduces them too, which is how the ReadableStream trace was resolved.
 - **A render for OCR is capped below iOS Safari's per-canvas pixel-area
   ceiling** (`MAX_CANVAS_PIXELS` in `ocr.js`) by lowering the scale for an
   unusually large page rather than leaving it fixed, since that limit fails

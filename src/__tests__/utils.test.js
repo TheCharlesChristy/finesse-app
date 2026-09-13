@@ -460,7 +460,13 @@ describe('getSafeToSpend', () => {
 
     expect(withGoal.toReset).toBe(300);
     expect(withGoal.committedGoals).toBe(100);
-    expect(withGoal.today).toBeCloseTo(base.today * 0.75, 2);
+    // Both figures are rounded to the penny on their own way out, so scaling
+    // one and comparing it to the other can only ever agree to within a
+    // penny — 400/18 rounds to 22.22 and 300/18 to 16.67, and 22.22 * 0.75
+    // is 16.665, exactly toBeCloseTo(…, 2)'s 0.005 boundary. Which side of it
+    // float noise lands on depends on how many days are left in the cycle,
+    // so that assertion passed or failed by the calendar.
+    expect(Math.abs(withGoal.today - base.today * 0.75)).toBeLessThanOrEqual(0.01);
   });
 
   it('never goes negative for an overspent category', () => {
