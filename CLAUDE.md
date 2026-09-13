@@ -296,12 +296,27 @@ Three things follow from that:
   silently (`toBlob` returning `null`) rather than throwing something a
   `catch` could ever report.
 
+That sourcemap is exactly what found the real bug, on the very next report:
+a stack trace of `getTextContent@…vendor-pdf…js:44:100777` mapped straight
+to `pdf.mjs`'s own `for await (const value of readableStream)` — pdf.js
+reading its own message-handler stream. Safari's `ReadableStream` went for
+years with no `Symbol.asyncIterator` at all, which is precisely what a bare
+`for await…of` needs, and precisely what "undefined is not a function" looks
+like with no mention of a stream anywhere in it. **`polyfillReadableStreamAsyncIterator`
+in `ocr.js` fixes this**, built on `getReader()` since that has been
+supported everywhere streams have; it runs once, unconditionally, the moment
+`ocr.js` loads. Its test in `ocr.test.js` deletes the native method first —
+without that, a Node or modern-Safari test run would never exercise the
+polyfill path at all, since the gap it patches is already closed there.
+
 A stage name and a mapped stack trace are what turned "OCR isn't supported"
-into a solvable bug once, and are the only realistic path to solving the
-next one — this pipeline touches libraries this app doesn't control, running
-on hardware and a browser engine no CI here can reproduce. **Don't remove
-the stage wrapping or the sourcemap to tidy up "unnecessary" error
-handling; they're load-bearing for anyone debugging this blind.**
+into a solvable bug, in the end — this pipeline touches libraries this app
+doesn't control, running on hardware and a browser engine no CI here can
+reproduce, and guessing at three different plausible causes across three
+rounds got nowhere next to one real stack trace. **Don't remove the stage
+wrapping or the sourcemap to tidy up "unnecessary" error handling; they're
+load-bearing for anyone debugging this blind, and the next gap like this one
+won't announce itself any more clearly than this one did.**
 
 A statement is genuinely noisy once it's been through OCR — a misread digit,
 a wrapped description, a swallowed decimal point — so every field in the
