@@ -27,7 +27,7 @@ export function FrequencyFields({ resetFrequency, setResetFrequency, payDayOfMon
     <>
       <Field label="Reset Frequency">
         {id => (
-          <select id={id} className="glass-input" value={resetFrequency} onChange={e => setResetFrequency(e.target.value)}>
+          <select id={id} className="input" value={resetFrequency} onChange={e => setResetFrequency(e.target.value)}>
             {FREQ_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         )}
@@ -35,7 +35,7 @@ export function FrequencyFields({ resetFrequency, setResetFrequency, payDayOfMon
       {resetFrequency === 'monthly' && (
         <Field label="Pay Day of Month (1–31)">
           {id => (
-            <input id={id} className="glass-input" type="number" min="1" max="31" placeholder="e.g. 25"
+            <input id={id} className="input" type="number" min="1" max="31" placeholder="e.g. 25"
               value={payDayOfMonth} onChange={e => setPayDayOfMonth(e.target.value)} />
           )}
         </Field>
@@ -44,7 +44,7 @@ export function FrequencyFields({ resetFrequency, setResetFrequency, payDayOfMon
   );
 }
 
-export const PALETTE = ['#4fffb0','#5db8ff','#c084fc','#fbbf70','#ff6b8a','#67e8f9','#f9a8d4','#86efac'];
+export const PALETTE = ['var(--accent)','var(--accent-2)','var(--accent-3)','var(--accent-4)','var(--danger)','var(--series-5)','var(--series-7)','var(--series-8)'];
 
 export function isFormulaInput(s) {
   return /[$\[{]/.test(s) || /[+\-*/]/.test(s.slice(1));
@@ -172,13 +172,13 @@ export function IncomeAllocationEditor({
         <label style={{ fontSize: 12, color: 'var(--text-muted)' }}>Funded By</label>
         <button type="button" className="btn-secondary" onClick={onAutoAllocate}
           disabled={!incomes.length}
-          style={{ padding: '5px 10px', fontSize: 11, borderRadius: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
+          style={{ padding: '5px 10px', fontSize: 11, borderRadius: 'var(--radius-xs)', display: 'flex', alignItems: 'center', gap: 5 }}>
           <Wand2 size={12} /> Auto
         </button>
       </div>
 
       {incomes.length === 0 ? (
-        <div className="status-danger" style={{ borderRadius: 10, padding: '10px 12px', fontSize: 12 }}>
+        <div className="status-danger" style={{ borderRadius: 'var(--radius-sm)', padding: '10px 12px', fontSize: 12 }}>
           Add an income before creating categories.
         </div>
       ) : (
@@ -213,9 +213,9 @@ export function IncomeAllocationEditor({
 
           {cleanAllocations.length === 0 ? (
             <div style={{
-              background: 'rgba(255,255,255,0.04)',
-              border: '1px solid rgba(255,255,255,0.08)',
-              borderRadius: 10,
+              background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--text-primary) 8%, transparent)',
+              borderRadius: 'var(--radius-sm)',
               padding: '10px 12px',
               color: 'var(--text-muted)',
               fontSize: 12,
@@ -245,9 +245,9 @@ export function IncomeAllocationEditor({
 
                 return (
                   <div key={allocation.incomeId} style={{
-                    background: 'rgba(255,255,255,0.04)',
-                    border: `1px solid ${over > 0 || !income ? 'rgba(255,107,138,0.35)' : 'rgba(255,255,255,0.08)'}`,
-                    borderRadius: 10,
+                    background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)',
+                    border: `1px solid ${over > 0 || !income ? 'color-mix(in srgb, var(--danger) 35%, transparent)' : 'color-mix(in srgb, var(--text-primary) 8%, transparent)'}`,
+                    borderRadius: 'var(--radius-sm)',
                     padding: '10px 12px',
                   }}>
                     <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 82px 76px 30px', alignItems: 'center', gap: 10 }}>
@@ -261,7 +261,7 @@ export function IncomeAllocationEditor({
                       </div>
                       <div style={{ position: 'relative' }}>
                         <input
-                          className="glass-input"
+                          className="input"
                           type="number"
                           min="0"
                           max="100"
@@ -282,7 +282,7 @@ export function IncomeAllocationEditor({
                       </IconButton>
                     </div>
                     <div className="progress-track" style={{ height: 4, marginTop: 8 }}>
-                      <div className="progress-fill" style={{ width: `${usedPct}%`, background: over > 0 ? 'var(--danger)' : 'var(--accent-mint)' }} />
+                      <div className="progress-fill" style={{ width: `${usedPct}%`, background: over > 0 ? 'var(--danger)' : 'var(--accent)' }} />
                     </div>
                   </div>
                 );
@@ -292,7 +292,7 @@ export function IncomeAllocationEditor({
 
           {availableIncomeOptions.length > 0 && (
             <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center' }}>
-              <select className="glass-input" value={effectiveSourceToAdd} onChange={e => setSourceToAdd(e.target.value)}
+              <select className="input" value={effectiveSourceToAdd} onChange={e => setSourceToAdd(e.target.value)}
                 aria-label="Funding source to add"
                 style={{ padding: '8px 10px', fontSize: 13 }}>
                 {availableIncomeOptions.map(income => {
@@ -305,7 +305,7 @@ export function IncomeAllocationEditor({
                 })}
               </select>
               <button type="button" className="btn-secondary" onClick={addSource}
-                style={{ padding: '8px 12px', fontSize: 12, borderRadius: 9, display: 'flex', alignItems: 'center', gap: 5 }}>
+                style={{ padding: '8px 12px', fontSize: 12, borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', gap: 5 }}>
                 <Plus size={12} /> Add
               </button>
             </div>
@@ -393,15 +393,15 @@ export function FormulaInput({ value, onChange, onKeyDown: externalKeyDown, plac
     externalKeyDown?.(e);
   };
 
-  const typeColor = token?.type === 'var' ? 'var(--accent-mint)' : token?.type === 'cat' ? 'var(--accent-blue)' : 'var(--accent-purple)';
-  const typeBg    = token?.type === 'var' ? 'rgba(79,255,176,0.12)' : token?.type === 'cat' ? 'rgba(93,184,255,0.12)' : 'rgba(192,132,252,0.12)';
+  const typeColor = token?.type === 'var' ? 'var(--accent)' : token?.type === 'cat' ? 'var(--accent-2)' : 'var(--accent-3)';
+  const typeBg    = token?.type === 'var' ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : token?.type === 'cat' ? 'color-mix(in srgb, var(--accent-2) 12%, transparent)' : 'color-mix(in srgb, var(--accent-3) 12%, transparent)';
   const typeLabel = token?.type === 'var' ? '$var' : token?.type === 'cat' ? '[cat]' : '{income}';
 
   return (
     <div style={{ position: 'relative' }}>
       <input
         ref={inputRef}
-        className="glass-input"
+        className="input"
         placeholder={placeholder}
         value={value}
         onChange={e => { onChange(e.target.value); setActiveIdx(0); setDismissed(false); }}
@@ -411,10 +411,10 @@ export function FormulaInput({ value, onChange, onKeyDown: externalKeyDown, plac
       {showDropdown && (
         <div style={{
           position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 200,
-          background: 'rgba(8,12,28,0.97)',
-          border: '1px solid rgba(255,255,255,0.12)',
-          borderRadius: 10, backdropFilter: 'blur(24px)',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+          background: 'var(--surface-raised)',
+          border: '1px solid color-mix(in srgb, var(--text-primary) 12%, transparent)',
+          borderRadius: 'var(--radius-sm)', backdropFilter: 'blur(24px)',
+          boxShadow: '0 8px 32px color-mix(in srgb, #000 50%, transparent)',
           overflow: 'hidden',
         }}>
           {suggestions.map((item, idx) => (
@@ -424,12 +424,12 @@ export function FormulaInput({ value, onChange, onKeyDown: externalKeyDown, plac
               onMouseEnter={() => setActiveIdx(idx)}
               style={{
                 padding: '9px 14px', cursor: 'pointer', fontSize: 13,
-                background: idx === boundedIdx ? 'rgba(255,255,255,0.07)' : 'transparent',
+                background: idx === boundedIdx ? 'color-mix(in srgb, var(--text-primary) 7%, transparent)' : 'transparent',
                 display: 'flex', alignItems: 'center', gap: 8,
-                borderBottom: idx < suggestions.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                borderBottom: idx < suggestions.length - 1 ? '1px solid color-mix(in srgb, var(--text-primary) 4%, transparent)' : 'none',
               }}
             >
-              <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 8, fontWeight: 600, fontFamily: 'monospace', background: typeBg, color: typeColor }}>
+              <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 'var(--radius-xs)', fontWeight: 600, fontFamily: 'monospace', background: typeBg, color: typeColor }}>
                 {typeLabel}
               </span>
               <span style={{ flex: 1 }}>{item.name}</span>

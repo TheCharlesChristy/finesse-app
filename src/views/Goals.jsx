@@ -34,21 +34,21 @@ function GoalCard({ goal, incomes, onContribute, onEdit, onDelete }) {
 
   const barColor = progress.complete ? 'var(--good)'
     : offTrack ? 'var(--warn)'
-    : isDebt ? 'var(--accent-purple)' : 'var(--accent-mint)';
+    : isDebt ? 'var(--accent-3)' : 'var(--accent)';
 
   return (
-    <div className="glass mobile-card-pad" style={{
-      borderRadius: 18,
+    <div className="card mobile-card-pad" style={{
+      borderRadius: 'var(--radius-lg)',
       padding: '20px 22px',
-      borderColor: progress.complete ? 'rgba(79,255,176,0.28)' : undefined,
-      background: progress.complete ? 'rgba(79,255,176,0.05)' : undefined,
+      borderColor: progress.complete ? 'color-mix(in srgb, var(--accent) 28%, transparent)' : undefined,
+      background: progress.complete ? 'color-mix(in srgb, var(--accent) 5%, transparent)' : undefined,
     }}>
       <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 10, minWidth: 0 }}>
           <span style={{
-            width: 34, height: 34, borderRadius: 11, flexShrink: 0,
+            width: 34, height: 34, borderRadius: 'var(--radius-sm)', flexShrink: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: `${goal.color || '#4fffb0'}20`, color: goal.color || 'var(--accent-mint)',
+            background: `${goal.color || 'var(--accent)'}20`, color: goal.color || 'var(--accent)',
           }}>
             {isDebt ? <Landmark size={17} /> : <PiggyBank size={17} />}
           </span>
@@ -56,13 +56,13 @@ function GoalCard({ goal, incomes, onContribute, onEdit, onDelete }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
               <CardTitle as="h3" style={{ fontSize: 15 }}>{goal.name}</CardTitle>
               {progress.complete && (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, color: 'var(--good)', background: 'rgba(79,255,176,0.12)', padding: '2px 7px', borderRadius: 20 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, color: 'var(--good)', background: 'color-mix(in srgb, var(--accent) 12%, transparent)', padding: '2px 7px', borderRadius: 'var(--radius-xl)' }}>
                   <Check size={9} /> {isDebt ? 'Cleared' : 'Reached'}
                 </span>
               )}
               {offTrack && !progress.complete && (
                 <span title="Won't reach the target date at the current rate"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, color: 'var(--warn)', background: 'rgba(251,191,112,0.12)', padding: '2px 7px', borderRadius: 20 }}>
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, color: 'var(--warn)', background: 'color-mix(in srgb, var(--accent-4) 12%, transparent)', padding: '2px 7px', borderRadius: 'var(--radius-xl)' }}>
                   <AlertTriangle size={9} /> Off track
                 </span>
               )}
@@ -105,8 +105,8 @@ function GoalCard({ goal, incomes, onContribute, onEdit, onDelete }) {
           can say, so it is stated outright rather than left to the ETA. */}
       {payoff && !progress.complete && (
         <div style={{
-          marginTop: 9, fontSize: 11, lineHeight: 1.6, borderRadius: 8, padding: '7px 10px',
-          background: payoff.neverClears ? 'rgba(255,107,138,0.1)' : 'rgba(255,255,255,0.04)',
+          marginTop: 9, fontSize: 11, lineHeight: 1.6, borderRadius: 'var(--radius-xs)', padding: '7px 10px',
+          background: payoff.neverClears ? 'color-mix(in srgb, var(--danger) 10%, transparent)' : 'color-mix(in srgb, var(--text-primary) 4%, transparent)',
           color: payoff.neverClears ? 'var(--danger)' : 'var(--text-muted)',
         }}>
           {payoff.neverClears
@@ -117,7 +117,7 @@ function GoalCard({ goal, incomes, onContribute, onEdit, onDelete }) {
 
       {!progress.complete && (
         <div className="mobile-row-stack" style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center', flexWrap: 'wrap' }}>
-          <input className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
+          <input className="input" type="number" min="0" step="0.01" placeholder="0.00"
             aria-label={`Amount to move for ${goal.name}`}
             value={amount} onChange={e => setAmount(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && move(1)}
@@ -175,7 +175,7 @@ export default function Goals({
 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div className="glass mobile-card-pad mobile-row-stack" style={{ borderRadius: 18, padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <div className="card mobile-card-pad mobile-row-stack" style={{ borderRadius: 'var(--radius-lg)', padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div>
           <CardTitle as="h2">Goals</CardTitle>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
@@ -195,7 +195,7 @@ export default function Goals({
             ['Per cycle', fmt(totals.perCycle), 'set aside automatically'],
             ['Off track', totals.offTrack, 'behind their target date'],
           ].map(([label, value, hint]) => (
-            <div key={label} className="glass" style={{ borderRadius: 14, padding: '15px 16px' }}>
+            <div key={label} className="card" style={{ borderRadius: 'var(--radius-md)', padding: '15px 16px' }}>
               <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 5 }}>{label}</div>
               <div style={{ fontSize: 20, fontWeight: 700 }}>{value}</div>
               <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 3 }}>{hint}</div>
@@ -205,9 +205,9 @@ export default function Goals({
       )}
 
       {strategies?.differs && (
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
+        <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '20px 22px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
-            <Landmark size={16} color="var(--accent-purple)" aria-hidden="true" />
+            <Landmark size={16} color="var(--accent-3)" aria-hidden="true" />
             <CardTitle as="h2">Which debt to clear first</CardTitle>
           </div>
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 14, lineHeight: 1.6 }}>
@@ -222,9 +222,9 @@ export default function Goals({
               ['Smallest balance first', strategies.snowball, 'Clears one sooner, for the momentum.'],
             ].map(([label, result, hint]) => (
               <div key={label} style={{
-                borderRadius: 12, padding: '14px 15px',
-                background: result === strategies.avalanche ? 'rgba(79,255,176,0.06)' : 'rgba(255,255,255,0.04)',
-                border: `1px solid ${result === strategies.avalanche ? 'rgba(79,255,176,0.22)' : 'transparent'}`,
+                borderRadius: 'var(--radius-md)', padding: '14px 15px',
+                background: result === strategies.avalanche ? 'color-mix(in srgb, var(--accent) 6%, transparent)' : 'color-mix(in srgb, var(--text-primary) 4%, transparent)',
+                border: `1px solid ${result === strategies.avalanche ? 'color-mix(in srgb, var(--accent) 22%, transparent)' : 'transparent'}`,
               }}>
                 <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 5 }}>{label}</div>
                 <div style={{ fontSize: 18, fontWeight: 700 }}>{fmt(result.totalInterest)}</div>
@@ -245,7 +245,7 @@ export default function Goals({
       )}
 
       {goals.length === 0 ? (
-        <div className="glass" style={{ borderRadius: 16, padding: '48px 24px', textAlign: 'center' }}>
+        <div className="card" style={{ borderRadius: 'var(--radius-lg)', padding: '48px 24px', textAlign: 'center' }}>
           <PiggyBank size={32} style={{ color: 'var(--text-muted)', margin: '0 auto 12px', display: 'block' }} />
           <div style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 6 }}>No goals yet</div>
           <div style={{ color: 'var(--text-muted)', fontSize: 12, maxWidth: 420, margin: '0 auto 16px', lineHeight: 1.6 }}>

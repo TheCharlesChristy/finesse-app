@@ -117,7 +117,7 @@ export function AdjustBudgetModal({
 
         <Field label="Category">
           {id => (
-            <select id={id} className="glass-input" value={catId} onChange={e => handleCatChange(e.target.value)}>
+            <select id={id} className="input" value={catId} onChange={e => handleCatChange(e.target.value)}>
               {categories.map(c => {
                 const over = overspendOf(c);
                 return (
@@ -131,17 +131,17 @@ export function AdjustBudgetModal({
         </Field>
 
         {cat && (overspend > 0 ? (
-          <div style={{ fontSize: 12, color: 'var(--danger)', background: 'rgba(255,107,138,0.08)', borderRadius: 8, padding: '8px 12px' }}>
+          <div style={{ fontSize: 12, color: 'var(--danger)', background: 'color-mix(in srgb, var(--danger) 8%, transparent)', borderRadius: 'var(--radius-xs)', padding: '8px 12px' }}>
             {fmt(overspend)} over budget — spent {fmt(cat.spent || 0)} of {fmt(getEffectiveAllowance(cat))}
           </div>
         ) : (
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 12px' }}>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-xs)', padding: '8px 12px' }}>
             {fmt(getCategorySpare(cat))} left of {fmt(getEffectiveAllowance(cat))}
           </div>
         ))}
 
         {receivedTotal > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 12, color: 'var(--accent-mint)', background: 'rgba(79,255,176,0.06)', borderRadius: 8, padding: '8px 12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 12, color: 'var(--accent)', background: 'color-mix(in srgb, var(--accent) 6%, transparent)', borderRadius: 'var(--radius-xs)', padding: '8px 12px' }}>
             <span>Topped up by {fmt(receivedTotal)} this cycle</span>
             <button type="button" className="btn-secondary" onClick={handleUndo}
               style={{ padding: '5px 10px', fontSize: 11, flexShrink: 0 }}>
@@ -152,10 +152,10 @@ export function AdjustBudgetModal({
 
         {sources.length === 0 ? (
           <>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '12px 14px', lineHeight: 1.6 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-xs)', padding: '12px 14px', lineHeight: 1.6 }}>
               No spare budget available. Add a one-off income from the Income section, or edit a transaction to move it to another category.
             </div>
-            <div className="modal-actions" style={{ display: 'flex', marginTop: 4 }}>
+            <div className="form-actions" style={{ display: 'flex', marginTop: 4 }}>
               <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Close</button>
             </div>
           </>
@@ -163,7 +163,7 @@ export function AdjustBudgetModal({
           <>
             <Field label="How much to add? (£)">
               {id => (
-                <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
+                <input id={id} className="input" type="number" min="0" step="0.01" placeholder="0.00"
                   value={amount} onChange={e => setAmount(e.target.value)} autoFocus />
               )}
             </Field>
@@ -178,10 +178,10 @@ export function AdjustBudgetModal({
                       style={{
                         display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
                         textAlign: 'left', cursor: 'pointer', width: '100%',
-                        padding: '10px 14px', borderRadius: 10, fontSize: 13,
-                        border: `1px solid ${active ? 'var(--accent-mint)' : 'var(--glass-border)'}`,
-                        background: active ? 'rgba(79,255,176,0.12)' : 'rgba(255,255,255,0.04)',
-                        color: active ? 'var(--accent-mint)' : 'var(--text-secondary)',
+                        padding: '10px 14px', borderRadius: 'var(--radius-sm)', fontSize: 13,
+                        border: `1px solid ${active ? 'var(--accent)' : 'var(--line)'}`,
+                        background: active ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'color-mix(in srgb, var(--text-primary) 4%, transparent)',
+                        color: active ? 'var(--accent)' : 'var(--text-secondary)',
                         transition: 'background 0.15s, border-color 0.15s, color 0.15s',
                       }}>
                       <span style={{ fontWeight: 500 }}>{s.key === 'income' ? 'Spare income' : s.label}</span>
@@ -193,7 +193,7 @@ export function AdjustBudgetModal({
             </div>
 
             {cat && parsedAmount > 0 && selectedSource && (
-              <div style={{ fontSize: 12, color: exceeds ? 'var(--danger)' : 'var(--text-muted)', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6 }}>
+              <div style={{ fontSize: 12, color: exceeds ? 'var(--danger)' : 'var(--text-muted)', background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-xs)', padding: '8px 12px', lineHeight: 1.6 }}>
                 {exceeds ? (
                   <>Only {fmt(sourceAvailable)} available from {selectedSource.key === 'income' ? 'spare income' : selectedSource.label}.</>
                 ) : (
@@ -211,7 +211,7 @@ export function AdjustBudgetModal({
               </div>
             )}
 
-            <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            <div className="form-actions" style={{ display: 'flex', gap: 10, marginTop: 4 }}>
               <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
               <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!canSubmit}>
                 {primaryLabel}

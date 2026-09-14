@@ -119,14 +119,14 @@ export default function DateInput({ value, onChange, label = 'Date', disabled = 
       <button
         ref={triggerRef}
         type="button"
-        className="glass-input date-input-trigger"
+        className="input date-input-trigger"
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`${label || 'Date'}: ${format(selectedDate, 'd MMMM yyyy')}`}
         onClick={() => (open ? setOpen(false) : openPicker())}
       >
-        <CalendarDays size={14} color="var(--accent-blue)" />
+        <CalendarDays size={14} color="var(--accent-2)" />
         <span>{format(selectedDate, 'd MMM yyyy')}</span>
       </button>
 

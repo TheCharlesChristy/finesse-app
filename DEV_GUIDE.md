@@ -41,7 +41,9 @@ src/
 ├── vault.js              # Encryption key: Argon2id derivation, wrapping, recovery codes
 ├── dbCrypto.js           # Dexie DBCore middleware that seals/opens rows
 ├── utils.js              # Pure functions: scheduling, forecasting, formatting
-├── index.css             # Design system: CSS variables, glass classes, base styles
+├── index.css             # All styling. Above the app-specific marker it is SHARED
+│                         #   verbatim with Finesse Fit — see DESIGN_SYSTEM.md
+├── theme/                # SHARED — appearance model + OKLCH palette generator
 │
 ├── views/
 │   ├── Dashboard.jsx     # Safe-to-spend, income summary, category bars, recent transactions
@@ -290,62 +292,89 @@ Views are pure in the sense that they receive data as props and call callbacks f
 
 ---
 
-## Design System (`src/index.css`)
+## Design System
 
-The app uses a **liquid glass** aesthetic: dark deep-blue background, frosted glass panels, soft radial gradient mesh.
+**Shared with Finesse Fit, byte for byte.** The full reference is
+[DESIGN_SYSTEM.md](DESIGN_SYSTEM.md); this is the orientation.
 
-### CSS variables
+`src/index.css` is one stylesheet in two halves. Everything above the
+`FINESSE — app-specific` marker is identical to the same region of
+`finesse-fit/src/index.css`; everything below it is the calendar, the statement
+importer, the command palette and the rest of this app's own furniture — built
+from the same tokens.
 
-```css
---glass-bg           /* panel fill: rgba(255,255,255,0.08) */
---glass-bg-hover     /* hovered panel fill */
---glass-bg-strong    /* active/selected panel fill */
---glass-border       /* panel border */
---glass-border-strong
---glass-shadow       /* drop shadow + inset highlight */
---glass-shadow-lg    /* stronger version */
---blur               /* backdrop-filter: blur(20px) */
+Seven token layers on `<html>`, each driven by one `data-*` attribute that
+`src/theme/appearance.js` writes:
 
---accent-mint        /* #4fffb0 — primary accent, good states */
---accent-blue        /* #5db8ff */
---accent-purple      /* #c084fc */
---accent-warm        /* #fbbf70 — expense amounts */
+| Layer | Attribute | Decides |
+|---|---|---|
+| Structure | — | `--radius-*`, `--gap*`, `--control-h`, motion timings |
+| Palette | `data-palette` | `--bg` + `--accent`, `--accent-2/3/4`, `--on-accent` |
+| Mode | `data-theme` | `--surface*`, `--line*`, `--text-*`, `--good/warn/danger/info` |
+| Surface | `data-surface` | `--card-bg`, `--card-border`, `--card-shadow`, `--card-blur` |
+| Contrast | `data-contrast` | Stronger lines and text over whatever else is set |
+| Density | `data-density` | `--density-scale`, which spacing and control sizes derive from |
+| Shape/type | `data-corners`, `data-text`, `data-motion` | `--radius-scale`, root font size, animation |
 
---text-primary       /* rgba(255,255,255,0.95) */
---text-secondary     /* rgba(255,255,255,0.60) */
---text-muted         /* rgba(255,255,255,0.35) */
+The old `--glass-*` and `--accent-mint/blue/purple/warm` variables are gone.
+Surfaces are `color-mix()`ed from `--bg`, so each palette's tint carries through
+the whole app rather than stopping at the buttons.
 
---good               /* #4fffb0 */
---warn               /* #fbbf70 */
---danger             /* #ff6b8a */
-```
+### The liquid glass look is now a setting
 
-### Utility classes
+`islands` (solid cards on a plain page, the default), `glass` (translucent over a
+palette-built gradient mesh — this app's original aesthetic) and `outline` (flat,
+no shadow). One `.card` rule reads five tokens; each finish writes them, and
+nothing else in the app knows which is active.
+
+**Under Glass a card carries a `backdrop-filter`, which makes it the containing
+block for `position: fixed` descendants.** Anything positioned by script goes
+through `Portal` from `ui.jsx`.
+
+### Palettes
+
+Twelve curated (`tide` — this app's original mint-and-sky — plus `mint`,
+`aurora`, `cobalt`, `evergreen`, `ember`, `marigold`, `oxide`, `rose`, `sakura`,
+`neon`, `graphite`) and **Custom**, which `src/theme/custom.js` builds in OKLCH
+from a hue, a harmony, an intensity and a background tint. The choice is stored
+per account, so a personal and a business budget can look different.
+
+### The classes worth knowing
 
 | Class | Purpose |
 |---|---|
-| `.glass` | Standard frosted panel |
-| `.glass-strong` | Stronger frosted panel (modals, active cards) |
-| `.btn-primary` | Mint gradient button |
-| `.btn-secondary` | Ghost button |
-| `.btn-danger` | Red tinted button |
-| `.btn-icon` | Square icon button (34×34px) |
-| `.glass-input` | Styled input / select |
-| `.nav-item` | Sidebar nav link; add `.active` for active state |
-| `.progress-track` / `.progress-fill` | Slim progress bar |
-| `.status-good` / `.status-warn` / `.status-danger` | Status pill |
-| `.modal-overlay` / `.modal-box` | Modal backdrop + container |
-| `.font-display` | DM Serif Display font |
-| `.fade-in` | `fadeIn` entrance animation |
-| `.bg-mesh` | Fixed full-viewport gradient mesh background |
+| `.card` / `.card-raised` / `.panel` | Surfaces; a card inside a card renders flat |
+| `.btn-primary` / `-secondary` / `-danger` / `-quiet` / `-ghost` / `.btn-icon` | Buttons |
+| `.input`, `.field`, `.form-grid` | Form controls and their labels |
+| `.stack` / `.row` / `.split` / `.grid-auto` / `.layout-split` / `.pair` | Layout primitives |
+| `.list` / `.list-row` / `.list-main` / `.list-trail` | Repeating records |
+| `.stat-grid` / `.stat` / `.metric` / `.summary-value` | Numbers |
+| `.progress-track` / `.progress-fill` / `.segments` | Bars, including stacked shares |
+| `.status-good/-warn/-danger/-info`, `.badge`, `.chip` | Status and filters |
+| `.page-head` / `.page-title` / `.eyebrow` / `.card-title` | Page and card headings |
+| `.tab-bar` / `.tab-pill` | The tab strip on a consolidated page |
+| `.banner` (+ `.info/.good/.warn/.danger`) | An inline message attached to its subject |
+| `.empty-state` | Never a bare "No data" |
+| `.modal-overlay` / `.modal-box` / `.modal-body` / `.modal-footer` | Dialogs |
+| `.table-wrap` / `.table` | The statement review step — the one genuinely tabular screen |
+| `.mobile-*` | Legacy responsive helpers; prefer the layout primitives above |
 
-Tailwind utility classes are available but used sparingly — prefer the semantic glass classes above for consistency.
+Tailwind is available but used sparingly — prefer the semantic classes, which are
+the only things the appearance settings can reach.
 
 ---
 
 ## Responsive Layout
 
-The sidebar is 220px wide and fixed. On desktop (≥768px) it stays visible. On mobile (<768px) it slides off-screen left and is toggled by a hamburger button in the mobile header, which is hidden on desktop. This is controlled by inline `<style>` in `App.jsx` that reads `sidebarOpen` state.
+`AppShell` (shared with Finesse Fit) draws a persistent 248px rail on a desktop
+and a floating bottom tab bar on a phone — not a drawer. A navigation you have to
+summon costs a tap before every move and hides how many places there are to go.
+The tab bar takes at most five slots (below ~64px a target stops being reliably
+hittable with a thumb); anything past that goes to a "More" sheet.
+
+Four breakpoints, each with one job: **1100px** two-column pages fold to one;
+**860px** the rail becomes the tab bar and dialogs become sheets; **700px**
+inline content rows stack; **430px** the narrowest phone in use.
 
 ---
 

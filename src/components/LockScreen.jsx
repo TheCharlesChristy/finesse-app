@@ -119,9 +119,9 @@ export default function LockScreen({ settings, vault, onUnlock }) {
     <Shell>
       <div style={{ textAlign: 'center', marginBottom: 22 }}>
         <span style={{
-          width: 46, height: 46, borderRadius: 15, margin: '0 auto 12px',
+          width: 46, height: 46, borderRadius: 'var(--radius-md)', margin: '0 auto 12px',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(192,132,252,0.14)', color: 'var(--accent-purple)',
+          background: 'color-mix(in srgb, var(--accent-3) 14%, transparent)', color: 'var(--accent-3)',
         }}>
           <Lock size={20} aria-hidden="true" />
         </span>
@@ -146,7 +146,7 @@ export default function LockScreen({ settings, vault, onUnlock }) {
         </label>
         <input
           id="unlock-secret"
-          className="glass-input"
+          className="input"
           type="password"
           autoFocus
           autoComplete="current-password"
@@ -238,9 +238,9 @@ function RecoveryForm({ onCancel, onDone }) {
     <Shell>
       <div style={{ textAlign: 'center', marginBottom: 18 }}>
         <span style={{
-          width: 46, height: 46, borderRadius: 15, margin: '0 auto 12px',
+          width: 46, height: 46, borderRadius: 'var(--radius-md)', margin: '0 auto 12px',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(93,184,255,0.14)', color: 'var(--accent-blue)',
+          background: 'color-mix(in srgb, var(--accent-2) 14%, transparent)', color: 'var(--accent-2)',
         }}>
           <KeyRound size={20} aria-hidden="true" />
         </span>
@@ -254,7 +254,7 @@ function RecoveryForm({ onCancel, onDone }) {
       <form onSubmit={submit}>
         <label className="field-label" htmlFor="recovery-code">Recovery code</label>
         <input
-          id="recovery-code" className="glass-input" autoFocus autoCapitalize="characters"
+          id="recovery-code" className="input" autoFocus autoCapitalize="characters"
           spellCheck={false} value={code} disabled={busy}
           placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"
           onChange={e => { setError(''); setCode(e.target.value); }}
@@ -265,7 +265,7 @@ function RecoveryForm({ onCancel, onDone }) {
           New PIN or passphrase
         </label>
         <input
-          id="recovery-secret" className="glass-input" type="password" value={secret} disabled={busy}
+          id="recovery-secret" className="input" type="password" value={secret} disabled={busy}
           autoComplete="new-password"
           onChange={e => { setError(''); setSecret(e.target.value); }}
           style={{ width: '100%' }}
@@ -273,7 +273,7 @@ function RecoveryForm({ onCancel, onDone }) {
 
         <label className="field-label" htmlFor="recovery-confirm" style={{ marginTop: 12 }}>Confirm</label>
         <input
-          id="recovery-confirm" className="glass-input" type="password" value={confirm} disabled={busy}
+          id="recovery-confirm" className="input" type="password" value={confirm} disabled={busy}
           autoComplete="new-password"
           onChange={e => setConfirm(e.target.value)}
           style={{ width: '100%' }}
@@ -310,13 +310,13 @@ function RecoveryForm({ onCancel, onDone }) {
 function Shell({ children }) {
   return (
     <div style={{ minHeight: '100vh', position: 'relative' }}>
-      <div className="bg-mesh" />
+      <div className="app-bg" />
       <div style={{
         position: 'relative', zIndex: 1, minHeight: '100vh',
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
         padding: 'calc(24px + env(safe-area-inset-top, 0px)) 20px calc(24px + env(safe-area-inset-bottom, 0px))',
       }}>
-        <div className="glass" style={{ borderRadius: 22, padding: '32px 28px', width: '100%', maxWidth: 340 }}>
+        <div className="card" style={{ borderRadius: 'var(--radius-xl)', padding: '32px 28px', width: '100%', maxWidth: 340 }}>
           {children}
         </div>
       </div>

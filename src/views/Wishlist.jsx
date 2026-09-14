@@ -3,7 +3,7 @@ import { Pencil, Trash2, Check, Clock, ChevronDown, ChevronRight, ExternalLink, 
 import { fmt, wishlistAffordability } from '../utils';
 import { CardTitle, IconButton } from '../components/ui';
 
-const LIST_COLORS = ['#4fffb0','#5db8ff','#c084fc','#fbbf70','#ff6b8a','#67e8f9','#a78bfa','#fb923c'];
+const LIST_COLORS = ['var(--accent)','var(--accent-2)','var(--accent-3)','var(--accent-4)','var(--danger)','var(--series-5)','var(--series-6)','var(--series-7)'];
 
 function buildTree(lists, parentId = null) {
   return lists
@@ -20,13 +20,13 @@ function AffordabilityBadge({ aff }) {
   if (!aff) return null;
   if (aff.canAffordNow) return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600,
-      color: 'var(--good)', background: 'rgba(79,255,176,0.1)', padding: '2px 8px', borderRadius: 20, flexShrink: 0 }}>
+      color: 'var(--good)', background: 'color-mix(in srgb, var(--accent) 10%, transparent)', padding: '2px 8px', borderRadius: 'var(--radius-xl)', flexShrink: 0 }}>
       <Check size={10} /> Now
     </span>
   );
   if (aff.daysUntil !== null) return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11,
-      color: 'var(--warn)', background: 'rgba(251,191,112,0.1)', padding: '2px 8px', borderRadius: 20, flexShrink: 0 }}>
+      color: 'var(--warn)', background: 'color-mix(in srgb, var(--accent-4) 10%, transparent)', padding: '2px 8px', borderRadius: 'var(--radius-xl)', flexShrink: 0 }}>
       <Clock size={10} /> {aff.afterReset ? 'After reset' : `~${aff.daysUntil}d`}
     </span>
   );
@@ -41,9 +41,9 @@ function ItemRow({ item, expenseCategories, settings, incomes = [], goals = [], 
   return (
     <div className="mobile-list-row" style={{
       display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
-      background: aff?.canAffordNow ? 'rgba(79,255,176,0.05)' : 'rgba(255,255,255,0.03)',
-      border: aff?.canAffordNow ? '1px solid rgba(79,255,176,0.18)' : '1px solid transparent',
-      borderRadius: 10, flexWrap: 'wrap',
+      background: aff?.canAffordNow ? 'color-mix(in srgb, var(--accent) 5%, transparent)' : 'color-mix(in srgb, var(--text-primary) 3%, transparent)',
+      border: aff?.canAffordNow ? '1px solid color-mix(in srgb, var(--accent) 18%, transparent)' : '1px solid transparent',
+      borderRadius: 'var(--radius-sm)', flexWrap: 'wrap',
     }}>
       <div className="mobile-list-main" style={{ flex: 1, minWidth: 140 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -52,7 +52,7 @@ function ItemRow({ item, expenseCategories, settings, incomes = [], goals = [], 
             <a href={item.link} target="_blank" rel="noopener noreferrer"
               onClick={e => e.stopPropagation()}
               title={item.link}
-              style={{ display: 'flex', alignItems: 'center', color: 'var(--accent-blue)', opacity: 0.75, lineHeight: 1 }}>
+              style={{ display: 'flex', alignItems: 'center', color: 'var(--accent-2)', opacity: 0.75, lineHeight: 1 }}>
               <ExternalLink size={11} />
             </a>
           )}
@@ -61,10 +61,10 @@ function ItemRow({ item, expenseCategories, settings, incomes = [], goals = [], 
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, flexWrap: 'wrap' }}>
             {item.note && <span style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>{item.note}</span>}
             {assignedCats.map(c => (
-              <span key={c.id} style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10,
-                background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)',
+              <span key={c.id} style={{ fontSize: 10, padding: '1px 6px', borderRadius: 'var(--radius-sm)',
+                background: 'color-mix(in srgb, var(--text-primary) 6%, transparent)', color: 'var(--text-muted)',
                 display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                <span style={{ width: 5, height: 5, borderRadius: '50%', background: c.color || 'var(--accent-blue)', display: 'inline-block' }} />
+                <span style={{ width: 5, height: 5, borderRadius: 'var(--radius-full)', background: c.color || 'var(--accent-2)', display: 'inline-block' }} />
                 {c.name}
               </span>
             ))}
@@ -75,7 +75,7 @@ function ItemRow({ item, expenseCategories, settings, incomes = [], goals = [], 
       {linkedGoal ? (
         <span title={`${fmt(linkedGoal.saved || 0)} saved of ${fmt(linkedGoal.target || 0)}`}
           style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, flexShrink: 0,
-            color: 'var(--accent-mint)', background: 'rgba(79,255,176,0.1)', padding: '2px 8px', borderRadius: 20 }}>
+            color: 'var(--accent)', background: 'color-mix(in srgb, var(--accent) 10%, transparent)', padding: '2px 8px', borderRadius: 'var(--radius-xl)' }}>
           <PiggyBank size={10} /> {fmt(linkedGoal.saved || 0)}
         </span>
       ) : (
@@ -124,15 +124,15 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, incom
         padding: depth === 0 ? '14px 18px' : '9px 10px',
         cursor: 'pointer', userSelect: 'none', flexWrap: 'wrap',
         borderBottom: isOpen && (directItems.length > 0 || node.children.length > 0 || showSubInput)
-          ? '1px solid rgba(255,255,255,0.05)' : 'none',
+          ? '1px solid color-mix(in srgb, var(--text-primary) 5%, transparent)' : 'none',
         borderRadius: depth > 0 ? 10 : 0,
-        background: depth > 0 ? 'rgba(255,255,255,0.03)' : 'transparent',
+        background: depth > 0 ? 'color-mix(in srgb, var(--text-primary) 3%, transparent)' : 'transparent',
       }}
     >
       <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
         {isOpen ? <ChevronDown size={depth === 0 ? 14 : 12} /> : <ChevronRight size={depth === 0 ? 14 : 12} />}
       </span>
-      <span style={{ width: depth === 0 ? 9 : 7, height: depth === 0 ? 9 : 7, borderRadius: '50%', background: node.color || 'var(--accent-blue)', flexShrink: 0 }} />
+      <span style={{ width: depth === 0 ? 9 : 7, height: depth === 0 ? 9 : 7, borderRadius: 'var(--radius-full)', background: node.color || 'var(--accent-2)', flexShrink: 0 }} />
       <span className="mobile-list-main" style={{ fontWeight: 600, fontSize: depth === 0 ? 14 : 13, flex: 1, minWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
 
       <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>
@@ -141,17 +141,17 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, incom
       </span>
 
       {canAffordDirect > 0 && (
-        <span style={{ fontSize: 10, color: 'var(--good)', background: 'rgba(79,255,176,0.1)', padding: '2px 7px', borderRadius: 20, flexShrink: 0 }}>
+        <span style={{ fontSize: 10, color: 'var(--good)', background: 'color-mix(in srgb, var(--accent) 10%, transparent)', padding: '2px 7px', borderRadius: 'var(--radius-xl)', flexShrink: 0 }}>
           {canAffordDirect} affordable
         </span>
       )}
 
       <button onClick={e => { e.stopPropagation(); onAddToList(node.id); }} className="btn-secondary"
-        style={{ padding: '3px 8px', fontSize: 11, borderRadius: 7, display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+        style={{ padding: '3px 8px', fontSize: 11, borderRadius: 'var(--radius-xs)', display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
         <Plus size={9} /> Item
       </button>
       <button onClick={e => { e.stopPropagation(); setShowSubInput(v => !v); setSubName(''); }} className="btn-secondary"
-        style={{ padding: '3px 8px', fontSize: 11, borderRadius: 7, display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+        style={{ padding: '3px 8px', fontSize: 11, borderRadius: 'var(--radius-xs)', display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
         <Plus size={9} /> List
       </button>
       <IconButton onClick={e => { e.stopPropagation(); onEditList(node); }}
@@ -181,8 +181,8 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, incom
       {/* Inline sub-list creation */}
       {showSubInput && (
         <div className="mobile-row-stack" style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '6px 0', paddingLeft: depth > 0 ? 0 : 2 }}>
-          <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--text-muted)', flexShrink: 0 }} />
-          <input className="glass-input" placeholder="New sub-list name…" value={subName} autoFocus aria-label="New sub-list name"
+          <span style={{ width: 7, height: 7, borderRadius: 'var(--radius-full)', background: 'var(--text-muted)', flexShrink: 0 }} />
+          <input className="input" placeholder="New sub-list name…" value={subName} autoFocus aria-label="New sub-list name"
             onChange={e => setSubName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleCreateSub(); if (e.key === 'Escape') { setShowSubInput(false); setSubName(''); } }}
             style={{ flex: 1 }} />
@@ -212,10 +212,10 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, incom
     </div>
   );
 
-  // Depth 0: wrap in glass card
+  // Depth 0: wrap in card card
   if (depth === 0) {
     return (
-      <div className="glass" style={{ borderRadius: 16, overflow: 'hidden' }}>
+      <div className="card" style={{ borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
         {header}
         {body}
       </div>
@@ -224,7 +224,7 @@ function ListSection({ node, depth, allItems, expenseCategories, settings, incom
 
   // Depth > 0: indent with coloured left-border accent
   return (
-    <div style={{ borderLeft: `2px solid ${node.color || '#5db8ff'}35`, marginLeft: 10, paddingLeft: 10, marginTop: 6 }}>
+    <div style={{ borderLeft: `2px solid ${node.color || 'var(--accent-2)'}35`, marginLeft: 10, paddingLeft: 10, marginTop: 6 }}>
       {header}
       {body}
     </div>
@@ -277,7 +277,7 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
       {/* ── Header ── */}
-      <div className="glass mobile-card-pad mobile-row-stack" style={{ borderRadius: 18, padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+      <div className="card mobile-card-pad mobile-row-stack" style={{ borderRadius: 'var(--radius-lg)', padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <CardTitle as="h2">Wishlist</CardTitle>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
@@ -300,9 +300,9 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
 
       {/* ── New top-level list input ── */}
       {showNewList && (
-        <div className="glass mobile-card-pad mobile-row-stack" style={{ borderRadius: 14, padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
-          <span style={{ width: 9, height: 9, borderRadius: '50%', background: LIST_COLORS[wishlistCategories.length % LIST_COLORS.length], flexShrink: 0 }} />
-          <input className="glass-input" placeholder="List name…" value={newListName} autoFocus aria-label="New list name"
+        <div className="card mobile-card-pad mobile-row-stack" style={{ borderRadius: 'var(--radius-md)', padding: '12px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
+          <span style={{ width: 9, height: 9, borderRadius: 'var(--radius-full)', background: LIST_COLORS[wishlistCategories.length % LIST_COLORS.length], flexShrink: 0 }} />
+          <input className="input" placeholder="List name…" value={newListName} autoFocus aria-label="New list name"
             onChange={e => setNewListName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleCreateList(); if (e.key === 'Escape') setShowNewList(false); }}
             style={{ flex: 1 }} />
@@ -315,7 +315,7 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
 
       {/* ── Empty state ── */}
       {wishlistCategories.length === 0 && items.length === 0 && (
-        <div className="glass" style={{ borderRadius: 16, padding: '48px 24px', textAlign: 'center' }}>
+        <div className="card" style={{ borderRadius: 'var(--radius-lg)', padding: '48px 24px', textAlign: 'center' }}>
           <ShoppingBag size={32} style={{ color: 'var(--text-muted)', margin: '0 auto 12px', display: 'block' }} />
           <div style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 6 }}>Your wishlist is empty</div>
           <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Create a list to organise items, then add what you're saving for</div>
@@ -335,10 +335,10 @@ export default function Wishlist({ items, wishlistCategories, expenseCategories,
 
       {/* ── Uncategorised ── */}
       {uncategorizedItems.length > 0 && (
-        <div className="glass" style={{ borderRadius: 16, overflow: 'hidden' }}>
+        <div className="card" style={{ borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
           <div className="mobile-list-row" onClick={() => toggleList('uncategorized')}
             style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 18px', cursor: 'pointer', userSelect: 'none',
-              borderBottom: expanded.has('uncategorized') ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+              borderBottom: expanded.has('uncategorized') ? '1px solid color-mix(in srgb, var(--text-primary) 5%, transparent)' : 'none' }}>
             <span style={{ color: 'var(--text-muted)' }}>
               {expanded.has('uncategorized') ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </span>

@@ -16,7 +16,7 @@ const WINDOWS = [
 const Tip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div style={{ background: 'rgba(18,26,48,0.95)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 12, padding: '10px 14px', fontSize: 12 }}>
+    <div className="chart-tooltip">
       <div style={{ color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600 }}>{label}</div>
       {payload.map((entry, i) => (
         <div key={i} style={{ color: entry.color, marginBottom: 2 }}>
@@ -29,7 +29,7 @@ const Tip = ({ active, payload, label }) => {
 
 function Stat({ label, value, hint, color }) {
   return (
-    <div className="glass" style={{ borderRadius: 14, padding: '15px 16px' }}>
+    <div className="card" style={{ borderRadius: 'var(--radius-md)', padding: '15px 16px' }}>
       <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 5 }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
       {hint && <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 3, lineHeight: 1.5 }}>{hint}</div>}
@@ -60,10 +60,10 @@ export default function Review({ transactions = [], categories = [], incomeEvent
 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div className="glass mobile-card-pad mobile-row-stack" style={{ borderRadius: 18, padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <div className="card mobile-card-pad mobile-row-stack" style={{ borderRadius: 'var(--radius-lg)', padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <CalendarRange size={16} color="var(--accent-warm)" aria-hidden="true" />
+            <CalendarRange size={16} color="var(--accent-4)" aria-hidden="true" />
             <CardTitle as="h2">
               {format(review.from, 'MMM yyyy')} to {format(review.to, 'MMM yyyy')}
             </CardTitle>
@@ -84,7 +84,7 @@ export default function Review({ transactions = [], categories = [], incomeEvent
       </div>
 
       {!review.hasData ? (
-        <div className="glass" style={{ borderRadius: 16, padding: '48px 24px', textAlign: 'center' }}>
+        <div className="card" style={{ borderRadius: 'var(--radius-lg)', padding: '48px 24px', textAlign: 'center' }}>
           <Receipt size={32} style={{ color: 'var(--text-muted)', margin: '0 auto 12px', display: 'block' }} />
           <div style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 6 }}>Nothing logged in this window</div>
           <div style={{ color: 'var(--text-muted)', fontSize: 12, maxWidth: 420, margin: '0 auto', lineHeight: 1.6 }}>
@@ -106,7 +106,7 @@ export default function Review({ transactions = [], categories = [], incomeEvent
               hint={review.totals.refunded > 0 ? `${fmt(review.totals.refunded)} came back as refunds` : 'logged in this window'} />
           </div>
 
-          <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+          <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
             <CardTitle as="h2" style={{ marginBottom: 6 }}>Month by month</CardTitle>
             <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>
               What came in against what went out
@@ -118,9 +118,9 @@ export default function Review({ transactions = [], categories = [], incomeEvent
                   <XAxis dataKey="label" interval={Math.max(0, Math.floor(review.series.length / 8) - 1)} />
                   <YAxis tickFormatter={v => `£${Math.round(v)}`} />
                   <Tooltip content={<Tip />} />
-                  <Legend wrapperStyle={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }} />
-                  <Bar dataKey="income" name="In" fill="rgba(79,255,176,0.55)" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="spent" name="Out" fill="#fbbf70" radius={[6, 6, 0, 0]} />
+                  <Legend wrapperStyle={{ fontSize: 12, color: 'color-mix(in srgb, var(--text-primary) 50%, transparent)' }} />
+                  <Bar dataKey="income" name="In" fill="color-mix(in srgb, var(--accent) 55%, transparent)" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="spent" name="Out" fill="var(--accent-4)" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -140,7 +140,7 @@ export default function Review({ transactions = [], categories = [], incomeEvent
           </div>
 
           {review.categories.length > 0 && (
-            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+            <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
               <CardTitle as="h2" style={{ marginBottom: 6 }}>Where it went</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>
                 By category, after refunds
@@ -170,7 +170,7 @@ export default function Review({ transactions = [], categories = [], incomeEvent
           )}
 
           {review.merchants.length > 0 && (
-            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+            <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
               <CardTitle as="h2" style={{ marginBottom: 6 }}>Who got it</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>
                 Categories say what kind of spending it was; this says what you actually bought
@@ -185,7 +185,7 @@ export default function Review({ transactions = [], categories = [], incomeEvent
                       <div className="progress-track">
                         <div className="progress-fill" style={{
                           width: `${merchantMax > 0 ? Math.max(2, (entry.total / merchantMax) * 100) : 0}%`,
-                          background: 'var(--accent-blue)',
+                          background: 'var(--accent-2)',
                         }} />
                       </div>
                     </div>
@@ -200,7 +200,7 @@ export default function Review({ transactions = [], categories = [], incomeEvent
           )}
 
           {review.subscriptionTrend && (
-            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+            <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
               <CardTitle as="h2" style={{ marginBottom: 6 }}>Subscription creep</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>
                 Recurring charges add up quietly, which is rather the point of them
@@ -210,8 +210,8 @@ export default function Review({ transactions = [], categories = [], incomeEvent
                   <AreaChart data={review.series}>
                     <defs>
                       <linearGradient id="grad-subs" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#fbbf70" stopOpacity={0.35} />
-                        <stop offset="95%" stopColor="#fbbf70" stopOpacity={0.02} />
+                        <stop offset="5%" stopColor="var(--accent-4)" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="var(--accent-4)" stopOpacity={0.02} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid vertical={false} />
@@ -219,7 +219,7 @@ export default function Review({ transactions = [], categories = [], incomeEvent
                     <YAxis tickFormatter={v => `£${Math.round(v)}`} />
                     <Tooltip content={<Tip />} />
                     <Area type="monotone" dataKey="subscriptions" name="Subscriptions"
-                      stroke="#fbbf70" strokeWidth={2} fill="url(#grad-subs)" />
+                      stroke="var(--accent-4)" strokeWidth={2} fill="url(#grad-subs)" />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>

@@ -24,7 +24,7 @@ import {
 import { DEFAULT_HORIZON_DAYS, buildCycleProjection, buildSpendPrediction } from '../prediction';
 import { CardTitle } from '../components/ui';
 
-const COLORS = ['#4fffb0', '#5db8ff', '#c084fc', '#fbbf70', '#ff6b8a', '#67e8f9', '#a78bfa'];
+const COLORS = ['var(--accent)', 'var(--accent-2)', 'var(--accent-3)', 'var(--accent-4)', 'var(--danger)', 'var(--series-5)', 'var(--series-6)'];
 const FREQ_LABEL = { weekly: 'Weekly', fortnightly: 'Fortnightly', '4weekly': 'Every 4 weeks', monthly: 'Monthly' };
 
 const PREDICTION_HORIZONS = [7, 30, 90];
@@ -101,7 +101,7 @@ function getNextIncomeReset(income, categories, now = new Date()) {
 const GlassTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div style={{ background: 'rgba(18,26,48,0.95)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 12, padding: '10px 14px', fontSize: 12 }}>
+    <div className="chart-tooltip">
       <div style={{ color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600 }}>{label}</div>
       {payload.map((p, i) => (
         <div key={i} style={{ color: p.color, marginBottom: 2 }}>
@@ -116,7 +116,7 @@ const PieTooltip = ({ active, payload }) => {
   if (!active || !payload?.length) return null;
   const p = payload[0];
   return (
-    <div style={{ background: 'rgba(18,26,48,0.95)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 10, padding: '8px 12px', fontSize: 12 }}>
+    <div className="chart-tooltip">
       <span style={{ color: p.payload.color }}>{p.name}</span>
       <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>{fmt(p.value)}</span>
     </div>
@@ -129,9 +129,9 @@ const ForecastTooltip = ({ active, payload, label }) => {
   const point = payload?.[0]?.payload;
   if (!active || !point) return null;
   return (
-    <div style={{ background: 'rgba(18,26,48,0.95)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 12, padding: '10px 14px', fontSize: 12 }}>
+    <div className="chart-tooltip">
       <div style={{ color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600 }}>By {label}</div>
-      <div style={{ color: 'var(--accent-mint)', marginBottom: 2 }}>
+      <div style={{ color: 'var(--accent)', marginBottom: 2 }}>
         Most likely: <strong>{fmt(point.p50)}</strong>
       </div>
       <div style={{ color: 'var(--text-secondary)' }}>
@@ -154,7 +154,7 @@ const CategoryLinesTooltip = ({ active, payload, label }) => {
     .sort((a, b) => Number(b.value) - Number(a.value));
   if (!rows.length) return null;
   return (
-    <div style={{ background: 'rgba(18,26,48,0.95)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 12, padding: '10px 14px', fontSize: 12 }}>
+    <div className="chart-tooltip">
       <div style={{ color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600 }}>{label}</div>
       {rows.map(entry => (
         <div key={entry.dataKey} style={{ color: entry.color, marginBottom: 2, display: 'flex', gap: 12, justifyContent: 'space-between' }}>
@@ -206,7 +206,7 @@ function SpendPrediction({ prediction, horizonDays, onHorizonChange }) {
   const colorFor = row => palette.get(row.id) || COLORS[0];
 
   return (
-    <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+    <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         <div>
           <CardTitle as="h2" style={{ marginBottom: 6 }}>Predicted Spending</CardTitle>
@@ -239,7 +239,7 @@ function SpendPrediction({ prediction, horizonDays, onHorizonChange }) {
       ) : (
         <>
           <div style={{ marginTop: 18, marginBottom: 6 }}>
-            <div className="font-display" style={{ fontSize: 32, color: 'var(--accent-mint)' }}>
+            <div className="font-display" style={{ fontSize: 32, color: 'var(--accent)' }}>
               {fmt(prediction.total.p10)} – {fmt(prediction.total.p90)}
             </div>
             <div style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4 }}>
@@ -260,15 +260,15 @@ function SpendPrediction({ prediction, horizonDays, onHorizonChange }) {
                 <YAxis tickFormatter={v => `£${Math.round(v)}`} />
                 <Tooltip content={<ForecastTooltip />} />
                 <Area type="monotone" dataKey="band" name="Likely range"
-                  stroke="none" fill="#5db8ff" fillOpacity={0.18} activeDot={false} />
+                  stroke="none" fill="var(--accent-2)" fillOpacity={0.18} activeDot={false} />
                 <Line type="monotone" dataKey="p50" name="Most likely"
-                  stroke="#4fffb0" strokeWidth={2} dot={false} />
+                  stroke="var(--accent)" strokeWidth={2} dot={false} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
 
           {/* ── Per-category lines ── */}
-          <div style={{ marginTop: 24, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 18 }}>
+          <div style={{ marginTop: 24, borderTop: '1px solid color-mix(in srgb, var(--text-primary) 6%, transparent)', paddingTop: 18 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
               <div>
                 <CardTitle as="h3" style={{ fontSize: 14, marginBottom: 4 }}>By Category</CardTitle>
@@ -299,12 +299,12 @@ function SpendPrediction({ prediction, horizonDays, onHorizonChange }) {
                   <button key={row.id} type="button" onClick={() => toggle(row.id)} aria-pressed={on}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 6,
-                      padding: '4px 10px', borderRadius: 999, fontSize: 11, cursor: 'pointer',
-                      background: on ? 'rgba(255,255,255,0.07)' : 'transparent',
-                      border: `1px solid ${on ? tint : 'rgba(255,255,255,0.12)'}`,
+                      padding: '4px 10px', borderRadius: 'var(--radius-full)', fontSize: 11, cursor: 'pointer',
+                      background: on ? 'color-mix(in srgb, var(--text-primary) 7%, transparent)' : 'transparent',
+                      border: `1px solid ${on ? tint : 'color-mix(in srgb, var(--text-primary) 12%, transparent)'}`,
                       color: on ? 'var(--text-primary)' : 'var(--text-muted)',
                     }}>
-                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: on ? tint : 'rgba(255,255,255,0.25)' }} />
+                    <span style={{ width: 7, height: 7, borderRadius: 'var(--radius-full)', background: on ? tint : 'color-mix(in srgb, var(--text-primary) 25%, transparent)' }} />
                     {row.name}
                   </button>
                 );
@@ -312,8 +312,8 @@ function SpendPrediction({ prediction, horizonDays, onHorizonChange }) {
               {ranked.length > MAX_LINES && (
                 <button type="button" onClick={() => setShowAll(value => !value)}
                   style={{
-                    padding: '4px 10px', borderRadius: 999, fontSize: 11, cursor: 'pointer',
-                    background: 'transparent', border: '1px dashed rgba(255,255,255,0.2)', color: 'var(--text-muted)',
+                    padding: '4px 10px', borderRadius: 'var(--radius-full)', fontSize: 11, cursor: 'pointer',
+                    background: 'transparent', border: '1px dashed color-mix(in srgb, var(--text-primary) 20%, transparent)', color: 'var(--text-muted)',
                   }}>
                   {showAll ? 'Show top 6' : `+${ranked.length - MAX_LINES} more`}
                 </button>
@@ -346,7 +346,7 @@ function SpendPrediction({ prediction, horizonDays, onHorizonChange }) {
           </div>
 
           {/* ── Per-category totals ── */}
-          <div style={{ marginTop: 22, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 6 }}>
+          <div style={{ marginTop: 22, borderTop: '1px solid color-mix(in srgb, var(--text-primary) 6%, transparent)', paddingTop: 6 }}>
             {ranked.map(row => {
               const confidence = CONFIDENCE_LABEL[row.confidence] || CONFIDENCE_LABEL.none;
               const left = (row.p10 / widest) * 100;
@@ -356,14 +356,14 @@ function SpendPrediction({ prediction, horizonDays, onHorizonChange }) {
               return (
                 <div key={row.id} style={{
                   display: 'grid', gridTemplateColumns: 'minmax(88px, 1.1fr) 2fr minmax(104px, auto)',
-                  gap: 12, alignItems: 'center', padding: '9px 0', borderTop: '1px solid rgba(255,255,255,0.06)',
+                  gap: 12, alignItems: 'center', padding: '9px 0', borderTop: '1px solid color-mix(in srgb, var(--text-primary) 6%, transparent)',
                 }}>
                   <div>
                     <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{row.name}</div>
                     <div style={{ fontSize: 10, color: confidence.color }}>{confidence.text}</div>
                   </div>
-                  <div style={{ position: 'relative', height: 8, borderRadius: 999, background: 'rgba(255,255,255,0.06)' }}>
-                    <div style={{ position: 'absolute', left: `${left}%`, width: `${width}%`, top: 0, bottom: 0, borderRadius: 999, background: tint, opacity: 0.35 }} />
+                  <div style={{ position: 'relative', height: 8, borderRadius: 'var(--radius-full)', background: 'color-mix(in srgb, var(--text-primary) 6%, transparent)' }}>
+                    <div style={{ position: 'absolute', left: `${left}%`, width: `${width}%`, top: 0, bottom: 0, borderRadius: 'var(--radius-full)', background: tint, opacity: 0.35 }} />
                     <div style={{ position: 'absolute', left: `${marker}%`, top: -2, width: 2, height: 12, background: tint, borderRadius: 2 }} />
                   </div>
                   <div style={{ textAlign: 'right' }}>
@@ -406,14 +406,14 @@ function CycleOutlook({ projection }) {
   const atRisk = projection.categories.filter(row => row.overspendRisk >= 0.3);
 
   return (
-    <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+    <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
       <CardTitle as="h2" style={{ marginBottom: 6 }}>Projected Spend vs Allowance</CardTitle>
       <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 18 }}>
         Simulated to the end of each category&rsquo;s own budget cycle, including what is already spent
       </div>
 
       {atRisk.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 10, background: 'rgba(251,191,112,0.1)', color: 'var(--warn)', fontSize: 13 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 'var(--radius-sm)', background: 'color-mix(in srgb, var(--accent-4) 10%, transparent)', color: 'var(--warn)', fontSize: 13 }}>
           <AlertTriangle size={15} aria-hidden="true" />
           <span>
             {atRisk.length} categor{atRisk.length === 1 ? 'y is' : 'ies are'} at real risk of going over:{' '}
@@ -426,7 +426,7 @@ function CycleOutlook({ projection }) {
         {projection.categories.map(row => (
           <div key={row.id} style={{
             display: 'grid', gridTemplateColumns: 'minmax(88px, 1.2fr) minmax(120px, auto) 62px',
-            gap: 12, alignItems: 'center', padding: '9px 0', borderTop: '1px solid rgba(255,255,255,0.06)',
+            gap: 12, alignItems: 'center', padding: '9px 0', borderTop: '1px solid color-mix(in srgb, var(--text-primary) 6%, transparent)',
           }}>
             <div>
               <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{row.name}</div>
@@ -456,10 +456,10 @@ function CycleOutlook({ projection }) {
             <XAxis dataKey="name" tick={{ fontSize: 11 }} />
             <YAxis tickFormatter={v => `£${v}`} />
             <Tooltip content={<GlassTooltip />} />
-            <Legend wrapperStyle={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }} />
-            <Bar dataKey="Allowance" fill="rgba(255,255,255,0.1)" radius={[6,6,0,0]} />
-            <Bar dataKey="Spent"     fill="#5db8ff"              radius={[6,6,0,0]} />
-            <Bar dataKey="Projected" fill="#fbbf70" opacity={0.7} radius={[6,6,0,0]} />
+            <Legend wrapperStyle={{ fontSize: 12, color: 'color-mix(in srgb, var(--text-primary) 50%, transparent)' }} />
+            <Bar dataKey="Allowance" fill="color-mix(in srgb, var(--text-primary) 10%, transparent)" radius={[6,6,0,0]} />
+            <Bar dataKey="Spent"     fill="var(--accent-2)"              radius={[6,6,0,0]} />
+            <Bar dataKey="Projected" fill="var(--accent-4)" opacity={0.7} radius={[6,6,0,0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -477,7 +477,7 @@ function ExpectedDailySpend({ projection }) {
   const palette = assignColors(rows);
 
   return (
-    <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+    <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
       <CardTitle as="h2" style={{ marginBottom: 6 }}>Expected Daily Spend</CardTitle>
       <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>
         Simulated average per day for the rest of each category&rsquo;s cycle
@@ -506,7 +506,7 @@ function ExpectedDailySpend({ projection }) {
 
 function StatCard({ label, value, hint, color }) {
   return (
-    <div className="glass" style={{ borderRadius: 16, padding: '18px 20px' }}>
+    <div className="card" style={{ borderRadius: 'var(--radius-lg)', padding: '18px 20px' }}>
       <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
         {label}
       </div>
@@ -572,11 +572,11 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
   const totalAllowances = categories.reduce((s, c) => s + (c.allowance || 0), 0);
   const totalSpent      = categories.reduce((s, c) => s + (c.spent || 0), 0);
   const spentPct        = totalAllowances > 0 ? (totalSpent / totalAllowances) * 100 : 0;
-  const spentColor      = spentPct > 90 ? '#ff6b8a' : spentPct > 70 ? '#fbbf70' : '#4fffb0';
+  const spentColor      = spentPct > 90 ? 'var(--danger)' : spentPct > 70 ? 'var(--accent-4)' : 'var(--accent)';
 
   const budgetDonutData = [
     { name: 'Spent',     value: totalSpent,                                   color: spentColor },
-    { name: 'Remaining', value: Math.max(0, totalAllowances - totalSpent),    color: 'rgba(255,255,255,0.08)' },
+    { name: 'Remaining', value: Math.max(0, totalAllowances - totalSpent),    color: 'color-mix(in srgb, var(--text-primary) 8%, transparent)' },
   ];
 
   // Per-category allowance allocation, normalised to a monthly rate so
@@ -600,7 +600,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
 
   if (transactions.length === 0) {
     return (
-      <div className="fade-in glass" style={{ borderRadius: 16, padding: '40px 24px', textAlign: 'center' }}>
+      <div className="fade-in card" style={{ borderRadius: 'var(--radius-lg)', padding: '40px 24px', textAlign: 'center' }}>
         <div style={{ color: 'var(--text-muted)', fontSize: 14 }}>
           Log some expenses to see forecasting data.
         </div>
@@ -617,7 +617,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
               label="Expected Daily Spend"
               value={projection.ready ? fmt(dailyExpected) : '—'}
               hint={projection.ready ? 'simulated, across all categories' : 'needs more history'}
-              color="var(--accent-warm)"
+              color="var(--accent-4)"
             />
             <StatCard
               label="Next Income Reset"
@@ -625,7 +625,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
               hint={nextIncomeReset
                 ? `${nextIncomeReset.income.name} · ${format(nextIncomeReset.next, 'd MMM')}`
                 : incomes.length > 0 ? 'income resets are held or unscheduled' : 'legacy schedule'}
-              color="var(--accent-blue)"
+              color="var(--accent-2)"
             />
             <StatCard
               label="Projected End Balance"
@@ -651,11 +651,11 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
               answers the different, more urgent question: will the money actually
               be there when the direct debit comes out? */}
           {cashFlow && cashFlow.series.length > 1 && (
-            <div className="glass mobile-card-pad" style={{
-              borderRadius: 18,
+            <div className="card mobile-card-pad" style={{
+              borderRadius: 'var(--radius-lg)',
               padding: '22px 24px',
-              borderColor: cashFlow.firstNegative ? 'rgba(255,107,138,0.3)' : undefined,
-              background: cashFlow.firstNegative ? 'rgba(255,107,138,0.04)' : undefined,
+              borderColor: cashFlow.firstNegative ? 'color-mix(in srgb, var(--danger) 30%, transparent)' : undefined,
+              background: cashFlow.firstNegative ? 'color-mix(in srgb, var(--danger) 4%, transparent)' : undefined,
             }}>
               <CardTitle as="h2" style={{ marginBottom: 6 }}>Cash Flow</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>
@@ -663,7 +663,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
               </div>
 
               {cashFlow.firstNegative ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 10, background: 'rgba(255,107,138,0.1)', color: 'var(--danger)', fontSize: 13 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 'var(--radius-sm)', background: 'color-mix(in srgb, var(--danger) 10%, transparent)', color: 'var(--danger)', fontSize: 13 }}>
                   <AlertTriangle size={15} aria-hidden="true" />
                   <span>
                     On current trends your balance goes negative on{' '}
@@ -671,7 +671,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
                   </span>
                 </div>
               ) : (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 10, background: 'rgba(79,255,176,0.08)', color: 'var(--good)', fontSize: 13 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, padding: '11px 14px', borderRadius: 'var(--radius-sm)', background: 'color-mix(in srgb, var(--accent) 8%, transparent)', color: 'var(--good)', fontSize: 13 }}>
                   <Check size={15} aria-hidden="true" />
                   <span>
                     You stay in the black. Lowest point is{' '}
@@ -686,17 +686,17 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
                   <AreaChart data={cashFlow.series}>
                     <defs>
                       <linearGradient id="grad-cashflow" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} stopOpacity={0.35} />
-                        <stop offset="95%" stopColor={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} stopOpacity={0.02} />
+                        <stop offset="5%" stopColor={cashFlow.firstNegative ? 'var(--danger)' : 'var(--accent-2)'} stopOpacity={0.35} />
+                        <stop offset="95%" stopColor={cashFlow.firstNegative ? 'var(--danger)' : 'var(--accent-2)'} stopOpacity={0.02} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid vertical={false} />
                     <XAxis dataKey="label" interval={Math.max(0, Math.floor(cashFlow.series.length / 6) - 1)} />
                     <YAxis tickFormatter={v => `£${Math.round(v)}`} />
                     <Tooltip content={<GlassTooltip />} />
-                    <ReferenceLine y={0} stroke="rgba(255,107,138,0.5)" strokeDasharray="4 4" />
+                    <ReferenceLine y={0} stroke="color-mix(in srgb, var(--danger) 50%, transparent)" strokeDasharray="4 4" />
                     <Area type="monotone" dataKey="balance" name="Projected balance"
-                      stroke={cashFlow.firstNegative ? '#ff6b8a' : '#5db8ff'} strokeWidth={2}
+                      stroke={cashFlow.firstNegative ? 'var(--danger)' : 'var(--accent-2)'} strokeWidth={2}
                       fill="url(#grad-cashflow)" />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -705,7 +705,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
           )}
 
           {incomeResetSchedule.length > 0 && (
-            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
+            <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '20px 22px' }}>
               <CardTitle as="h2" style={{ marginBottom: 6 }}>Income Reset Schedule</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 14 }}>
                 Category spend resets follow the income source that funds each category.
@@ -718,12 +718,12 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
                     gap: 12,
                     alignItems: 'center',
                     padding: '10px 12px',
-                    borderRadius: 12,
-                    background: 'rgba(255,255,255,0.04)',
-                    border: entry.held ? '1px solid rgba(251,191,112,0.18)' : '1px solid transparent',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)',
+                    border: entry.held ? '1px solid color-mix(in srgb, var(--accent-4) 18%, transparent)' : '1px solid transparent',
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
-                      <span style={{ width: 9, height: 9, borderRadius: '50%', background: COLORS[i % COLORS.length], flexShrink: 0 }} />
+                      <span style={{ width: 9, height: 9, borderRadius: 'var(--radius-full)', background: COLORS[i % COLORS.length], flexShrink: 0 }} />
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {entry.income.name}
@@ -760,7 +760,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
             <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
 
               {totalAllowances > 0 && (
-                <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+                <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
                   <CardTitle as="h2" style={{ fontSize: 14, marginBottom: 4 }}>Budget Usage</CardTitle>
                   <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>Spent vs remaining allowance</div>
                   <div style={{ position: 'relative' }}>
@@ -795,7 +795,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
                   <div style={{ display: 'flex', justifyContent: 'center', gap: 20, marginTop: 8, flexWrap: 'wrap' }}>
                     {budgetDonutData.map(d => (
                       <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                        <div style={{ width: 8, height: 8, borderRadius: '50%', background: d.color, flexShrink: 0 }} />
+                        <div style={{ width: 8, height: 8, borderRadius: 'var(--radius-full)', background: d.color, flexShrink: 0 }} />
                         <span style={{ color: 'var(--text-muted)' }}>{d.name}</span>
                         <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>{fmt(d.value)}</span>
                       </div>
@@ -805,7 +805,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
               )}
 
               {allocationData.length > 0 && (
-                <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+                <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
                   <CardTitle as="h2" style={{ fontSize: 14, marginBottom: 4 }}>Category Allocation</CardTitle>
                   <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>How allowance is split across categories</div>
                   <div className="mobile-row-stack" style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
@@ -833,7 +833,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
                         const pct = normalisedAllocated > 0 ? ((entry.value / normalisedAllocated) * 100).toFixed(0) : 0;
                         return (
                           <div key={entry.name} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12 }}>
-                            <div style={{ width: 8, height: 8, borderRadius: '50%', background: entry.color, flexShrink: 0 }} />
+                            <div style={{ width: 8, height: 8, borderRadius: 'var(--radius-full)', background: entry.color, flexShrink: 0 }} />
                             <span style={{ color: 'var(--text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {entry.name}
                             </span>
@@ -847,8 +847,8 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
                     </div>
                   </div>
                   {totalIncome > 0 && (
-                    <div style={{ marginTop: 18, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 14 }}>
-                      <div style={{ display: 'flex', height: 7, borderRadius: 99, overflow: 'hidden', background: 'rgba(255,255,255,0.06)', gap: 1 }}>
+                    <div style={{ marginTop: 18, borderTop: '1px solid color-mix(in srgb, var(--text-primary) 6%, transparent)', paddingTop: 14 }}>
+                      <div style={{ display: 'flex', height: 7, borderRadius: 'var(--radius-full)', overflow: 'hidden', background: 'color-mix(in srgb, var(--text-primary) 6%, transparent)', gap: 1 }}>
                         {allocationData.map(entry => (
                           <div key={entry.name} title={`${entry.name}: ${fmt(entry.value)}`}
                             style={{ width: `${Math.min(100, (entry.value / totalIncome) * 100)}%`, background: entry.color, height: '100%', minWidth: 2 }} />
@@ -867,7 +867,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
           )}
 
           {!projection.ready && (
-            <div className="glass" style={{ borderRadius: 16, padding: '28px 24px', textAlign: 'center' }}>
+            <div className="card" style={{ borderRadius: 'var(--radius-lg)', padding: '28px 24px', textAlign: 'center' }}>
               <Activity size={18} color="var(--text-muted)" aria-hidden="true" />
               <div style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 8 }}>
                 {prediction.reason === 'no-categories'
@@ -882,7 +882,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
       {tab === 'history' && (
         <>
           {monthlyHistory.length > 1 && (
-            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+            <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
               <CardTitle as="h2" style={{ marginBottom: 6 }}>Spend History by Category</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>Last 6 months</div>
               <div className="mobile-chart-scroll">
@@ -900,7 +900,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
                     <XAxis dataKey="month" />
                     <YAxis tickFormatter={v => `£${v}`} />
                     <Tooltip content={<GlassTooltip />} />
-                    <Legend wrapperStyle={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }} />
+                    <Legend wrapperStyle={{ fontSize: 12, color: 'color-mix(in srgb, var(--text-primary) 50%, transparent)' }} />
                     {categories.map((cat, i) => (
                       <Area key={cat.id} type="monotone" dataKey={cat.name}
                         stroke={COLORS[i % COLORS.length]} strokeWidth={2}
@@ -915,7 +915,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
           {/* Categories say how the budget is doing; this says whether the account
               behind it is actually growing or shrinking. */}
           {balanceHistory.length > 1 && (
-            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+            <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
               <CardTitle as="h2" style={{ marginBottom: 6 }}>Account Balance</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>
                 Last 60 days, reconstructed from your transactions, income and transfers
@@ -925,8 +925,8 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
                   <AreaChart data={balanceHistory}>
                     <defs>
                       <linearGradient id="grad-balance" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#4fffb0" stopOpacity={0.35} />
-                        <stop offset="95%" stopColor="#4fffb0" stopOpacity={0.02} />
+                        <stop offset="5%" stopColor="var(--accent)" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="var(--accent)" stopOpacity={0.02} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid vertical={false} />
@@ -934,7 +934,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
                     <YAxis tickFormatter={v => `£${Math.round(v)}`} />
                     <Tooltip content={<GlassTooltip />} />
                     <Area type="monotone" dataKey="balance" name="Balance"
-                      stroke="#4fffb0" strokeWidth={2} fill="url(#grad-balance)" />
+                      stroke="var(--accent)" strokeWidth={2} fill="url(#grad-balance)" />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -945,7 +945,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
               whether the whole estate is actually growing — the figure that
               answers "am I better off than I was?". */}
           {netWorth && netWorth.series.length > 1 && (
-            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+            <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
               <CardTitle as="h2" style={{ marginBottom: 6 }}>Net Worth</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 16 }}>
                 Everything across {accountCount === 1 ? 'your account' : `all ${accountCount} accounts`}, over the last 90 days
@@ -971,8 +971,8 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
                   <AreaChart data={netWorth.series}>
                     <defs>
                       <linearGradient id="grad-networth" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#c084fc" stopOpacity={0.35} />
-                        <stop offset="95%" stopColor="#c084fc" stopOpacity={0.02} />
+                        <stop offset="5%" stopColor="var(--accent-3)" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="var(--accent-3)" stopOpacity={0.02} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid vertical={false} />
@@ -980,7 +980,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
                     <YAxis tickFormatter={v => `£${Math.round(v)}`} />
                     <Tooltip content={<GlassTooltip />} />
                     <Area type="monotone" dataKey="assets" name="Held"
-                      stroke="#c084fc" strokeWidth={2} fill="url(#grad-networth)" />
+                      stroke="var(--accent-3)" strokeWidth={2} fill="url(#grad-networth)" />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -999,7 +999,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
           {/* Categories tell you the kind of spending; merchants tell you what you
               actually bought, which is usually the more actionable of the two. */}
           {merchantSpend.length > 0 && (
-            <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+            <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
               <CardTitle as="h2" style={{ marginBottom: 6 }}>Where Your Money Goes</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 20 }}>Top merchants across all time</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1026,7 +1026,7 @@ export default function Forecasting({ tab = 'outlook', categories, settings, tra
           )}
 
           {monthlyHistory.length <= 1 && balanceHistory.length <= 1 && merchantSpend.length === 0 && (
-            <div className="glass" style={{ borderRadius: 16, padding: '28px 24px', textAlign: 'center' }}>
+            <div className="card" style={{ borderRadius: 'var(--radius-lg)', padding: '28px 24px', textAlign: 'center' }}>
               <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
                 Not enough history yet — this fills in as you log expenses.
               </div>

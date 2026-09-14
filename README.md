@@ -36,7 +36,17 @@ Six pages, three of which carry tabs.
   subscriptions have crept up)
 - **Goals & Wishlist** — savings pots and debts with interest modelled and payoff
   strategies compared, alongside the things you're saving towards
-- **Settings** — income, categories, variables, privacy, encryption, storage, and import/export
+- **Settings** — appearance, income, categories, variables, privacy, encryption,
+  storage, and import/export, grouped into five tabs
+- **Appearance** (Settings → Appearance) — twelve colour palettes plus a custom
+  one you build from a hue, a harmony and an intensity; dark, light or follow the
+  system; three surface finishes (solid islands, frosted glass, flat outline);
+  density, corner style, text size, contrast and motion. Saved per account, so a
+  personal and a business budget can look different.
+
+The look is shared with the [Finesse Fit](https://github.com/TheCharlesChristy/finesse-fit)
+training and nutrition app — same design system, same components, same appearance
+settings. See [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md).
 
 ## Getting your data in and out
 - **Import a bank statement** — Settings or Transactions → Import Statement. A CSV

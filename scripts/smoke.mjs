@@ -111,12 +111,33 @@ page.on('console', m => {
   errors.push(`console: ${m.text()}`);
 });
 
+/**
+ * Card titles render as tracked small-caps, so `innerText` hands them back
+ * upper-cased — the DOM text is unchanged, but a substring check against the
+ * written form would fail on every card on the page. Compare case-insensitively
+ * rather than writing "STORAGE" into an assertion and losing the ability to
+ * tell a styling change from a missing card.
+ */
+const shows = (haystack, needle) => haystack.toLowerCase().includes(needle.toLowerCase());
+
 async function go(name) {
   const parent = PAGE_OF[name];
   await page.getByRole('button', { name: parent || name, exact: true }).click();
   await page.waitForTimeout(300);
   if (parent) await page.getByRole('tab', { name, exact: true }).click();
   await page.waitForTimeout(350);
+}
+
+/**
+ * Settings is a consolidated page like the rest, so a card there is two clicks
+ * away: the nav entry, then the tab that holds it. Everything below that used
+ * to reach straight for a card by its text goes through here instead.
+ */
+async function settingsTab(tab) {
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.waitForTimeout(300);
+  await page.getByRole('tab', { name: tab, exact: true }).click();
+  await page.waitForTimeout(400);
 }
 
 await page.goto(BASE, { waitUntil: 'networkidle' });
@@ -156,7 +177,7 @@ step('expense logged');
 
 const body = await page.locator('body').innerText();
 for (const expected of ['£2,000.00', '£400.00 allocated', '£1,600.00 unallocated', '£374.50', 'Tesco']) {
-  if (!body.includes(expected)) errors.push(`dashboard missing: ${expected}`);
+  if (!shows(body, expected)) errors.push(`dashboard missing: ${expected}`);
 }
 step('dashboard totals reconcile (2000 income − 400 allocated, 374.50 left of 400)');
 
@@ -183,7 +204,7 @@ for (const [name, marker] of [
 ]) {
   await go(name);
   const body = await page.locator('body').innerText();
-  if (!body.includes(marker)) errors.push(`tab "${name}" did not render (looked for "${marker}")`);
+  if (!shows(body, marker)) errors.push(`tab "${name}" did not render (looked for "${marker}")`);
 }
 step('all 9 tabs render inside their pages');
 
@@ -194,9 +215,9 @@ await page.waitForTimeout(400);
 await page.getByRole('button', { name: 'Adjust Groceries' }).click();
 await page.getByRole('dialog').waitFor();
 const adjust = await page.getByRole('dialog').innerText();
-if (!adjust.includes('Spare income')) errors.push('adjust modal: no spare-income source offered');
+if (!shows(adjust, 'Spare income')) errors.push('adjust modal: no spare-income source offered');
 if (!adjust.includes('£1,600.00')) errors.push(`adjust modal: wrong free pool\n${adjust}`);
-await page.getByRole('button', { name: 'Close dialog' }).click();
+await page.getByRole('button', { name: 'Close' }).click();
 step('adjust-budget pool computed per income source');
 
 // ── Fast capture ─────────────────────────────────────────────────────────
@@ -289,7 +310,7 @@ if (!(await page.locator('h1').innerText()).includes('Groceries')) {
   errors.push('category drill-down did not open');
 }
 for (const expected of ['Left this cycle', 'Safe per day', 'Transactions', 'Where It Went']) {
-  if (!detail.includes(expected)) errors.push(`category detail missing: ${expected}`);
+  if (!shows(detail, expected)) errors.push(`category detail missing: ${expected}`);
 }
 step('category drill-down shows cycle stats, merchants and transactions');
 
@@ -311,7 +332,7 @@ for (const [tabName, expected] of [
   await go(tabName);
   const body = await page.locator('body').innerText();
   for (const text of expected) {
-    if (!body.includes(text)) errors.push(`insights ${tabName} tab missing: ${text}`);
+    if (!shows(body, text)) errors.push(`insights ${tabName} tab missing: ${text}`);
   }
 }
 await go('Outlook');
@@ -330,7 +351,7 @@ await page.getByRole('dialog').waitFor({ state: 'detached' });
 await page.waitForTimeout(400);
 
 const goalsText = await page.locator('body').innerText();
-if (!goalsText.includes('Holiday')) errors.push('goal was not created');
+if (!shows(goalsText, 'Holiday')) errors.push('goal was not created');
 if (!goalsText.includes('£1,200.00')) errors.push('goal target not shown');
 step('savings goal created with an automatic contribution');
 
@@ -389,7 +410,7 @@ step('dismissal persists across a reload');
 await go('Calendar');
 
 // Clicking a day opens its detail sheet.
-const todayCell = page.locator('.finance-calendar-day.today');
+const todayCell = page.locator('.calendar-day.today');
 await todayCell.click();
 await page.waitForTimeout(400);
 const calText = await page.locator('body').innerText();
@@ -457,8 +478,7 @@ if (await page.getByRole('tab', { name: 'Calendar', exact: true }).getAttribute(
 step('"g then <key>" navigation reaches the right tab');
 
 // Integrity check reports honestly on a healthy database.
-await page.getByRole('button', { name: 'Settings', exact: true }).click();
-await page.waitForTimeout(400);
+await settingsTab('Data');
 await page.getByRole('button', { name: /Recalculate Spend Counters/ }).click();
 await page.waitForTimeout(700);
 const integrity = await page.locator('body').innerText();
@@ -470,17 +490,22 @@ step('integrity check verifies counters against the log');
 
 // ── Storage, privacy and import ──────────────────────────────────────────
 
-// Still on Settings. The two cards guarding the data have to render, and the
-// storage one has to say something definite rather than sit on "Checking…".
-const settingsText = await page.locator('body').innerText();
-for (const expected of ['Storage', 'Privacy', 'Import Bank Statement', 'Variables']) {
-  if (!settingsText.includes(expected)) errors.push(`settings missing: ${expected}`);
+// The cards guarding the data have to render, and the storage one has to say
+// something definite rather than sit on "Checking…". Each lives on the tab that
+// owns it now, so each is checked from there.
+const dataText = await page.locator('body').innerText();
+for (const expected of ['Storage', 'Import Bank Statement']) {
+  if (!shows(dataText, expected)) errors.push(`settings Data tab missing: ${expected}`);
 }
-if (/Checking…/.test(settingsText)) errors.push('storage state never resolved');
-if (!/(persistent|evictable|doesn’t expose storage persistence)/i.test(settingsText)) {
+if (/Checking…/.test(dataText)) errors.push('storage state never resolved');
+if (!/(persistent|evictable|doesn’t expose storage persistence)/i.test(dataText)) {
   errors.push('storage card reports no persistence state');
 }
-step('storage and privacy cards render with a resolved state');
+await settingsTab('Privacy');
+if (!shows(await page.locator('body').innerText(), 'Privacy')) errors.push('settings Privacy tab missing its card');
+await settingsTab('Budget');
+if (!shows(await page.locator('body').innerText(), 'Variables')) errors.push('settings Budget tab missing Variables');
+step('storage, privacy and budget cards render on their own tabs');
 
 // A default expense category, so imported rows that match no rule still have
 // somewhere to go — and so this exercises the defaultCategoryId path.
@@ -494,6 +519,7 @@ step('default expense category set');
 
 // The statement importer is the longest new flow, so at minimum it must open,
 // parse a file, and reach the review step with rows in it.
+await settingsTab('Data');
 await page.getByRole('button', { name: /Import Bank Statement/ }).click();
 await page.getByRole('dialog').waitFor({ timeout: 5000 });
 await page.setInputFiles('input[type="file"][accept*="csv"]', {
@@ -536,7 +562,7 @@ await page.waitForTimeout(900);
 await go('Transactions');
 const imported = await page.locator('body').innerText();
 for (const expected of ['COFFEE HUT', 'TESCO STORES', 'REFUND ASOS']) {
-  if (!imported.includes(expected)) errors.push(`imported transaction missing: ${expected}`);
+  if (!shows(imported, expected)) errors.push(`imported transaction missing: ${expected}`);
 }
 step('imported rows land in the ledger');
 
@@ -561,7 +587,7 @@ if (!/Already in/i.test(secondPass)) errors.push('re-import did not flag duplica
 if (await page.getByRole('button', { name: /^Import \d+ transactions?$/ }).isEnabled()) {
   errors.push('re-import still offers to import already-logged rows');
 }
-await page.getByRole('button', { name: 'Close dialog' }).click();
+await page.getByRole('button', { name: 'Close' }).click();
 await page.waitForTimeout(300);
 step('re-importing the same statement imports nothing twice');
 
@@ -603,7 +629,7 @@ const pdfInputs = await page.locator('.modal-box input[type="text"]').evaluateAl
 if (!pdfInputs.some(v => /COSTA COFFEE/.test(v))) errors.push(`PDF review lists no rows: ${JSON.stringify(pdfInputs)}`);
 if (pdfInputs.some(v => /^DEB /.test(v))) errors.push(`payment-type code left in a description: ${JSON.stringify(pdfInputs)}`);
 
-await page.getByRole('button', { name: 'Close dialog' }).click();
+await page.getByRole('button', { name: 'Close' }).click();
 await page.waitForTimeout(300);
 step('PDF statement read as real columns, with money in and out told apart');
 
@@ -656,21 +682,84 @@ if (/needs checking . \d/i.test(settled)) errors.push(`row stayed in "needs chec
 // Answering "already in" has to take it out of the import, not just relabel it.
 await page.getByRole('button', { name: /^Import 1 transaction$/ }).waitFor({ timeout: 3000 });
 
-await page.getByRole('button', { name: 'Close dialog' }).click();
+await page.getByRole('button', { name: 'Close' }).click();
 await page.waitForTimeout(300);
 step('a drifted row is checked by hand against the transaction it matches');
+
+// ── Appearance ───────────────────────────────────────────────────────────
+//
+// The one thing unit tests cannot check about the theming engine: that the
+// attributes it writes are actually answered by a stylesheet. `applyAppearance`
+// is tested in isolation, but a palette whose CSS block was never written, or a
+// surface finish whose tokens nothing reads, would pass every unit test and
+// paint exactly the same page.
+
+await settingsTab('Appearance');
+const paintedBg = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--bg').trim());
+const paintedAccent = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+const cardShadow = () => page.evaluate(() => {
+  const card = document.querySelector('.card');
+  return card ? getComputedStyle(card).boxShadow : '';
+});
+
+const beforeAccent = await paintedAccent();
+await page.getByRole('button', { name: /^Ember/ }).click();
+await page.waitForTimeout(400);
+if (await paintedAccent() === beforeAccent) errors.push('choosing a palette did not repaint --accent');
+if (await page.evaluate(() => document.documentElement.dataset.palette) !== 'ember') {
+  errors.push('palette attribute was not written to <html>');
+}
+
+// Outline is the finish with no shadow at all — the cheapest proof that the
+// surface tokens reach a real card rather than only the settings preview.
+const islandShadow = await cardShadow();
+await page.getByRole('button', { name: /^Outline/ }).click();
+await page.waitForTimeout(400);
+if (await cardShadow() === islandShadow) errors.push('the Outline finish did not change how a card is painted');
+await page.getByRole('button', { name: /^Islands/ }).click();
+await page.waitForTimeout(300);
+
+// A custom palette has no stylesheet block; its tokens are written inline.
+const beforeCustom = await paintedBg();
+await page.getByRole('button', { name: /^Custom/ }).click();
+await page.waitForTimeout(400);
+if (await paintedBg() === beforeCustom) errors.push('the custom palette did not repaint the page');
+if (!(await page.evaluate(() => document.documentElement.style.getPropertyValue('--accent')))) {
+  errors.push('the custom palette wrote no inline accent token');
+}
+
+// …and switching back has to clear them again, or the inline value outranks
+// every [data-palette] block for good.
+await page.getByRole('button', { name: /^Tide/ }).click();
+await page.waitForTimeout(400);
+if (await page.evaluate(() => document.documentElement.style.getPropertyValue('--accent'))) {
+  errors.push('inline custom tokens survived a switch back to a curated palette');
+}
+
+// The preference has to outlive a reload, painted before React runs.
+await page.getByRole('radio', { name: 'Light' }).click();
+await page.waitForTimeout(400);
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForTimeout(800);
+if (await page.evaluate(() => document.documentElement.dataset.theme) !== 'light') {
+  errors.push('the saved theme was not applied on the next load');
+}
+await settingsTab('Appearance');
+await page.getByRole('radio', { name: 'Dark' }).click();
+await page.waitForTimeout(400);
+step('palette, finish, custom palette and scheme all repaint and survive a reload');
 
 // ── Looking back ─────────────────────────────────────────────────────────
 
 await go('Looking Back');
 const review = await page.locator('body').innerText();
 for (const expected of ['Month by month', 'Where it went', 'Who got it', 'Spent', 'Kept']) {
-  if (!review.includes(expected)) errors.push(`review view missing: ${expected}`);
+  if (!shows(review, expected)) errors.push(`review view missing: ${expected}`);
 }
 // Switching the window must not blank the page.
 await page.getByRole('button', { name: '3 months', exact: true }).click();
 await page.waitForTimeout(500);
-if (!/Month by month/.test(await page.locator('body').innerText())) {
+if (!shows(await page.locator('body').innerText(), 'Month by month')) {
   errors.push('review view broke when the window changed');
 }
 step('looking-back view renders and survives a window change');
@@ -705,8 +794,7 @@ step('debt goal models interest rather than dividing the balance');
 // stage, and cancel. The config is built from the ids actually in IndexedDB
 // rather than hard-coded, since an `update` that names the wrong id is exactly
 // what validation is supposed to reject.
-await page.getByRole('button', { name: 'Settings', exact: true }).click();
-await page.waitForTimeout(600);
+await settingsTab('Data');
 
 const configPayload = await page.evaluate(async () => {
   const open = () => new Promise((resolve, reject) => {
@@ -836,8 +924,7 @@ step('a staged budget can be cancelled before it lands');
 // the app comes back up against a sealed database after a reload, with the key
 // gone and only the passphrase to open it.
 
-await page.getByRole('button', { name: 'Settings', exact: true }).click();
-await page.waitForTimeout(400);
+await settingsTab('Privacy');
 
 const encryptCard = page.locator('text=Encrypt this device').first();
 if (!await encryptCard.count()) errors.push('encryption card is missing from Settings');
@@ -892,8 +979,7 @@ if (!/Salary/.test(unlockedBody)) errors.push('data did not come back after unlo
 step('the right passphrase decrypts the database and the app renders');
 
 // And back off again, leaving the data intact.
-await page.getByRole('button', { name: 'Settings', exact: true }).click();
-await page.waitForTimeout(400);
+await settingsTab('Privacy');
 await page.locator('#vault-current').fill(SMOKE_PASSPHRASE);
 await page.getByRole('button', { name: /Turn off/ }).click();
 await page.getByRole('button', { name: /Turn it off/ }).click();

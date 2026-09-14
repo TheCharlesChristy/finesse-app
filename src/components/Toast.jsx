@@ -3,42 +3,38 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
+import { IconButton } from './ui';
+
 const DEFAULT_DURATION = 6000;
 
 function Toast({ toast, onDismiss }) {
   const { id, message, detail, severity, action } = toast;
-
-  const accent = severity === 'danger' ? 'var(--danger)'
-    : severity === 'warn' ? 'var(--warn)'
-    : 'var(--accent-mint)';
+  // The tone is a class, so the stylesheet decides the colour and the shape of
+  // the bar — see `.toast` in index.css.
+  const tone = severity === 'danger' ? 'danger' : severity === 'warn' ? 'warn' : 'good';
 
   return (
-    <div className="toast" style={{ borderLeft: `3px solid ${accent}` }}>
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>{message}</div>
-        {detail && (
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{detail}</div>
-        )}
+    <div className={`toast card-raised ${tone}`}>
+      <div className="toast-text">
+        <div className="list-title">{message}</div>
+        {detail && <div className="list-sub">{detail}</div>}
       </div>
       {action && (
         <button
           type="button"
-          className="btn-secondary"
-          style={{ padding: '5px 11px', fontSize: 12, flexShrink: 0 }}
+          className="btn-secondary btn-sm"
           onClick={() => { action.onClick(); onDismiss(id); }}
         >
           {action.label}
         </button>
       )}
-      <button
-        type="button"
-        className="btn-icon"
-        aria-label="Dismiss notification"
-        style={{ width: 26, height: 26, flexShrink: 0 }}
+      <IconButton
+        label="Dismiss notification"
+        className="btn-icon btn-sm btn-icon-quiet"
         onClick={() => onDismiss(id)}
       >
-        <X size={12} />
-      </button>
+        <X size={14} />
+      </IconButton>
     </div>
   );
 }

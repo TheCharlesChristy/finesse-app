@@ -48,24 +48,33 @@ export function AddWishlistItemModal({ expenseCategories, wishlistCategories, on
   };
 
   return (
-    <Modal title={isEditing ? 'Edit Wishlist Item' : 'Add to Wishlist'} onClose={onClose}>
+    <Modal title={isEditing ? 'Edit Wishlist Item' : 'Add to Wishlist'} onClose={onClose}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
+            disabled={!name.trim() || !price}>
+            {isEditing ? 'Save Changes' : 'Add to Wishlist'}
+          </button>
+      </>}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <Field label="Item Name">
           {id => (
-            <input id={id} className="glass-input" placeholder="e.g. New trainers" value={name}
+            <input id={id} className="input" placeholder="e.g. New trainers" value={name}
               onChange={e => setName(e.target.value)} autoFocus />
           )}
         </Field>
         <Field label="Price (£)">
           {id => (
-            <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={price}
+            <input id={id} className="input" type="number" min="0" step="0.01" placeholder="0.00" value={price}
               onChange={e => setPrice(e.target.value)} />
           )}
         </Field>
         {wishlistCategories.length > 0 && (
           <Field label="Add to List">
             {id => (
-              <select id={id} className="glass-input" value={wishCatId} onChange={e => setWishCatId(e.target.value)}>
+              <select id={id} className="input" value={wishCatId} onChange={e => setWishCatId(e.target.value)}>
                 <option value="">No list (uncategorised)</option>
                 {flatLists.map(l => (
                   <option key={l.id} value={l.id}>
@@ -82,16 +91,16 @@ export function AddWishlistItemModal({ expenseCategories, wishlistCategories, on
             {expenseCategories.map(cat => {
               const selected = selectedExpCats.includes(cat.id);
               return (
-                <button key={cat.id} type="button" className="toggle-chip" onClick={() => toggleExpCat(cat.id)}
+                <button key={cat.id} type="button" className="chip" onClick={() => toggleExpCat(cat.id)}
                   aria-pressed={selected} style={{
-                  padding: '5px 12px', borderRadius: 20, fontSize: 12, cursor: 'pointer',
-                  background: selected ? cat.color + '30' : 'rgba(255,255,255,0.06)',
-                  border: `1px solid ${selected ? cat.color + '60' : 'rgba(255,255,255,0.1)'}`,
+                  padding: '5px 12px', borderRadius: 'var(--radius-xl)', fontSize: 12, cursor: 'pointer',
+                  background: selected ? cat.color + '30' : 'color-mix(in srgb, var(--text-primary) 6%, transparent)',
+                  border: `1px solid ${selected ? cat.color + '60' : 'color-mix(in srgb, var(--text-primary) 10%, transparent)'}`,
                   color: selected ? 'var(--text-primary)' : 'var(--text-secondary)',
                   transition: 'all 0.15s',
                   display: 'flex', alignItems: 'center', gap: 5
                 }}>
-                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: cat.color || 'var(--accent-blue)' }} />
+                  <div style={{ width: 6, height: 6, borderRadius: 'var(--radius-full)', background: cat.color || 'var(--accent-2)' }} />
                   {cat.name}
                 </button>
               );
@@ -103,24 +112,17 @@ export function AddWishlistItemModal({ expenseCategories, wishlistCategories, on
         </div>
         <Field label="Link (optional)">
           {id => (
-            <input id={id} className="glass-input" type="url" placeholder="https://…" value={link}
+            <input id={id} className="input" type="url" placeholder="https://…" value={link}
               onChange={e => setLink(e.target.value)} />
           )}
         </Field>
         <Field label="Note (optional)">
           {id => (
-            <input id={id} className="glass-input" placeholder="Any details…" value={note}
+            <input id={id} className="input" placeholder="Any details…" value={note}
               onChange={e => setNote(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
           )}
         </Field>
-        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-            disabled={!name.trim() || !price}>
-            {isEditing ? 'Save Changes' : 'Add to Wishlist'}
-          </button>
-        </div>
       </div>
     </Modal>
   );
@@ -156,14 +158,22 @@ export function EditWishlistListModal({ list, wishlistCategories, onSave, onClos
   };
 
   return (
-    <Modal title="Edit List" onClose={onClose}>
+    <Modal title="Edit List" onClose={onClose}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!name.trim()}>
+            Save Changes
+          </button>
+      </>}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <Field label="Name">
-          {id => <input id={id} className="glass-input" value={name} onChange={e => setName(e.target.value)} autoFocus />}
+          {id => <input id={id} className="input" value={name} onChange={e => setName(e.target.value)} autoFocus />}
         </Field>
         <Field label="Parent List">
           {id => (
-            <select id={id} className="glass-input" value={parentId} onChange={e => setParentId(e.target.value)}>
+            <select id={id} className="input" value={parentId} onChange={e => setParentId(e.target.value)}>
               <option value="">Top level</option>
               {parentOptions.map(cat => (
                 <option key={cat.id} value={cat.id}>
@@ -174,12 +184,6 @@ export function EditWishlistListModal({ list, wishlistCategories, onSave, onClos
           )}
         </Field>
         <ColourPicker color={color} onChange={setColor} />
-        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!name.trim()}>
-            Save Changes
-          </button>
-        </div>
       </div>
     </Modal>
   );

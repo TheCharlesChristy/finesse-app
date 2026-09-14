@@ -111,7 +111,7 @@ export default function CommandPalette({ onClose, commands = [], transactions = 
               className="command-palette-item"
               onMouseEnter={() => setActiveIdx(idx)}
               onClick={() => run(item)}
-              style={idx === activeIdx ? { background: 'rgba(255,255,255,0.07)' } : undefined}
+              style={idx === activeIdx ? { background: 'color-mix(in srgb, var(--text-primary) 7%, transparent)' } : undefined}
             >
               {item.Icon
                 ? <item.Icon size={14} aria-hidden="true" style={{ color: 'var(--text-muted)', flexShrink: 0 }} />

@@ -2,15 +2,45 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="description" content="Finesse — a private, local-first personal finance app for budgeting, forecasting, and tracking spending." />
     <meta name="theme-color" content="#0a0f1e" />
+    <meta name="description" content="Finesse — a private, local-first personal finance app for budgeting, forecasting, and tracking spending." />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>" />
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Finesse">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>Finesse</title>
+    <script>
+      /*
+       * Paint the saved appearance before the first frame.
+       *
+       * Without this the page paints the CSS defaults, React loads, and the
+       * whole app changes colour — which on a phone is the first thing you see
+       * every single launch. The mirror is written by theme/appearance.js and
+       * carries the *resolved* custom-palette tokens rather than the four knobs,
+       * so this stays a dozen lines instead of a second copy of the generator.
+       */
+      (function () {
+        try {
+          var saved = JSON.parse(localStorage.getItem('finesse:appearance') || '{}');
+          var root = document.documentElement;
+          var light = saved.themeMode === 'light'
+            || (saved.themeMode === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches);
+          var theme = light ? 'light' : 'dark';
+          root.dataset.theme = theme;
+          if (saved.palette) root.dataset.palette = saved.palette;
+          if (saved.surface) root.dataset.surface = saved.surface;
+          if (saved.density) root.dataset.density = saved.density;
+          if (saved.corners) root.dataset.corners = saved.corners;
+          if (saved.contrast) root.dataset.contrast = saved.contrast;
+          if (saved.text) root.dataset.text = saved.text;
+          if (saved.motion) root.dataset.motion = saved.motion;
+          var vars = saved.vars && saved.vars[theme];
+          if (vars) for (var name in vars) root.style.setProperty(name, vars[name]);
+        } catch (e) { /* first run, or storage blocked: the CSS defaults apply */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

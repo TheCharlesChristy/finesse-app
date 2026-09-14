@@ -16,9 +16,9 @@ import {
 import { fmt, suggestCategoryForNote, TX_EXPENSE, TX_REFUND } from '../../utils';
 
 const LAYOUT_TONES = {
-  good: { background: 'rgba(79,255,176,0.08)', color: 'var(--good)' },
-  warn: { background: 'rgba(251,191,112,0.09)', color: 'var(--warn)' },
-  neutral: { background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)' },
+  good: { background: 'color-mix(in srgb, var(--accent) 8%, transparent)', color: 'var(--good)' },
+  warn: { background: 'color-mix(in srgb, var(--accent-4) 9%, transparent)', color: 'var(--warn)' },
+  neutral: { background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', color: 'var(--text-secondary)' },
 };
 
 /**
@@ -81,7 +81,7 @@ const BUCKETS = [
     status: ROW_NEW,
     include: true,
     label: 'Needs adding',
-    color: 'var(--accent-mint)',
+    color: 'var(--accent)',
     blurb: 'Nothing already logged looks like these.',
   },
   {
@@ -147,8 +147,8 @@ function MatchCandidate({ match, categoryName, onPick }) {
       onClick={onPick}
       style={{
         display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
-        padding: '9px 11px', borderRadius: 10, cursor: 'pointer',
-        background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
+        padding: '9px 11px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+        background: 'color-mix(in srgb, var(--text-primary) 5%, transparent)', border: '1px solid color-mix(in srgb, var(--text-primary) 8%, transparent)',
         color: 'var(--text-primary)',
       }}
     >
@@ -235,7 +235,7 @@ function ColumnPicker({ label, headers, value, onChange, required }) {
   return (
     <Field label={required ? `${label} *` : label}>
       {id => (
-        <select id={id} className="glass-input" value={value == null ? '' : String(value)}
+        <select id={id} className="input" value={value == null ? '' : String(value)}
           onChange={e => onChange(e.target.value === '' ? null : Number(e.target.value))}
           style={{ padding: '8px 10px', fontSize: 12 }}>
           <option value="">— none —</option>
@@ -271,7 +271,7 @@ function AmountField({ value, disabled, onCommit }) {
     <input
       type="text"
       inputMode="decimal"
-      className="glass-input"
+      className="input"
       disabled={disabled}
       value={text}
       onChange={e => setText(e.target.value)}
@@ -574,7 +574,7 @@ export function ImportStatementModal({
     return (
       <Modal title="Reading your statement" subtitle={fileName} onClose={onClose}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '22px 0 8px' }}>
-          <Loader2 size={26} className="spin" style={{ color: 'var(--accent-mint)' }} aria-hidden="true" />
+          <Loader2 size={26} className="spin" style={{ color: 'var(--accent)' }} aria-hidden="true" />
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', textTransform: 'capitalize' }}>
             {(ocrProgress?.status || 'starting').replace(/-/g, ' ')}{pct != null ? ` — ${pct}%` : ''}
           </div>
@@ -610,28 +610,28 @@ export function ImportStatementModal({
             Finesse can check its own figure against your statement&rsquo;s.
           </div>
 
-          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ borderTop: '1px solid color-mix(in srgb, var(--text-primary) 8%, transparent)', paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', fontSize: 12 }}>
               <input type="checkbox" checked={dayFirst} onChange={e => setDayFirst(e.target.checked)}
-                style={{ width: 15, height: 15, accentColor: 'var(--accent-mint)' }} />
+                style={{ width: 15, height: 15, accentColor: 'var(--accent)' }} />
               Dates are day first (05/01 is 5 January)
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', fontSize: 12 }}>
               <input type="checkbox" checked={invertSigns} onChange={e => setInvertSigns(e.target.checked)}
-                style={{ width: 15, height: 15, accentColor: 'var(--accent-mint)' }} />
+                style={{ width: 15, height: 15, accentColor: 'var(--accent)' }} />
               Flip the signs (my bank writes spending as positive)
             </label>
           </div>
 
           {parsedRows[0] && (
-            <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 10, padding: '10px 12px', fontSize: 11, color: 'var(--text-muted)' }}>
+            <div style={{ background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-sm)', padding: '10px 12px', fontSize: 11, color: 'var(--text-muted)' }}>
               <div style={{ marginBottom: 4, fontWeight: 600, color: 'var(--text-secondary)' }}>First row reads as</div>
               {rows[0]?.status === ROW_INVALID
                 ? <span style={{ color: 'var(--danger)' }}>{rows[0].problem}</span>
                 : rows[0] && (
                   <span>
                     {rows[0].date} · {rows[0].description || 'no description'} ·{' '}
-                    <strong style={{ color: rows[0].type === 'refund' ? 'var(--good)' : 'var(--accent-warm)' }}>
+                    <strong style={{ color: rows[0].type === 'refund' ? 'var(--good)' : 'var(--accent-4)' }}>
                       {rows[0].type === 'refund' ? '+' : '−'}{fmt(rows[0].amount || 0)}
                     </strong>
                   </span>
@@ -639,7 +639,7 @@ export function ImportStatementModal({
             </div>
           )}
 
-          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+          <div className="form-actions" style={{ display: 'flex', gap: 10, marginTop: 4 }}>
             <button className="btn-secondary" onClick={() => setStep('file')} style={{ flex: 1 }}>Back</button>
             <button className="btn-primary" onClick={() => setStep('review')} style={{ flex: 2 }} disabled={!canReview}>
               Review {parsedRows.length} row{parsedRows.length === 1 ? '' : 's'}
@@ -676,12 +676,16 @@ export function ImportStatementModal({
 
     if (!row) {
       return (
-        <Modal title="Nothing to check" subtitle={fileName} onClose={onClose} maxWidth={520}>
+        <Modal title="Nothing to check" subtitle={fileName} onClose={onClose} maxWidth={520}
+      footer={<>
+        <span className="spacer" />
+{done}
+      </>}
+    >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
               None of these rows look like anything you have already logged.
             </div>
-            <div className="modal-actions">{done}</div>
           </div>
         </Modal>
       );
@@ -708,15 +712,31 @@ export function ImportStatementModal({
         subtitle="Is this already in Finesse?"
         onClose={onClose}
         maxWidth={520}
-      >
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={() => setCheckAt(Math.max(0, position - 1))}
+              disabled={position === 0}
+              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              <ArrowLeft size={13} /> Previous
+            </button>
+            {position < total - 1
+              ? (
+                <button className="btn-primary" onClick={() => { setShowNearby(false); setCheckAt(position + 1); }}
+                  style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  Next <ArrowRight size={13} />
+                </button>
+              )
+              : done}
+      </>}
+    >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
             <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
               From your statement
             </div>
             <div style={{
-              display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 10,
-              background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+              display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 'var(--radius-sm)',
+              background: 'color-mix(in srgb, var(--text-primary) 5%, transparent)', border: '1px solid color-mix(in srgb, var(--text-primary) 10%, transparent)',
             }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{row.description || 'No description'}</div>
@@ -795,7 +815,7 @@ export function ImportStatementModal({
                   onClick={() => setShowNearby(true)}
                   style={{
                     background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left',
-                    fontSize: 11, color: 'var(--accent-mint)', display: 'flex', alignItems: 'center', gap: 6,
+                    fontSize: 11, color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 6,
                   }}
                 >
                   <SearchCheck size={13} /> Compare against my other {nearby.length} transaction
@@ -804,21 +824,6 @@ export function ImportStatementModal({
               )
           )}
 
-          <div className="modal-actions" style={{ display: 'flex', gap: 10 }}>
-            <button className="btn-secondary" onClick={() => setCheckAt(Math.max(0, position - 1))}
-              disabled={position === 0}
-              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-              <ArrowLeft size={13} /> Previous
-            </button>
-            {position < total - 1
-              ? (
-                <button className="btn-primary" onClick={() => { setShowNearby(false); setCheckAt(position + 1); }}
-                  style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                  Next <ArrowRight size={13} />
-                </button>
-              )
-              : done}
-          </div>
         </div>
       </Modal>
     );
@@ -831,13 +836,13 @@ export function ImportStatementModal({
     return (
       <div key={row.index} style={{
         display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px',
-        background: 'rgba(255,255,255,0.035)', borderRadius: 10,
+        background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-sm)',
         opacity: invalid ? 0.7 : 1,
       }}>
         <div style={{ flex: '1 1 150px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
           <input
             type="text"
-            className="glass-input"
+            className="input"
             value={row.description}
             onChange={e => setOverride(row.index, { fields: { description: e.target.value } })}
             placeholder="No description"
@@ -847,7 +852,7 @@ export function ImportStatementModal({
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
             <input
               type="text"
-              className="glass-input"
+              className="input"
               value={row.rawDate}
               onChange={e => setOverride(row.index, { fields: { date: e.target.value } })}
               placeholder="Date"
@@ -857,7 +862,7 @@ export function ImportStatementModal({
             {/* One control for one decision: which pile a row is in decides
                 whether it gets written. */}
             <select
-              className="glass-input"
+              className="input"
               value={invalid ? 'cantImport' : (BUCKET_BY_STATUS[row.status]?.id || 'needsAdding')}
               onChange={e => setBucket(row.index, e.target.value)}
               disabled={invalid}
@@ -885,7 +890,7 @@ export function ImportStatementModal({
             style={{
               background: 'none', border: 'none', padding: '0 2px', cursor: invalid ? 'default' : 'pointer',
               fontSize: 15, fontWeight: 700, lineHeight: 1,
-              color: row.type === TX_REFUND ? 'var(--good)' : 'var(--accent-warm)',
+              color: row.type === TX_REFUND ? 'var(--good)' : 'var(--accent-4)',
             }}
           >
             {row.type === TX_REFUND ? '+' : '−'}
@@ -924,16 +929,31 @@ export function ImportStatementModal({
   const needsChecking = rows.filter(row => row.status === ROW_SIMILAR).length;
 
   return (
-    <Modal title="Review before importing" subtitle={fileName} onClose={onClose} maxWidth={760}>
+    <Modal title="Review before importing" subtitle={fileName} onClose={onClose} maxWidth={760}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={() => setStep(cameFromCsv ? 'map' : 'file')}
+            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+            <ArrowLeft size={13} /> {cameFromCsv ? 'Columns' : 'Back'}
+          </button>
+          {/* Counts what will actually be written, not what is ticked — a row
+              with no category is dropped on the way to the database. */}
+          <button className="btn-primary" onClick={handleImport} disabled={busy || summary.importable === 0}
+            style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
+            {busy ? <Upload size={14} /> : <Check size={14} />}
+            {busy ? 'Importing…' : `Import ${summary.importable} transaction${summary.importable === 1 ? '' : 's'}`}
+          </button>
+      </>}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           {[
-            ['Importing', String(summary.importable), 'var(--accent-mint)'],
-            ['Spending', fmt(summary.expense), 'var(--accent-warm)'],
+            ['Importing', String(summary.importable), 'var(--accent)'],
+            ['Spending', fmt(summary.expense), 'var(--accent-4)'],
             ['Refunds', fmt(summary.refund), 'var(--good)'],
             ['Skipping', String(summary.duplicate + summary.invalid), 'var(--text-muted)'],
           ].map(([label, value, color]) => (
-            <div key={label} style={{ flex: '1 1 110px', background: 'rgba(255,255,255,0.04)', borderRadius: 10, padding: '9px 12px' }}>
+            <div key={label} style={{ flex: '1 1 110px', background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-sm)', padding: '9px 12px' }}>
               <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>{label}</div>
               <div style={{ fontSize: 15, fontWeight: 600, color, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
             </div>
@@ -943,7 +963,7 @@ export function ImportStatementModal({
         {layoutNote && (
           <div style={{
             display: 'flex', alignItems: 'flex-start', gap: 9, fontSize: 12, lineHeight: 1.6,
-            padding: '11px 13px', borderRadius: 10, ...LAYOUT_TONES[layoutNote.tone],
+            padding: '11px 13px', borderRadius: 'var(--radius-sm)', ...LAYOUT_TONES[layoutNote.tone],
           }}>
             <Columns3 size={14} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden="true" />
             <span>{layoutNote.heading} {layoutNote.detail}</span>
@@ -953,8 +973,8 @@ export function ImportStatementModal({
         {reconciliation && (
           <div style={{
             display: 'flex', alignItems: 'flex-start', gap: 9, fontSize: 12, lineHeight: 1.6,
-            padding: '11px 13px', borderRadius: 10,
-            background: reconciliation.matches ? 'rgba(79,255,176,0.08)' : 'rgba(251,191,112,0.09)',
+            padding: '11px 13px', borderRadius: 'var(--radius-sm)',
+            background: reconciliation.matches ? 'color-mix(in srgb, var(--accent) 8%, transparent)' : 'color-mix(in srgb, var(--accent-4) 9%, transparent)',
             color: reconciliation.matches ? 'var(--good)' : 'var(--warn)',
           }}>
             <Scale size={14} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden="true" />
@@ -969,7 +989,7 @@ export function ImportStatementModal({
         <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 11, color: 'var(--text-secondary)' }}>
           Flag a same-amount transaction as a possible match within
           <input
-            type="number" min={0} max={14} className="glass-input"
+            type="number" min={0} max={14} className="input"
             value={dateToleranceDays}
             onChange={e => setDateToleranceDays(Math.max(0, Math.min(14, Number(e.target.value) || 0)))}
             style={{ width: 46, padding: '4px 6px', fontSize: 12, textAlign: 'center' }}
@@ -983,12 +1003,12 @@ export function ImportStatementModal({
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', fontSize: 11, color: 'var(--text-secondary)' }}>
             <input type="checkbox" checked={dayFirst} onChange={e => setDayFirst(e.target.checked)}
-              style={{ width: 14, height: 14, accentColor: 'var(--accent-mint)' }} />
+              style={{ width: 14, height: 14, accentColor: 'var(--accent)' }} />
             Dates are day first (05/01 is 5 January)
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer', fontSize: 11, color: 'var(--text-secondary)' }}>
             <input type="checkbox" checked={invertSigns} onChange={e => setInvertSigns(e.target.checked)}
-              style={{ width: 14, height: 14, accentColor: 'var(--accent-mint)' }} />
+              style={{ width: 14, height: 14, accentColor: 'var(--accent)' }} />
             Every row below has spending and refunds swapped — flip them all
           </label>
         </div>
@@ -996,7 +1016,7 @@ export function ImportStatementModal({
         {partialWarning && (
           <div style={{
             display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, lineHeight: 1.6,
-            padding: '10px 12px', borderRadius: 10, background: 'rgba(251,191,112,0.09)', color: 'var(--warn)',
+            padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'color-mix(in srgb, var(--accent-4) 9%, transparent)', color: 'var(--warn)',
           }}>
             <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden="true" />
             <span>{partialWarning}</span>
@@ -1018,8 +1038,8 @@ export function ImportStatementModal({
         {needsChecking > 0 && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-            padding: '11px 13px', borderRadius: 10,
-            background: 'rgba(251,191,112,0.09)', color: 'var(--warn)',
+            padding: '11px 13px', borderRadius: 'var(--radius-sm)',
+            background: 'color-mix(in srgb, var(--accent-4) 9%, transparent)', color: 'var(--warn)',
           }}>
             <HelpCircle size={14} style={{ flexShrink: 0 }} aria-hidden="true" />
             <span style={{ flex: '1 1 200px', fontSize: 12, lineHeight: 1.6 }}>
@@ -1047,19 +1067,6 @@ export function ImportStatementModal({
           ))}
         </div>
 
-        <div className="modal-actions" style={{ display: 'flex', gap: 10 }}>
-          <button className="btn-secondary" onClick={() => setStep(cameFromCsv ? 'map' : 'file')}
-            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-            <ArrowLeft size={13} /> {cameFromCsv ? 'Columns' : 'Back'}
-          </button>
-          {/* Counts what will actually be written, not what is ticked — a row
-              with no category is dropped on the way to the database. */}
-          <button className="btn-primary" onClick={handleImport} disabled={busy || summary.importable === 0}
-            style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
-            {busy ? <Upload size={14} /> : <Check size={14} />}
-            {busy ? 'Importing…' : `Import ${summary.importable} transaction${summary.importable === 1 ? '' : 's'}`}
-          </button>
-        </div>
       </div>
     </Modal>
   );

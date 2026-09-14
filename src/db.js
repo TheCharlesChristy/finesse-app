@@ -7,6 +7,7 @@ import { getNextRecurringDate, normalizeIncomeAllocations, roundMoney, getEffect
   TX_EXPENSE, TX_REFUND,
   wishlistAffordability } from './utils';
 import { buildBudgetConfigPlan, isStagedConfigDue, isBudgetConfigUndoExpired } from './budgetConfig';
+import { normaliseAppearance } from './theme/appearance';
 import { encryptionMiddleware, activateEncryption, markEncrypted, lockEncryption,
   resetEncryption, setSealingSuspended, blindIndex, isEncryptionEnabled, isUnlocked,
   sealedFieldReport } from './dbCrypto';
@@ -76,7 +77,7 @@ db.version(5).stores({
   const accountId = await tx.table('accounts').add({
     name: 'Main Account',
     balance: 0,
-    color: '#4fffb0',
+    color: 'var(--accent)',
     createdAt: now,
   });
 
@@ -179,7 +180,9 @@ db.version(9).stores({
 // pass-through, so a database that never turns encryption on pays nothing.
 db.use(encryptionMiddleware());
 
-const ACCOUNT_COLORS = ['#4fffb0', '#5db8ff', '#c084fc', '#fbbf70', '#ff6b8a', '#67e8f9'];
+// Stored as token references rather than hex, so a category or account keeps
+// its *role* in the palette and re-tints when the user changes theme.
+const ACCOUNT_COLORS = ['var(--accent)', 'var(--accent-2)', 'var(--accent-3)', 'var(--accent-4)', 'var(--danger)', 'var(--series-5)'];
 
 
 // ── Spend bucket helpers ────────────────────────────────────────────────────
@@ -415,7 +418,13 @@ export async function getSettings(accountId = null) {
   const id = accountId ?? await getDefaultAccountId();
   if (id == null) return null;
   const all = await db.settings.where('accountId').equals(Number(id)).toArray();
-  return all[0] || null;
+  const row = all[0] || null;
+  if (!row) return null;
+  // Rows written before the appearance model existed carry a flat `themeMode`;
+  // read it as the one field it maps onto and let normaliseAppearance default
+  // the rest. Migrated on read, not rewritten — the row is only touched when
+  // the user actually changes something.
+  return { ...row, appearance: normaliseAppearance(row.appearance ?? { themeMode: row.themeMode }) };
 }
 
 export async function saveSettings(data, accountId = null) {

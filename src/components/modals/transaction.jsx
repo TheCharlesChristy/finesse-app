@@ -45,7 +45,7 @@ function MerchantInput({ value, onChange, onPick, suggestions, onSubmit, id }) {
     <div style={{ position: 'relative' }}>
       <input
         id={id}
-        className="glass-input"
+        className="input"
         placeholder="Where? e.g. Tesco"
         value={value}
         autoComplete="off"
@@ -57,9 +57,9 @@ function MerchantInput({ value, onChange, onPick, suggestions, onSubmit, id }) {
       {visible && (
         <div style={{
           position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 200,
-          background: 'rgba(8,12,28,0.97)', border: '1px solid rgba(255,255,255,0.12)',
-          borderRadius: 10, backdropFilter: 'blur(24px)',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.5)', overflow: 'hidden',
+          background: 'var(--surface-raised)', border: '1px solid color-mix(in srgb, var(--text-primary) 12%, transparent)',
+          borderRadius: 'var(--radius-sm)', backdropFilter: 'blur(24px)',
+          boxShadow: '0 8px 32px color-mix(in srgb, #000 50%, transparent)', overflow: 'hidden',
         }}>
           {suggestions.map((entry, idx) => (
             <div key={entry.label}
@@ -68,7 +68,7 @@ function MerchantInput({ value, onChange, onPick, suggestions, onSubmit, id }) {
               style={{
                 padding: '9px 13px', cursor: 'pointer', fontSize: 13,
                 display: 'flex', alignItems: 'center', gap: 8,
-                background: idx === activeIdx ? 'rgba(255,255,255,0.07)' : 'transparent',
+                background: idx === activeIdx ? 'color-mix(in srgb, var(--text-primary) 7%, transparent)' : 'transparent',
               }}>
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {entry.label}
@@ -196,7 +196,15 @@ export function AddTransactionModal({
   const title = isEditing ? 'Edit Transaction' : isRefundMode ? 'Log Refund' : 'Log Expense';
 
   return (
-    <Modal title={title} onClose={onClose}>
+    <Modal title={title} onClose={onClose}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!canSubmit}>
+            {isEditing ? 'Save Changes' : splitOpen ? 'Add Split' : isRefundMode ? 'Add Refund' : 'Add Expense'}
+          </button>
+      </>}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {/* A refund is money coming back, not a negative expense — logging it
             as one keeps the category's spend honest. */}
@@ -215,7 +223,7 @@ export function AddTransactionModal({
 
         <Field label="Amount (£)">
           {id => (
-            <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
+            <input id={id} className="input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
               onChange={e => setAmount(e.target.value)} autoFocus />
           )}
         </Field>
@@ -241,7 +249,7 @@ export function AddTransactionModal({
         )}
 
         {suggestedCategory && !splitOpen && (
-          <div style={{ fontSize: 11, color: 'var(--accent-mint)', marginTop: -8 }}>
+          <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: -8 }}>
             {suggestion.source === 'rule'
               ? `Matched your rule "${suggestion.match}" → ${suggestedCategory.name}`
               : `You usually put "${suggestion.match}" in ${suggestedCategory.name}`}
@@ -265,7 +273,7 @@ export function AddTransactionModal({
                     <CategorySelect categories={categories} value={String(part.categoryId)}
                       onChange={id => updatePart(index, { categoryId: id })}
                       aria-label={`Split part ${index + 1} category`} />
-                    <input className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
+                    <input className="input" type="number" min="0" step="0.01" placeholder="0.00"
                       aria-label={`Split part ${index + 1} amount`}
                       value={part.amount} onChange={e => updatePart(index, { amount: e.target.value })}
                       style={{ padding: '8px 10px' }} />
@@ -295,7 +303,7 @@ export function AddTransactionModal({
 
         <Field label="Tags (optional)" hint="Comma separated — e.g. holiday, work">
           {id => (
-            <input id={id} className="glass-input" placeholder="holiday, work" value={tagInput}
+            <input id={id} className="input" placeholder="holiday, work" value={tagInput}
               onChange={e => setTagInput(e.target.value)} />
           )}
         </Field>
@@ -306,12 +314,6 @@ export function AddTransactionModal({
 
         <DateInput value={date} onChange={setDate} />
 
-        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!canSubmit}>
-            {isEditing ? 'Save Changes' : splitOpen ? 'Add Split' : isRefundMode ? 'Add Refund' : 'Add Expense'}
-          </button>
-        </div>
       </div>
     </Modal>
   );
@@ -434,7 +436,16 @@ export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCatego
   };
 
   return (
-    <Modal title="Bulk Add Expenses" subtitle="Add several expenses to one category in one pass." onClose={onClose} maxWidth={760}>
+    <Modal title="Bulk Add Expenses" subtitle="Add several expenses to one category in one pass." onClose={onClose} maxWidth={760}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} disabled={validRows.length === 0}
+            style={{ flex: 2 }}>
+            Add {validRows.length || ''} Expense{validRows.length === 1 ? '' : 's'}
+          </button>
+      </>}
+    >
         <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) minmax(170px, 220px)', gap: 12, marginBottom: 16 }}>
           <Field label="Default category" hint="Used for any row you leave unset">
             <CategorySelect categories={categories} value={String(catId)} onChange={setCatId} showAmounts aria-label="Default category" />
@@ -443,9 +454,9 @@ export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCatego
         </div>
 
         <div style={{
-          border: '1px solid rgba(255,255,255,0.08)',
-          background: 'rgba(255,255,255,0.035)',
-          borderRadius: 14,
+          border: '1px solid color-mix(in srgb, var(--text-primary) 8%, transparent)',
+          background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)',
+          borderRadius: 'var(--radius-md)',
           padding: 12,
           marginBottom: 14,
         }}>
@@ -457,7 +468,7 @@ export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCatego
             </button>
           </div>
           <textarea
-            className="glass-input"
+            className="input"
             value={pasteText}
             onChange={e => setPasteText(e.target.value)}
             rows={3}
@@ -466,7 +477,7 @@ export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCatego
           />
         </div>
 
-        <div className="bulk-expense-header" style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 6, padding: '0 2px' }}>
+        <div className="bulk-header" style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 6, padding: '0 2px' }}>
           <div>Amount</div>
           <div>Note</div>
           <div>Category</div>
@@ -475,24 +486,24 @@ export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCatego
         </div>
         <div className="scroll-region" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
           {rows.map((row, index) => (
-            <div key={index} className="bulk-expense-row">
-              <input className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={row.amount}
+            <div key={index} className="bulk-row">
+              <input className="input" type="number" min="0" step="0.01" placeholder="0.00" value={row.amount}
                 aria-label={`Row ${index + 1} amount`}
                 onChange={e => updateRow(index, { amount: e.target.value })}
                 onKeyDown={e => e.key === 'Enter' && addRows(1)}
                 style={{ padding: '8px 10px' }}
                 autoFocus={index === 0} />
-              <input className="glass-input bulk-expense-note" placeholder="Optional note" value={row.note}
+              <input className="input bulk-note" placeholder="Optional note" value={row.note}
                 aria-label={`Row ${index + 1} note`}
                 onChange={e => updateRow(index, { note: e.target.value })}
                 onKeyDown={e => e.key === 'Enter' && addRows(1)}
                 style={{ padding: '8px 10px' }} />
-              <div className="bulk-expense-category">
+              <div className="bulk-category">
                 <CategorySelect categories={categories} value={String(row.categoryId || catId)}
                   onChange={value => updateRow(index, { categoryId: value })}
                   aria-label={`Row ${index + 1} category`} />
               </div>
-              <div className="bulk-expense-date">
+              <div className="bulk-date">
                 <DateInput value={row.date} onChange={date => updateRow(index, { date })} label={null} />
               </div>
               <IconButton onClick={() => removeRow(index)} disabled={rows.length <= 1}
@@ -511,17 +522,10 @@ export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCatego
           <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
             <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>{validRows.length}</span> expense{validRows.length === 1 ? '' : 's'}
             {' · '}
-            <span style={{ color: 'var(--accent-warm)', fontWeight: 700 }}>{fmt(totalAmount)}</span>
+            <span style={{ color: 'var(--accent-4)', fontWeight: 700 }}>{fmt(totalAmount)}</span>
           </div>
         </div>
 
-        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" onClick={handleSubmit} disabled={validRows.length === 0}
-            style={{ flex: 2 }}>
-            Add {validRows.length || ''} Expense{validRows.length === 1 ? '' : 's'}
-          </button>
-        </div>
     </Modal>
   );
 }
