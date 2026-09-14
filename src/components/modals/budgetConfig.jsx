@@ -4,6 +4,7 @@ import { Upload, AlertTriangle, Info, ArrowRight, Plus, Pencil, Minus, CalendarC
 import { Modal } from '../ui';
 import { parseBudgetConfigFile, buildBudgetConfigPlan } from '../../budgetConfig';
 import { fmt } from '../../utils';
+import { holdLockAcrossNativeSheet } from '../../lock';
 
 // ── Presentation helpers ─────────────────────────────────────────────────────
 
@@ -123,6 +124,7 @@ export function ImportBudgetConfigModal({
           }}>
             <Upload size={14} /> {file ? 'Choose a different file' : 'Choose config file (.json)'}
             <input ref={inputRef} type="file" accept=".json,application/json"
+              onClick={() => holdLockAcrossNativeSheet()}
               onChange={handleFile} style={{ display: 'none' }} />
           </label>
           {file && (

@@ -11,6 +11,7 @@ import EncryptionSettings from '../components/EncryptionSettings';
 import VariablesSettings from '../components/VariablesSettings';
 import AppearanceSettings from '../components/AppearanceSettings';
 import { CardTitle, IconButton, Tabs } from '../components/ui';
+import { holdLockAcrossNativeSheet } from '../lock';
 
 // What updateApp() found, in the user's terms. Anything unrecognised falls
 // back to 'error' — silence is the one outcome a manual update mustn't have.
@@ -789,7 +790,8 @@ export default function Settings({
             </button>
             <label className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer' }}>
               <Upload size={14} /> Import Backup
-              <input type="file" accept=".json" onChange={handleFileImport} style={{ display: 'none' }} />
+              <input type="file" accept=".json" onClick={() => holdLockAcrossNativeSheet()}
+                onChange={handleFileImport} style={{ display: 'none' }} />
             </label>
             <button className="btn-secondary" onClick={onImportStatement} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
               <FileUp size={14} /> Import Bank Statement

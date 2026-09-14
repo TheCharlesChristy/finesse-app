@@ -14,6 +14,7 @@ import {
   toTransactionPayload, ROW_DUPLICATE, ROW_INVALID, ROW_NEW, ROW_SIMILAR,
 } from '../../csv';
 import { fmt, suggestCategoryForNote, TX_EXPENSE, TX_REFUND } from '../../utils';
+import { holdLockAcrossNativeSheet } from '../../lock';
 
 const LAYOUT_TONES = {
   good: { background: 'color-mix(in srgb, var(--accent) 8%, transparent)', color: 'var(--good)' },
@@ -71,10 +72,10 @@ const BUCKETS = [
   {
     id: 'needsChecking',
     status: ROW_SIMILAR,
-    include: true,
+    include: false,
     label: 'Needs checking',
     color: 'var(--warn)',
-    blurb: 'Might already be in Finesse. These will be imported unless you say otherwise.',
+    blurb: 'Might already be in Finesse. Held back until you say which — nothing here is imported while it sits in this pile.',
   },
   {
     id: 'needsAdding',
@@ -82,7 +83,7 @@ const BUCKETS = [
     include: true,
     label: 'Needs adding',
     color: 'var(--accent)',
-    blurb: 'Nothing already logged looks like these.',
+    blurb: 'Nothing already logged looks like these. They will be imported.',
   },
   {
     id: 'alreadyIn',
@@ -406,6 +407,19 @@ export function ImportStatementModal({
     setOverride(index, { status: bucket.status, include: bucket.include, matchedId });
   };
 
+  /**
+   * Accept the whole "needs checking" pile in one tap.
+   *
+   * The counterweight to those rows no longer importing by default: someone who
+   * has looked at the list and is happy it is all new should not have to answer
+   * fourteen questions to say so.
+   */
+  const importAllChecking = () => {
+    for (const row of rows) {
+      if (row.status === ROW_SIMILAR) setBucket(row.index, 'needsAdding');
+    }
+  };
+
   const openCheck = () => {
     setCheckQueue(rows.filter(row => row.status === ROW_SIMILAR).map(row => row.index));
     setCheckAt(0);
@@ -508,10 +522,18 @@ export function ImportStatementModal({
   const handleImport = async () => {
     const payload = toTransactionPayload(rows);
     if (!payload.length) return;
+    setError('');
     setBusy(true);
     try {
       await onImport(payload, { fileName, reconciliation });
       onClose();
+    } catch (err) {
+      // Previously this only cleared the spinner: a write that failed — a
+      // locked database, a storage quota reached mid-import — left the button
+      // looking ready and the review screen looking untouched, which reads as
+      // "nothing happened" when something very much did.
+      console.error('Statement import failed', err);
+      setError(`Couldn’t save those transactions. (${String(err?.message || err).slice(0, 140)}) Nothing was imported — try again.`);
     } finally {
       setBusy(false);
     }
@@ -532,7 +554,11 @@ export function ImportStatementModal({
             padding: '16px', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1,
           }}>
             <FileUp size={16} /> {busy ? 'Reading…' : 'Choose a CSV file'}
-            <input type="file" accept=".csv,text/csv,text/plain" onChange={handleCsvFile}
+            {/* The file picker is a system sheet: it backgrounds the app
+                exactly as the app switcher does, and without this hold the
+                screen lock treats choosing a statement as walking away. */}
+            <input type="file" accept=".csv,text/csv,text/plain"
+              onClick={() => holdLockAcrossNativeSheet()} onChange={handleCsvFile}
               disabled={busy} style={{ display: 'none' }} />
           </label>
 
@@ -541,7 +567,8 @@ export function ImportStatementModal({
             padding: '16px', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1,
           }}>
             <Camera size={16} /> Choose a photo or PDF
-            <input type="file" accept="application/pdf,image/*" onChange={handleOcrFile}
+            <input type="file" accept="application/pdf,image/*"
+              onClick={() => holdLockAcrossNativeSheet()} onChange={handleOcrFile}
               disabled={busy} style={{ display: 'none' }} />
           </label>
 
@@ -782,8 +809,9 @@ export function ImportStatementModal({
               <Plus size={13} /> It&rsquo;s new — add it
             </button>
             <button className="btn-secondary" onClick={() => answer('needsChecking')}
-              style={{ flex: '1 1 120px', fontSize: 12, color: 'var(--text-secondary)' }}>
-              Decide later
+              style={{ flex: '1 1 120px', fontSize: 12, color: 'var(--text-secondary)' }}
+              title="Leaves it in the needs-checking pile, which is not imported">
+              Leave it — don&rsquo;t import
             </button>
           </div>
 
@@ -895,19 +923,18 @@ export function ImportStatementModal({
           >
             {row.type === TX_REFUND ? '+' : '−'}
           </button>
-          {mapping.amount != null
-            ? (
-              <AmountField
-                value={row.amount}
-                disabled={invalid}
-                onCommit={amount => setOverride(row.index, { amount })}
-              />
-            )
-            : (
-              <div style={{ fontSize: 13, fontWeight: 600, minWidth: 64, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                {invalid ? '—' : fmt(row.amount)}
-              </div>
-            )}
+          {/* Editable whichever way the file was read. This used to be a
+              read-only figure unless the source had a single signed amount
+              column — which excluded every PDF and photo, i.e. exactly the
+              sources where a digit gets misread and the review step is the
+              only place left to fix it. The override is layered on after
+              parsing either way, so there is nothing special about a
+              two-column statement here. */}
+          <AmountField
+            value={row.amount}
+            disabled={invalid}
+            onCommit={amount => setOverride(row.index, { amount })}
+          />
         </div>
         <div style={{ flex: '0 1 150px', minWidth: 120 }}>
           <CategorySelect
@@ -951,6 +978,10 @@ export function ImportStatementModal({
             ['Importing', String(summary.importable), 'var(--accent)'],
             ['Spending', fmt(summary.expense), 'var(--accent-4)'],
             ['Refunds', fmt(summary.refund), 'var(--good)'],
+            // Counted apart from "skipping": a row waiting on a decision and a
+            // row the app has ruled out are not the same thing, and rolling
+            // them together is what let the undecided ones go unnoticed.
+            ['Needs checking', String(summary.similar), 'var(--warn)'],
             ['Skipping', String(summary.duplicate + summary.invalid), 'var(--text-muted)'],
           ].map(([label, value, color]) => (
             <div key={label} style={{ flex: '1 1 110px', background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-sm)', padding: '9px 12px' }}>
@@ -1013,6 +1044,16 @@ export function ImportStatementModal({
           </label>
         </div>
 
+        {error && (
+          <div style={{
+            fontSize: 12, lineHeight: 1.6, padding: '10px 12px', borderRadius: 'var(--radius-sm)',
+            background: 'color-mix(in srgb, var(--danger) 10%, transparent)', color: 'var(--danger)',
+            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          }}>
+            {error}
+          </div>
+        )}
+
         {partialWarning && (
           <div style={{
             display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, lineHeight: 1.6,
@@ -1032,9 +1073,9 @@ export function ImportStatementModal({
 
         {/* The pile that needs a person. Loud, because a row sitting here is
             the one thing on this screen the app genuinely cannot settle — and
-            because it will be imported if nobody looks, which is the safer
-            default (never silently drop a real transaction) but only while the
-            count is impossible to miss. */}
+            because these rows are the ones the import will *not* write until
+            somebody says so. Nothing is dropped quietly: the count is here,
+            with both answers one tap away. */}
         {needsChecking > 0 && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
@@ -1043,12 +1084,16 @@ export function ImportStatementModal({
           }}>
             <HelpCircle size={14} style={{ flexShrink: 0 }} aria-hidden="true" />
             <span style={{ flex: '1 1 200px', fontSize: 12, lineHeight: 1.6 }}>
-              {needsChecking} row{needsChecking === 1 ? '' : 's'} might already be in Finesse.
-              They&rsquo;ll be imported unless you say otherwise.
+              {needsChecking} row{needsChecking === 1 ? '' : 's'} might already be in Finesse, so
+              {needsChecking === 1 ? ' it is' : ' they are'} not being imported yet.
             </span>
             <button className="btn-secondary" onClick={openCheck}
               style={{ flexShrink: 0, fontSize: 12, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 6 }}>
               Check {needsChecking === 1 ? 'it' : 'them'} one by one <ArrowRight size={13} />
+            </button>
+            <button className="btn-secondary" onClick={importAllChecking}
+              style={{ flexShrink: 0, fontSize: 12, padding: '6px 12px' }}>
+              Import {needsChecking === 1 ? 'it' : 'them all'} anyway
             </button>
           </div>
         )}

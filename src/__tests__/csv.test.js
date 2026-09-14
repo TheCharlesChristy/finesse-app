@@ -253,7 +253,7 @@ describe('buildImportRows', () => {
     expect(rows[0].include).toBe(false);
   });
 
-  it('flags a same-day same-amount row as similar, but keeps it selected', () => {
+  it('flags a same-day same-amount row as similar, and holds it back for a decision', () => {
     const rows = buildImportRows({
       rows: [['05/01/2026', 'COSTA COFFEE', '-3.20']],
       mapping,
@@ -263,8 +263,10 @@ describe('buildImportRows', () => {
     });
 
     expect(rows[0].status).toBe(ROW_SIMILAR);
-    // Two £3.20 coffees in a day is at least as likely as a double import.
-    expect(rows[0].include).toBe(true);
+    // Two £3.20 coffees in a day is at least as likely as a double import, so
+    // this must not be *excluded* as a duplicate — but nor is it written
+    // without being asked about. It waits in the "needs checking" pile.
+    expect(rows[0].include).toBe(false);
   });
 
   it('catches a row repeated within the same file', () => {
@@ -311,14 +313,15 @@ describe('buildImportRows', () => {
     });
 
     expect(rows[0].status).toBe(ROW_SIMILAR);
-    expect(rows[0].include).toBe(true);
+    expect(rows[0].include).toBe(false);
     expect(rows[0].dateDrift).toBe(3);
     expect(rows[0].problem).toMatch(/3 days earlier/);
   });
 
   it('never auto-excludes a cross-date match, even with a matching description', () => {
     // A daily coffee at the same place for the same price is real, recurring
-    // spend — not a duplicate import — so it must stay selected by default.
+    // spend — not a duplicate import. It must reach "needs checking", where a
+    // person answers it, rather than being written off as already logged.
     const rows = buildImportRows({
       rows: [['03/01/2026', 'Costa Coffee', '-3.20']],
       mapping,
@@ -328,7 +331,32 @@ describe('buildImportRows', () => {
     });
 
     expect(rows[0].status).toBe(ROW_SIMILAR);
-    expect(rows[0].include).toBe(true);
+    expect(rows[0].include).toBe(false);
+  });
+
+  // The whole point of the change: what the button promises is what gets
+  // written, and a row nobody has ruled on is in neither camp until they do.
+  it('writes only the rows nothing looked like, until the rest are answered', () => {
+    const rows = buildImportRows({
+      rows: [
+        ['05/01/2026', 'COSTA COFFEE', '-3.20'],
+        ['06/01/2026', 'SOMETHING BRAND NEW', '-9.99'],
+      ],
+      mapping,
+      defaultCategoryId: 1,
+      existingTransactions: [
+        { date: '2026-01-05T12:00:00.000Z', amount: 3.2, merchant: 'PRET A MANGER', type: 'expense' },
+      ],
+    });
+
+    expect(rows.map(row => row.status)).toEqual([ROW_SIMILAR, ROW_NEW]);
+    expect(summariseRows(rows).importable).toBe(1);
+    expect(toTransactionPayload(rows).map(tx => tx.note)).toEqual(['SOMETHING BRAND NEW']);
+
+    // Saying "import it after all" is one flag, and the promise keeps up.
+    const accepted = rows.map(row => ({ ...row, include: true, status: ROW_NEW }));
+    expect(summariseRows(accepted).importable).toBe(2);
+    expect(toTransactionPayload(accepted)).toHaveLength(2);
   });
 
   it('leaves a same-amount row outside the tolerance window untouched', () => {
@@ -1152,7 +1180,8 @@ describe('cross-referencing a statement against what is already logged', () => {
     // one silently is worse than asking; "needs checking" is the asking.
     const built = build(statement('2026-09-12', 'Tesco', -42.18), [logged()]);
     expect(built[0].status).toBe('similar');
-    expect(built[0].include).toBe(true);
+    // Asked about, not answered: neither imported nor dropped on its own.
+    expect(built[0].include).toBe(false);
   });
 
   it('does not treat a refund as the same transaction as an expense', () => {
@@ -1160,7 +1189,7 @@ describe('cross-referencing a statement against what is already logged', () => {
 
     expect(built[0].type).toBe('refund');
     expect(built[0].status).toBe('similar');
-    expect(built[0].include).toBe(true);
+    expect(built[0].include).toBe(false);
     expect(built[0].problem).toMatch(/but that one is logged as spending/);
   });
 

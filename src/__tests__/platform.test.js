@@ -5,14 +5,15 @@
  * matters most is the degradation — every path must return something the UI can
  * explain rather than throwing or, worse, quietly claiming success.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   formatBytes, getPersistenceState, getStorageEstimate, persistenceSupported, requestPersistence,
   STORAGE_BEST_EFFORT, STORAGE_PERSISTED, STORAGE_UNSUPPORTED,
 } from '../storage';
 import { canShareFile, shareFile, SHARE_CANCELLED, SHARE_DOWNLOADED, SHARE_SHARED } from '../share';
-import { buildPinSettings, isValidPin, safeEqual, shouldRelock, verifyPin } from '../lock';
+import { buildPinSettings, holdLock, isLockHeld, isValidPin, NATIVE_SHEET_GRACE_MS,
+  releaseAllLockHolds, safeEqual, shouldRelock, verifyPin } from '../lock';
 import { EMPTY_RECEIPT, hasReceipt, scaleToFit } from '../receipts';
 
 // The test environment is Node, so both `navigator` and the DOM are absent
@@ -253,6 +254,50 @@ describe('PIN lock', () => {
     expect(shouldRelock(hidden, 60_000, hidden + 60_000)).toBe(true);
     // "Immediately" must not be defeated by a zero-length background trip.
     expect(shouldRelock(hidden, 0, hidden)).toBe(true);
+  });
+});
+
+/**
+ * The hold is what tells "the user walked away" from "the app opened a file
+ * picker". Both look identical to the page — same visibilitychange, same blur —
+ * and counting the second as the first is what sent someone importing a
+ * statement to the lock screen the moment they tapped the button.
+ */
+describe('holding the lock open across a system sheet', () => {
+  beforeEach(() => releaseAllLockHolds());
+  afterEach(() => releaseAllLockHolds());
+
+  it('holds nothing by default', () => {
+    expect(isLockHeld()).toBe(false);
+  });
+
+  it('holds while a sheet is open, and lets go when released', () => {
+    const release = holdLock();
+    expect(isLockHeld()).toBe(true);
+    release();
+    expect(isLockHeld()).toBe(false);
+  });
+
+  it('counts nested holds separately', () => {
+    const first = holdLock();
+    const second = holdLock();
+    first();
+    expect(isLockHeld()).toBe(true);
+    second();
+    expect(isLockHeld()).toBe(false);
+  });
+
+  // The safety valve: a hold whose release never ran — a component unmounted
+  // mid-sheet, a listener that never fired — must cost one window of
+  // protection, not the rest of the session.
+  it('expires a hold that was never released', () => {
+    const now = 1_000_000;
+    holdLock(NATIVE_SHEET_GRACE_MS, now);
+
+    expect(isLockHeld(now + NATIVE_SHEET_GRACE_MS - 1)).toBe(true);
+    expect(isLockHeld(now + NATIVE_SHEET_GRACE_MS)).toBe(false);
+    // And it is gone for good, not merely quiet for that one call.
+    expect(isLockHeld(now)).toBe(false);
   });
 });
 

@@ -17,6 +17,8 @@
  * true about where the file went.
  */
 
+import { holdLockAcrossNativeSheet } from './lock';
+
 export const SHARE_SHARED = 'shared';
 export const SHARE_DOWNLOADED = 'downloaded';
 export const SHARE_CANCELLED = 'cancelled';
@@ -62,6 +64,10 @@ export async function shareFile({ blob, filename, title = 'Finesse', text = '' }
   const file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
 
   if (canShareFile(file)) {
+    // The share sheet backgrounds the app exactly the way the app switcher
+    // does, and the screen lock cannot tell the two apart on its own. Choosing
+    // where a backup goes should not cost a PIN entry.
+    const releaseLock = holdLockAcrossNativeSheet();
     try {
       await navigator.share({ files: [file], title, ...(text ? { text } : {}) });
       return SHARE_SHARED;
@@ -69,6 +75,8 @@ export async function shareFile({ blob, filename, title = 'Finesse', text = '' }
       // AbortError is the user dismissing the sheet. Anything else is the API
       // failing on us, and the download is a better answer than nothing.
       if (error?.name === 'AbortError') return SHARE_CANCELLED;
+    } finally {
+      releaseLock();
     }
   }
 

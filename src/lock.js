@@ -136,3 +136,100 @@ export function shouldRelock(hiddenSince, delayMs = DEFAULT_LOCK_DELAY_MS, now =
   if (hiddenSince == null) return false;
   return now - hiddenSince >= (Number(delayMs) || 0);
 }
+
+// ── Holding the lock open across a native sheet ──────────────────────────────
+//
+// The re-lock timer measures how long the app spent in the background, and it
+// used to count *every* way the page can lose the foreground as time away. On a
+// phone that is wrong far more often than it is right: choosing a file, taking
+// a photo of a receipt and sharing a backup all hand the screen to a system
+// sheet, and all of them fire exactly the same `visibilitychange` an app
+// switcher does. So tapping "Choose a PDF" in the statement importer bounced
+// straight to the lock screen — instantly on the "Immediately" setting, and on
+// any setting at all if picking the file took longer than the delay. The app
+// locked the user out of a thing the app itself had just opened.
+//
+// A hold says "this absence was ours". It is a plain module-level counter
+// rather than React state on purpose: `share.js` and the file inputs are not
+// all in one tree, and the lock clock lives in an event listener that must not
+// re-subscribe every time one is taken.
+//
+// Every hold carries an expiry, because a hold that leaked — a listener that
+// never fired, a component unmounted mid-sheet — must not disable the screen
+// lock for the rest of the session. Past the expiry the hold simply stops
+// counting; the lock behaves as though it was never taken.
+const holds = new Set();
+
+// Long enough to find a statement in Files, take and confirm a photo, or pick
+// a destination in the share sheet. Short enough that a leaked hold costs one
+// window of protection rather than the session.
+export const NATIVE_SHEET_GRACE_MS = 3 * 60_000;
+
+/**
+ * Hold the re-lock timer open. Returns a function that releases it.
+ *
+ * Prefer `holdLockAcrossNativeSheet` for anything that opens a system sheet —
+ * it releases itself when the app comes back, which is the one moment a file
+ * picker gives no event of its own for.
+ */
+export function holdLock(maxMs = NATIVE_SHEET_GRACE_MS, now = Date.now()) {
+  const hold = { expiresAt: now + Math.max(0, Number(maxMs) || 0) };
+  holds.add(hold);
+  return () => holds.delete(hold);
+}
+
+/** Whether any unexpired hold is standing. */
+export function isLockHeld(now = Date.now()) {
+  for (const hold of holds) {
+    if (hold.expiresAt > now) return true;
+    holds.delete(hold);
+  }
+  return false;
+}
+
+/** Test seam — drop every hold. */
+export function releaseAllLockHolds() {
+  holds.clear();
+}
+
+/**
+ * Hold the timer across a system sheet, and let go once the app is back.
+ *
+ * Neither a file picker nor the share sheet reports being dismissed: a
+ * cancelled picker fires no `change`, and `navigator.share` can resolve long
+ * before the sheet has actually gone. What both do is take the foreground and
+ * give it back, so that is what this watches — and it waits for the leaving
+ * before it treats a return as the end, or a `focus` that arrives before the
+ * sheet has even opened would release the hold immediately.
+ */
+export function holdLockAcrossNativeSheet(maxMs = NATIVE_SHEET_GRACE_MS) {
+  const release = holdLock(maxMs);
+  if (typeof window === 'undefined' || typeof document === 'undefined') return release;
+
+  let left = false;
+  let finished = false;
+
+  const onLeave = () => { left = true; };
+  const onReturn = () => { if (left) finish(); };
+  const onVisibility = () => (
+    document.visibilityState === 'hidden' ? onLeave() : onReturn()
+  );
+
+  function finish() {
+    if (finished) return;
+    finished = true;
+    window.removeEventListener('blur', onLeave);
+    window.removeEventListener('focus', onReturn);
+    document.removeEventListener('visibilitychange', onVisibility);
+    // A beat after the return: iOS restores focus to the page slightly before
+    // it is done with the sheet, and releasing on that first frame would let
+    // a trailing `visibilitychange` restart the clock.
+    setTimeout(release, 600);
+  }
+
+  window.addEventListener('blur', onLeave);
+  window.addEventListener('focus', onReturn);
+  document.addEventListener('visibilitychange', onVisibility);
+
+  return finish;
+}
