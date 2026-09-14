@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
-import { CalendarClock, CalendarDays, CalendarRange, CreditCard, LayoutDashboard, ListOrdered, Menu, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, Wallet } from 'lucide-react';
+import { CalendarClock, CalendarDays, CalendarRange, CreditCard, LayoutDashboard, ListOrdered, PiggyBank, TrendingUp, ShoppingBag, Settings as SettingsIcon, Wallet } from 'lucide-react';
 
 import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, transferMoney,
   getSettings, patchSettings, addCategory, updateCategory, deleteCategory,
@@ -19,6 +19,7 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   stageBudgetConfig, cancelStagedBudgetConfig, applyStagedBudgetConfig, reconcileStagedBudgetConfig,
   undoBudgetConfigApply, getBudgetConfigContext, initEncryption, lockDatabase } from './db';
 import { useFinesseData } from './hooks/useFinesseData';
+import { useAppearance } from './theme/useAppearance';
 import { describeStagedConfig, isBudgetConfigUndoExpired } from './budgetConfig';
 import { buildNudges, calcNextReset, filterDismissedNudges, fmt, getGoalCommitment, resolveCategoryAllowance, encodeSnapshotForUrl, decodeSnapshotFromUrl } from './utils';
 
@@ -34,7 +35,8 @@ import { AddTransactionModal, AddWishlistItemModal, FastForwardModal, ImportMode
   AddCategoryModal, AddIncomeModal, EditCategoryModal, EditWishlistListModal,
   AdjustBudgetModal, ExportChatSummaryOptionsModal, ImportStatementModal,
   AddGoalModal, SaveForItemModal, ImportBudgetConfigModal } from './components/modals';
-import { Modal } from './components/ui';
+import AppShell from './components/AppShell';
+import { Banner, Modal, PageHeader } from './components/ui';
 import { useDialog } from './components/useDialog';
 import { useToast } from './components/Toast';
 import QuickAdd from './components/QuickAdd';
@@ -132,6 +134,10 @@ const SHORTCUTS = [
   ['?', 'This list'],
 ];
 
+// The one tiny localStorage key both apps allow themselves: a mirror of the
+// appearance settings so the first paint uses the right theme. See theme/.
+const APPEARANCE_KEY = 'finesse:appearance';
+
 /** The `?action=` a home-screen shortcut launched us with, if any. */
 function readLaunchAction() {
   if (typeof window === 'undefined') return null;
@@ -202,7 +208,6 @@ export default function App() {
     return readLaunchAction() === 'log-expense' ? 'addTx' : null;
   });
   const [chatSummarySchema, setChatSummarySchema] = useState(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [fastForwardIncomeId, setFastForwardIncomeId] = useState(null);
   const [editingCategory, setEditingCategory] = useState(null);
   const [editingIncome, setEditingIncome] = useState(null);
@@ -505,17 +510,19 @@ export default function App() {
     })();
   }, [variables, categories, incomes]);
 
-  // ── Theme ────────────────────────────────────────────────────────────────
-  useEffect(() => {
-    const mode = settings?.themeMode ?? 'dark';
-    if (mode === 'dark') { document.documentElement.setAttribute('data-theme', 'dark'); return; }
-    if (mode === 'light') { document.documentElement.setAttribute('data-theme', 'light'); return; }
-    const mq = window.matchMedia('(prefers-color-scheme: light)');
-    const apply = (e) => document.documentElement.setAttribute('data-theme', e.matches ? 'light' : 'dark');
-    apply(mq);
-    mq.addEventListener('change', apply);
-    return () => mq.removeEventListener('change', apply);
-  }, [settings?.themeMode]);
+  /*
+   * Appearance.
+   *
+   * Held on the account's settings row, which means each account can look
+   * different — and that is the point rather than an accident of where the
+   * field happened to fit: a personal and a business account that are one
+   * palette apart tell you which one you are in before you have read a word.
+   *
+   * `settingsLoaded` holds the paint back until the row is genuinely known, so
+   * the boot script's first frame stands instead of being overwritten with the
+   * defaults and then corrected.
+   */
+  const resolvedTheme = useAppearance(settings?.appearance, APPEARANCE_KEY, settingsLoaded);
 
   // ── Settings / data handlers ─────────────────────────────────────────────
   const handleExport = useCallback(async () => {
@@ -976,7 +983,7 @@ export default function App() {
     const nextTab = tab || aliasTab;
     setView(target);
     if (nextTab) setViewTabs(current => ({ ...current, [target]: nextTab }));
-    setSidebarOpen(false);
+    window.scrollTo({ top: 0 });
   }, []);
 
   const selectTab = useCallback((viewId, tab) => (
@@ -1227,9 +1234,7 @@ export default function App() {
   // that used to leak the dashboard.
   if (!lockChecked) {
     return (
-      <div style={{ minHeight: '100vh', position: 'relative' }}>
-        <div className="bg-mesh" />
-      </div>
+      <div className="app-bg" aria-hidden="true" />
     );
   }
 
@@ -1245,135 +1250,72 @@ export default function App() {
 
   if (!settingsLoaded) {
     return (
-      <div style={{ minHeight: '100vh', position: 'relative' }}>
-        <div className="bg-mesh" />
-        <div style={{
-          position: 'relative', zIndex: 1, minHeight: '100vh',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
-          color: 'var(--text-muted)', fontSize: 14,
-        }} aria-busy="true">
-          Loading your finances…
-        </div>
-      </div>
+      <>
+        <div className="app-bg" aria-hidden="true" />
+        <div className="app-boot" aria-busy="true">Loading your finances…</div>
+      </>
     );
   }
 
   return (
-    <div style={{ minHeight: '100vh', position: 'relative' }}>
-      <div className="bg-mesh" />
+    <>
       {obscured && <div className="privacy-veil" aria-hidden="true" />}
-      <div style={{ position: 'relative', zIndex: 1, display: 'flex', minHeight: '100vh' }}>
-        <aside id="app-sidebar" className="sidebar" aria-label="Sidebar" style={{
-          width: 220, flexShrink: 0,
-          padding: 'calc(24px + env(safe-area-inset-top, 0px)) 12px calc(24px + env(safe-area-inset-bottom, 0px))',
-          display: 'flex', flexDirection: 'column', gap: 4,
-          borderRight: '1px solid rgba(255,255,255,0.07)',
-          background: 'var(--sidebar-bg)',
-          backdropFilter: 'blur(20px)',
-          position: 'fixed', top: 0, bottom: 0,
-          zIndex: 20,
-        }}>
-          <div style={{ padding: '8px 14px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: 8 }}>
-            <div className="font-display" style={{ fontSize: 20, letterSpacing: '-0.02em' }}>Finesse</div>
-            <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 2 }}>Personal finance</div>
+      <AppShell
+        nav={NAV}
+        view={view}
+        onNavigate={navigate}
+        brand="Finesse"
+        brandSub="Personal finance"
+        sidebarTop={accounts.length > 0 && (
+          <div className="sidebar-section">
+            <label className="eyebrow" htmlFor="account-switcher">Account</label>
+            <select
+              id="account-switcher"
+              className="input input-sm"
+              value={activeAccountId || ''}
+              onChange={e => setActiveAccountId(Number(e.target.value))}
+            >
+              {accounts.map(account => (
+                <option key={account.id} value={account.id}>{account.name}</option>
+              ))}
+            </select>
+            {activeAccount && <span className="muted text-sm" style={{ paddingLeft: 8 }}>{fmt(activeAccount.balance || 0)}</span>}
           </div>
-          {accounts.length > 0 && (
-            <div style={{ padding: '4px 4px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: 8 }}>
-              <label htmlFor="account-switcher" style={{ color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', margin: '0 10px 6px' }}>
-                Account
-              </label>
-              <select id="account-switcher" className="glass-input" value={activeAccountId || ''} onChange={e => setActiveAccountId(Number(e.target.value))}
-                style={{ padding: '8px 10px', fontSize: 12, borderRadius: 9 }}>
-                {accounts.map(account => (
-                  <option key={account.id} value={account.id}>{account.name}</option>
-                ))}
-              </select>
-              {activeAccount && (
-                <div style={{ color: 'var(--text-muted)', fontSize: 11, margin: '6px 10px 0' }}>
-                  {fmt(activeAccount.balance || 0)}
-                </div>
-              )}
-            </div>
-          )}
-          {/* Scrolls once the list outgrows the viewport. Without this the last
-              few items are simply unreachable on a short window — the sidebar is
-              fixed to the full height, so overflow has nowhere to go. */}
-          <nav aria-label="Primary" style={{
-            display: 'flex', flexDirection: 'column', gap: 4,
-            flex: 1, minHeight: 0, overflowY: 'auto',
-          }}>
-            {NAV.map(({ id, label, Icon }) => (
-              <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} onClick={() => navigate(id)} type="button"
-                aria-current={view === id ? 'page' : undefined}>
-                <Icon size={16} aria-hidden="true" /><span>{label}</span>
-              </button>
-            ))}
-          </nav>
-        </aside>
-
-        {sidebarOpen && (
-          <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 19,
-            backdropFilter: 'blur(2px)', WebkitBackdropFilter: 'blur(2px)'
-          }} />
         )}
-
-        <main style={{
-          flex: 1,
-          padding: 'calc(24px + env(safe-area-inset-top, 0px)) calc(20px + env(safe-area-inset-right, 0px)) calc(24px + env(safe-area-inset-bottom, 0px)) calc(20px + env(safe-area-inset-left, 0px))',
-          maxWidth: 900,
-          minWidth: 0,
-          marginLeft: 220,
-        }} className="main-content">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }} className="page-header">
-            <button type="button" className="mobile-menu-btn" onClick={() => setSidebarOpen(v => !v)}
-              aria-label={sidebarOpen ? 'Close navigation' : 'Open navigation'}
-              aria-expanded={sidebarOpen} aria-controls="app-sidebar" style={{
-              background: 'var(--mobile-btn-bg)', border: '1px solid var(--mobile-btn-border)',
-              borderRadius: 10, width: 38, height: 38, cursor: 'pointer', color: 'white',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
-            }}><Menu size={18} aria-hidden="true" /></button>
-            <h1 className="font-display" style={{ fontSize: 20, fontWeight: 400, margin: 0, flex: 1, minWidth: 0 }}>
-              {view === 'categoryDetail'
-                ? (categories.find(c => Number(c.id) === Number(detailCategoryId))?.name || 'Category')
-                : NAV.find(n => n.id === view)?.label}
-            </h1>
+        sidebarFoot={<><span>Everything stays on this device.</span><span>⌘K to jump anywhere.</span></>}
+      >
+        <main className="page">
+          <PageHeader
+            eyebrow={view === 'categoryDetail' ? 'Category' : 'Finesse'}
+            title={view === 'categoryDetail'
+              ? (categories.find(c => Number(c.id) === Number(detailCategoryId))?.name || 'Category')
+              : NAV.find(n => n.id === view)?.label}
+            subtitle={activeAccount && view !== 'categoryDetail' ? activeAccount.name : null}
+          >
             <NudgeCenter nudges={nudges} onDismiss={handleDismissNudge} onNavigate={handleNudgeNavigate} />
-          </div>
+          </PageHeader>
 
           {/* A staged budget changes every allowance on a date the user chose
               days ago. It stays visible on every view until it lands. */}
           {stagedBudgetConfig && (
-            <div className="glass" style={{
-              borderRadius: 14, padding: '12px 16px', marginBottom: 16,
-              display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-              borderLeft: '3px solid var(--accent-blue)',
-            }}>
-              <CalendarClock size={16} style={{ color: 'var(--accent-blue)', flexShrink: 0 }} />
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>
-                  New budget applies on {stagedBudgetLabel}
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                  {stagedBudgetSummary.categoryCount} categories, {stagedBudgetSummary.variableCount} variables
-                  {stagedBudgetSummary.summary ? ` — ${stagedBudgetSummary.summary}` : ''}.
-                  Nothing has changed yet.
-                </div>
-              </div>
-              <button className="btn-secondary" onClick={handleCancelStagedBudgetConfig}
-                style={{ fontSize: 12, flexShrink: 0 }}>
-                Cancel
-              </button>
-            </div>
+            <Banner
+              tone="info"
+              icon={CalendarClock}
+              title={`New budget applies on ${stagedBudgetLabel}`}
+              actions={<button className="btn-secondary btn-sm" onClick={handleCancelStagedBudgetConfig}>Cancel</button>}
+            >
+              {stagedBudgetSummary.categoryCount} categories, {stagedBudgetSummary.variableCount} variables
+              {stagedBudgetSummary.summary ? ` — ${stagedBudgetSummary.summary}` : ''}. Nothing has changed yet.
+            </Banner>
           )}
 
           {!accountsQuery ? (
-            <div className="glass" aria-busy="true" style={{ borderRadius: 16, padding: '64px 24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
+            <div className="card" aria-busy="true" style={{ borderRadius: 'var(--radius-lg)', padding: '64px 24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
               Loading your finances…
             </div>
           ) : (
           <Suspense fallback={
-            <div className="glass" style={{ borderRadius: 16, padding: '48px 24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
+            <div className="card" style={{ borderRadius: 'var(--radius-lg)', padding: '48px 24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
               Loading…
             </div>
           }>
@@ -1496,7 +1438,7 @@ export default function App() {
             />
           )}
           {view === 'settings' && (
-            <SettingsView onExport={handleExport} onExportCSV={handleExportCSV}
+            <SettingsView resolvedTheme={resolvedTheme} onExport={handleExport} onExportCSV={handleExportCSV}
               onImport={handleImport} onResetBudget={() => resetBudget(activeAccountId)}
               onGenerateShareUrl={handleGenerateShareUrl} onOpenExportChatSummary={handleOpenExportChatSummary}
               categories={categories} settings={settings} onSaveSettings={handleSaveSettings}
@@ -1524,7 +1466,7 @@ export default function App() {
           )}
           </Suspense>)}
         </main>
-      </div>
+      </AppShell>
 
       {/* ── Modals ── */}
       {modal === 'addCategory' && (
@@ -1671,19 +1613,21 @@ export default function App() {
           onClose={() => setModal(null)} />
       )}
       {modal === 'shortcuts' && (
-        <Modal title="Keyboard shortcuts" onClose={() => setModal(null)}>
+        <Modal title="Keyboard shortcuts" onClose={() => setModal(null)}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-primary" onClick={() => setModal(null)} style={{ flex: 1 }}>Got it</button>
+      </>}
+    >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {SHORTCUTS.map(([keys, description]) => (
-              <div key={keys} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', borderRadius: 9, background: 'rgba(255,255,255,0.04)' }}>
+              <div key={keys} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 12px', borderRadius: 'var(--radius-sm)', background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)' }}>
                 <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{description}</span>
-                <kbd style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+                <kbd style={{ fontSize: 11, padding: '3px 8px', borderRadius: 'var(--radius-xs)', background: 'color-mix(in srgb, var(--text-primary) 7%, transparent)', border: '1px solid color-mix(in srgb, var(--text-primary) 12%, transparent)', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
                   {keys}
                 </kbd>
               </div>
             ))}
-          </div>
-          <div className="modal-actions" style={{ display: 'flex', marginTop: 18 }}>
-            <button className="btn-primary" onClick={() => setModal(null)} style={{ flex: 1 }}>Got it</button>
           </div>
         </Modal>
       )}
@@ -1737,18 +1681,6 @@ export default function App() {
 
       {dialogEl}
       {toastEl}
-
-      <style>{`
-        @media (min-width: 768px) {
-          .sidebar { left: 0 !important; }
-          .mobile-menu-btn { display: none !important; }
-          .sidebar-overlay { display: none !important; }
-        }
-        @media (max-width: 767px) {
-          .sidebar { left: ${sidebarOpen ? '0' : '-220px'} !important; transition: left 0.25s ease; }
-          .main-content { margin-left: 0 !important; }
-        }
-      `}</style>
-    </div>
+    </>
   );
 }

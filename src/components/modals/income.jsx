@@ -32,17 +32,26 @@ export function AddIncomeModal({ onAdd, onClose, income = null, onSave }) {
   };
 
   return (
-    <Modal title={isEditing ? 'Edit Income' : 'Add Income'} onClose={onClose}>
+    <Modal title={isEditing ? 'Edit Income' : 'Add Income'} onClose={onClose}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
+            disabled={!name.trim() || !amount}>
+            {isEditing ? 'Save Changes' : 'Add Income'}
+          </button>
+      </>}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <Field label="Name">
           {id => (
-            <input id={id} className="glass-input" placeholder="e.g. Salary" value={name}
+            <input id={id} className="input" placeholder="e.g. Salary" value={name}
               onChange={e => setName(e.target.value)} autoFocus />
           )}
         </Field>
         <Field label="Amount (£)">
           {id => (
-            <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
+            <input id={id} className="input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
               onChange={e => setAmount(e.target.value)} />
           )}
         </Field>
@@ -50,13 +59,6 @@ export function AddIncomeModal({ onAdd, onClose, income = null, onSave }) {
           resetFrequency={resetFrequency} setResetFrequency={setResetFrequency}
           payDayOfMonth={payDayOfMonth} setPayDayOfMonth={setPayDayOfMonth}
         />
-        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-            disabled={!name.trim() || !amount}>
-            {isEditing ? 'Save Changes' : 'Add Income'}
-          </button>
-        </div>
       </div>
     </Modal>
   );
@@ -84,11 +86,20 @@ export function AddOneOffIncomeModal({ onAdd, onClose, categories = [] }) {
   };
 
   return (
-    <Modal title="One-Off Income" onClose={onClose}>
+    <Modal title="One-Off Income" onClose={onClose}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
+            disabled={!name.trim() || parsedAmount <= 0 || !date}>
+            Add to Account
+          </button>
+      </>}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <Field label="Source">
           {id => (
-            <input id={id} className="glass-input" placeholder="e.g. Gift or refund" value={name}
+            <input id={id} className="input" placeholder="e.g. Gift or refund" value={name}
               onChange={e => setName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()}
               autoFocus />
@@ -96,7 +107,7 @@ export function AddOneOffIncomeModal({ onAdd, onClose, categories = [] }) {
         </Field>
         <Field label="Amount (£)">
           {id => (
-            <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
+            <input id={id} className="input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
               onChange={e => setAmount(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
           )}
@@ -104,7 +115,7 @@ export function AddOneOffIncomeModal({ onAdd, onClose, categories = [] }) {
         <DateInput value={date} onChange={setDate} label="Date received" />
         <Field label="Note">
           {id => (
-            <input id={id} className="glass-input" placeholder="Optional" value={note}
+            <input id={id} className="input" placeholder="Optional" value={note}
               onChange={e => setNote(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
           )}
@@ -112,7 +123,7 @@ export function AddOneOffIncomeModal({ onAdd, onClose, categories = [] }) {
         {categories.length > 0 && (
           <Field label="Allocate to category (optional)">
             {id => (
-              <select id={id} className="glass-input" value={categoryId} onChange={e => setCategoryId(e.target.value)}>
+              <select id={id} className="input" value={categoryId} onChange={e => setCategoryId(e.target.value)}>
                 <option value="">None — just add to balance</option>
                 {categories.map(cat => (
                   <option key={cat.id} value={cat.id}>{cat.name}</option>
@@ -121,13 +132,6 @@ export function AddOneOffIncomeModal({ onAdd, onClose, categories = [] }) {
             )}
           </Field>
         )}
-        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-            disabled={!name.trim() || parsedAmount <= 0 || !date}>
-            Add to Account
-          </button>
-        </div>
       </div>
     </Modal>
   );
@@ -138,18 +142,20 @@ export function FastForwardModal({ onConfirm, onClose }) {
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
 
   return (
-    <Modal title="Early Pay" onClose={onClose}>
+    <Modal title="Early Pay" onClose={onClose}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+        <button className="btn-primary" onClick={() => { onConfirm(dateOnlyToISO(date)); onClose(); }} style={{ flex: 2 }}>
+          Mark as Received
+        </button>
+      </>}
+    >
       <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 18, lineHeight: 1.6 }}>
         Got paid early? Set the actual date you received this income. This credits the active account and updates the next expected pay date.
       </div>
       <div style={{ marginBottom: 18 }}>
         <DateInput value={date} onChange={setDate} label="Pay received date" />
-      </div>
-      <div className="modal-actions" style={{ display: 'flex', gap: 10 }}>
-        <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-        <button className="btn-primary" onClick={() => { onConfirm(dateOnlyToISO(date)); onClose(); }} style={{ flex: 2 }}>
-          Mark as Received
-        </button>
       </div>
     </Modal>
   );

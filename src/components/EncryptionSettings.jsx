@@ -135,9 +135,9 @@ export default function EncryptionSettings({ onBackup, onUnlocked, showConfirm, 
   if (!vaultSupported()) return null;
 
   return (
-    <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+    <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '24px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
-        <ShieldCheck size={16} color="var(--accent-mint)" aria-hidden="true" />
+        <ShieldCheck size={16} color="var(--accent)" aria-hidden="true" />
         <CardTitle as="h2">Encryption</CardTitle>
       </div>
 
@@ -215,7 +215,7 @@ function SecretFields({ secret, setSecret, confirm, setConfirm, idPrefix, disabl
       <div className="field" style={{ flex: 1, minWidth: 150 }}>
         <label className="field-label" htmlFor={`${idPrefix}-secret`}>PIN or passphrase</label>
         <input
-          id={`${idPrefix}-secret`} className="glass-input" type="password"
+          id={`${idPrefix}-secret`} className="input" type="password"
           autoComplete="new-password" value={secret} disabled={disabled}
           placeholder="4+ digits, or 8+ characters"
           onChange={e => setSecret(e.target.value)}
@@ -224,7 +224,7 @@ function SecretFields({ secret, setSecret, confirm, setConfirm, idPrefix, disabl
       <div className="field" style={{ flex: 1, minWidth: 150 }}>
         <label className="field-label" htmlFor={`${idPrefix}-confirm`}>Confirm</label>
         <input
-          id={`${idPrefix}-confirm`} className="glass-input" type="password"
+          id={`${idPrefix}-confirm`} className="input" type="password"
           autoComplete="new-password" value={confirm} disabled={disabled}
           placeholder="Repeat it"
           onChange={e => setConfirm(e.target.value)}
@@ -248,8 +248,8 @@ function DisabledPanel({
       </div>
 
       <div style={{
-        border: '1px solid rgba(251,191,112,0.3)', background: 'rgba(251,191,112,0.06)',
-        borderRadius: 12, padding: '12px 14px', marginBottom: 16,
+        border: '1px solid color-mix(in srgb, var(--accent-4) 30%, transparent)', background: 'color-mix(in srgb, var(--accent-4) 6%, transparent)',
+        borderRadius: 'var(--radius-md)', padding: '12px 14px', marginBottom: 16,
         fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6,
       }}>
         <strong style={{ color: 'var(--warn)' }}>There is no way back in without your secret.</strong>{' '}
@@ -261,7 +261,7 @@ function DisabledPanel({
         <input
           id="encrypt-backed-up" type="checkbox"
           checked={backedUp} onChange={e => setBackedUp(e.target.checked)}
-          style={{ marginTop: 2, width: 16, height: 16, accentColor: 'var(--accent-mint)' }}
+          style={{ marginTop: 2, width: 16, height: 16, accentColor: 'var(--accent)' }}
         />
         <span style={{ fontSize: 12, lineHeight: 1.6 }}>
           I&rsquo;ve saved a backup of my data first.
@@ -327,11 +327,11 @@ function EnabledPanel({
         </div>
       </details>
 
-      <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 16 }}>
+      <div style={{ borderTop: '1px solid color-mix(in srgb, var(--text-primary) 8%, transparent)', paddingTop: 16 }}>
         <div className="field" style={{ marginBottom: 12 }}>
           <label className="field-label" htmlFor="vault-current">Current PIN or passphrase</label>
           <input
-            id="vault-current" className="glass-input" type="password" autoComplete="current-password"
+            id="vault-current" className="input" type="password" autoComplete="current-password"
             value={currentSecret} disabled={Boolean(busy)}
             onChange={e => setCurrentSecret(e.target.value)}
           />
@@ -414,8 +414,8 @@ function RecoveryCodePanel({ code, onDone }) {
         won&rsquo;t be shown again.
       </div>
 
-      <div className="glass" style={{
-        borderRadius: 12, padding: '16px 14px', textAlign: 'center',
+      <div className="card" style={{
+        borderRadius: 'var(--radius-md)', padding: '16px 14px', textAlign: 'center',
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         fontSize: 15, letterSpacing: '0.08em', wordBreak: 'break-all', lineHeight: 1.8,
       }}>
@@ -430,7 +430,7 @@ function RecoveryCodePanel({ code, onDone }) {
 
       <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', margin: '16px 0 14px' }}>
         <input id="recovery-saved" type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)}
-          style={{ marginTop: 2, width: 16, height: 16, accentColor: 'var(--accent-mint)' }} />
+          style={{ marginTop: 2, width: 16, height: 16, accentColor: 'var(--accent)' }} />
         <span style={{ fontSize: 12, lineHeight: 1.6 }}>
           I&rsquo;ve written this code down somewhere safe.
         </span>

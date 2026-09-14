@@ -21,6 +21,8 @@ A personal finance PWA (Progressive Web App) for a single user. It runs entirely
 - **lucide-react** for icons
 - **date-fns 4** for date arithmetic
 - **pdfjs-dist** to read a PDF statement's own text layer; **tesseract.js** to OCR a photo, screenshot or scanned page — both loaded on demand (`import()`), never from the main bundle, and both self-hosted under `public/tesseract/` rather than fetched from a CDN (see "Statement OCR" below)
+- **@fontsource** for DM Sans, DM Serif Display and JetBrains Mono, self-hosted for the same reason — see "Styling rules"
+- **A design system shared byte-for-byte with [Finesse Fit](https://github.com/TheCharlesChristy/finesse-fit)** — see [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md)
 
 ---
 
@@ -31,7 +33,13 @@ src/
 ├── App.jsx               # Root: routing, modal state, auto-reset orchestration, all handlers
 ├── db.js                 # Dexie schema + every database helper function
 ├── utils.js              # Pure functions only — cycles, scheduling, forecasting, formatting
-├── index.css             # All styling: CSS variables, glass classes, component styles
+├── index.css             # All styling. Everything above the app-specific marker is
+│                         #   SHARED verbatim with Finesse Fit — see DESIGN_SYSTEM.md
+├── theme/                # SHARED — the appearance model and the OKLCH palette generator
+│   ├── palettes.js       #   the curated catalogue (names only; colours live in index.css)
+│   ├── custom.js         #   hue/harmony/intensity/tint → six OKLCH tokens
+│   ├── appearance.js     #   the model, normalisation, applying it to <html>
+│   └── useAppearance.js  #   the hook App.jsx calls once
 ├── csv.js                # Pure: bank-statement parsing (CSV, a PDF's own column
 │                         #   geometry, and free-form OCR text), column mapping,
 │                         #   dedupe (same-day and date-tolerant), reconciliation
@@ -63,7 +71,7 @@ src/
 │   │   ├── Goals.jsx         #   savings pots and debts
 │   │   └── Wishlist.jsx
 │   ├── CategoryDetail.jsx    # not in NAV — opened by tapping a category
-│   └── Settings.jsx          # NAV
+│   └── Settings.jsx          # NAV — tabs: Appearance | Budget | Privacy | Data | About
 ├── components/
 │   ├── QuickAdd.jsx      # Floating "log an expense" button (mobile)
 │   ├── CommandPalette.jsx # ⌘K: jump to a view, run an action, find a transaction
@@ -81,7 +89,9 @@ src/
 │   ├── EncryptionSettings.jsx # Turning encryption on and off, and the recovery code
 │   ├── VariablesSettings.jsx  # Named values for allowance formulas — a Settings card
 │   ├── ReceiptField.jsx, ReceiptViewer.jsx, useBlobUrl.js
-│   ├── ui.jsx            # Modal shell (focus trap), IconButton, Field, CardTitle
+│   ├── AppShell.jsx      # SHARED — sidebar + mobile tab bar + "More" sheet
+│   ├── AppearanceSettings.jsx # SHARED — the palette / finish / density panel
+│   ├── ui.jsx            # SHARED — Modal, Card, Field, Stat, Meter, Banner, Tabs, Portal…
 │   ├── useDialog.jsx     # Promise-based confirm / alert / prompt
 │   └── Toast.jsx         # Transient confirmations with an optional Undo action
 └── __tests__/            # Vitest: utils / csv / prediction (pure),
@@ -280,7 +290,8 @@ Four things worth preserving if you touch this:
   `public/tesseract/**` and the `vendor-pdf`/`vendor-ocr` script chunks from
   the service worker's precache (they're multi-megabyte and rarely needed),
   but adds a `runtimeCaching` rule so the first real use caches them for
-  offline reuse after that — the same pattern already used for Google Fonts.
+  offline reuse after that. (It used to say "the same pattern already used for
+  Google Fonts"; the fonts are self-hosted now and that rule is gone.)
 - **Only the SIMD build of tesseract-core is shipped**, and `ocr.js` points
   `corePath` at that exact file rather than a directory. Tesseract's own
   feature-detection otherwise reaches for a "relaxed SIMD" build this app
@@ -688,26 +699,76 @@ the same commit.
 
 ## Styling rules
 
-The design system is **liquid glass** — dark deep-blue background, frosted panels, radial gradient mesh. All design tokens are CSS custom properties in `index.css`.
+**The design system is shared with Finesse Fit, byte for byte. Read
+[DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) before touching anything visual.**
 
-- Use the semantic glass classes (`.glass`, `.btn-primary`, `.glass-input`, etc.) rather than Tailwind utilities for component styles
-- Inline styles are acceptable and used throughout — this is intentional for a single-developer project
-- Do not add new CSS files — put styles in `index.css`
-- Do not change the colour palette or font stack without a good reason; the aesthetic is deliberate
-- Fonts: **DM Serif Display** for headings (`.font-display`), **DM Sans** for body
+These files are the *same file* in both repositories — change one and copy it to
+the other in the same commit:
 
-Key CSS variables:
-```css
---good: #4fffb0     /* green / mint */
---warn: #fbbf70     /* amber */
---danger: #ff6b8a   /* red */
---accent-mint, --accent-blue, --accent-purple, --accent-warm
---text-primary, --text-secondary, --text-muted
-```
+- `src/index.css`, everything above the `FINESSE — app-specific` marker
+- `src/theme/` — `palettes.js`, `custom.js`, `appearance.js`, `useAppearance.js`
+- `src/components/ui.jsx`, `AppShell.jsx`, `AppearanceSettings.jsx`
+- `DESIGN_SYSTEM.md` itself
+
+The short version:
+
+- **Never hard-code a colour, a radius or a spacing value in a component.** Use a
+  token or a `color-mix()` of one. A literal opts that call site out of eleven
+  palettes, two schemes, three finishes and the high-contrast setting at once,
+  and nothing will tell you — it will simply look wrong in most of the
+  combinations and right in the one you were looking at. The old `--accent-mint`
+  / `--accent-blue` / `--accent-purple` / `--accent-warm` are gone; the four
+  accent roles are `--accent`, `--accent-2`, `--accent-3`, `--accent-4` and they
+  are semantic (primary action, second series, third series, highlight).
+- Use the semantic classes (`.card`, `.panel`, `.btn-primary`, `.input`, `.chip`,
+  `.list-row`, `.stat`, `.empty-state`, `.toolbar-row`…) rather than Tailwind
+  utilities or an inline `display: flex`.
+- A `.card` inside another `.card` or a dialog becomes a flat inset section
+  automatically — don't stack shadows or two sheets of glass.
+- Do not add new CSS files — `index.css` is the whole stylesheet.
+- Fonts: **DM Serif Display** for page and dialog titles (`.font-display`),
+  **DM Sans** for everything else, **JetBrains Mono** for money and any number
+  read in a column (`.metric`, `.summary-value`, `.font-mono`). All self-hosted
+  via `@fontsource` — a Google Fonts request was a network call at runtime in an
+  app that makes none, and left an offline first paint with no typeface.
+
+### Appearance
+
+Nine preferences, one object, stored on the account's settings row as
+`settings.appearance` and mirrored to the single localStorage key
+`finesse:appearance` so the boot script in `index.html` paints before React
+loads:
+
+`themeMode` · `palette` (+ `custom`) · `surface` · `density` · `corners` ·
+`contrast` · `textScale` · `motion`
+
+It lives on the settings row, which means **each account can look different** —
+and that is the point rather than an accident of where the field fitted: a
+personal and a business account one palette apart tell you which one you are in
+before you have read a word.
+
+`App.jsx` calls `useAppearance(settings?.appearance, APPEARANCE_KEY,
+settingsLoaded)`, which writes the `data-*` attributes and returns the resolved
+theme. `settingsLoaded` holds the paint back until the row is genuinely known, so
+the boot script's first frame stands rather than being overwritten with the
+defaults and corrected a frame later — the same reasoning as the lock gate.
+
+Rows written before this existed carry a flat `themeMode`; `getSettings` reads it
+as the one field it maps onto and lets `normaliseAppearance` default the rest.
+The migration happens on read — the row is only written when the user changes
+something.
+
+### A category's colour is data, not design
+
+`category.color` and `account.color` are chosen by the user and stored on the
+row, so they are the one colour that legitimately comes from a record. The
+swatch lists offer **token references** (`var(--accent-2)`) rather than hex, so a
+category keeps its *role* in the palette and re-tints when the palette changes.
+Hex values written before this still render fine.
 
 ### `.mobile-row-stack` turns a row into a column — and its children with it
 
-The class flips a flex row to `flex-direction: column` below 620px. That also
+The class flips a flex row to `flex-direction: column` below 700px. That also
 reinterprets every child's `flex-basis`: what was a *width* in a row becomes a
 *height* in a column. A `<select>` written as `flex: 1 1 220px` rendered as a
 220px-tall box with 180px of nothing inside it, and three Settings cards were
@@ -718,30 +779,53 @@ wants anyway — `align-items: stretch` already gives each child the full width,
 and the height should come from the content. **If you add a `.mobile-row-stack`,
 size its children for the row case and let the media query handle the column.**
 
+New code should reach for `.row`, `.split`, `.toolbar-row` and `.grid-auto`
+instead; the `.mobile-*` helpers stay for the screens that predate them.
+
+### Breakpoints
+
+Four, each with one job: **1100px** two-column pages fold to one; **860px** the
+sidebar becomes a floating bottom tab bar and dialogs become sheets; **700px**
+inline content rows stack; **430px** the narrowest phone in use. 860 and 700 are
+deliberately different — a filter row that stacks the moment the sidebar
+disappears wastes the width a tablet still has.
+
 ### One scroll container per screen
 
 A dialog scrolls; the overlay behind it does not, and neither does the page
-behind that. `.modal-box` is capped at `min(90vh, 100%)` — `100%` being the
+behind that. `.modal-box` is capped at `min(860px, 100%)` — `100%` being the
 overlay's *content* box, safe-area padding already subtracted — so it can never
 overflow the overlay and the overlay never needs a scrollbar of its own.
 
-That cap used to be `calc(100dvh - 20px)`, which ignored the safe-area insets
-the overlay was carrying. On a notched iPhone the box came out 81px taller than
-the space it had, the overlay scrolled to make up the difference, and a flex
+That cap used to be `calc(100dvh - 20px)`, which ignored the safe-area insets the
+overlay was carrying. On a notched iPhone the box came out 81px taller than the
+space it had, the overlay scrolled to make up the difference, and a flex
 container drops its bottom padding in the overflow it scrolls — so the footer of
 a tall modal sat below the fold with nothing left to scroll to reach it.
 
-Two rules follow:
+The dialog's actions now live in `Modal`'s `footer` prop, outside the scrolling
+body entirely, which removes the problem rather than sizing around it. A footer
+outside the body is also outside the `<form>`, so `footer` may be a function and
+is handed the form's id for `type="submit" form={formId}`.
+
+Two rules still follow:
 
 - **A list that scrolls inside something else gets `.scroll-region`,** which
-  releases its `max-height` below 620px. A scroll box inside a scroll box on a
-  phone swallows the gesture and hides everything after it. This applies to
-  cards on a page as much as to dialogs.
+  releases its `max-height` below 860px. A scroll box inside a scroll box on a
+  phone swallows the gesture and hides everything after it.
 - **Every overlay calls `useScrollLock`.** `overflow: hidden` on the body is not
   enough on iOS; the page is pinned with `position: fixed` at its current offset
   and restored on release. The count is shared, because these nest — a receipt
   viewer opened from inside the transaction modal must not hand the page back
   when it alone closes.
+
+### Popovers positioned by script must be portalled
+
+Under the Glass finish a card carries a `backdrop-filter`, and an element with
+one becomes the containing block for `position: fixed` descendants. A popover
+positioned against the viewport from inside a card would anchor to the card
+instead — silently, and only under that one setting. Render it through `Portal`
+from `ui.jsx`.
 
 ---
 
@@ -775,9 +859,15 @@ will land on the right page and the wrong tab.
 4. Add it to `PAGE_OF` and the tab sweep in `scripts/smoke.mjs`
 
 Tab bars come from `Tabs` in `components/ui.jsx` — never hand-rolled, so the
-four of them can't drift apart. Its styling is `.tab-bar` / `.tab-item` in
-`index.css`; icons are hidden below 620px, which is what lets four tabs fit an
-iPhone SE without the bar scrolling.
+five of them can't drift apart. Its styling is `.tab-bar` / `.tab-pill` in the
+shared half of `index.css`; the strip sizes to its labels on a desktop and
+stretches on a phone, where the icons are dropped so four tabs fit an iPhone SE
+without the bar scrolling.
+
+Settings is a consolidated page too, with five tabs. Backup, storage durability
+and a full reset sit under **Data** together — they are the three things that
+decide whether the data survives, and having them eight screens below the colour
+picker was the old single-column layout's real problem.
 
 ---
 
@@ -791,10 +881,26 @@ iPhone SE without the bar scrolling.
 
 Shared pieces (`IncomeAllocationEditor`, `FormulaInput`, `ColourPicker`, `PALETTE`, `FrequencyFields`) live in `modals/shared.jsx` — reuse them rather than rebuilding.
 
-Modals use `.modal-overlay` and `.modal-box` CSS classes. Always close on overlay click:
+`Modal` from `components/ui.jsx` handles the overlay, the focus trap, Escape, the
+scroll lock and dismissal — none of that is written per modal.
+
+**Actions go in the `footer` prop, not at the end of the children.** The footer
+sits outside the scrolling body, which is what keeps Save reachable on a form
+long enough to scroll — and therefore outside the `<form>`, so `footer` may be a
+function and is handed the form's id:
+
 ```jsx
-<div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+<Modal title="Add expense" onClose={onClose} footer={({ formId }) => (
+  <>
+    <span className="spacer" />
+    <button className="btn-secondary" type="button" onClick={onClose}>Cancel</button>
+    <button className="btn-primary" type="submit" form={formId}>Save</button>
+  </>
+)}>
 ```
+
+The five action rows that can't move — a branch of a form that has two, a wizard
+step — use `.form-actions` instead, which is the same shape in the flow.
 
 ---
 
@@ -844,6 +950,21 @@ happily if `seal` were the identity function — if you add a case here, check i
 the raw way. Its `FAST` Argon2 parameters exist so the suite stays runnable;
 the algorithm under test is unchanged.
 
+`theme.test.js` covers the appearance model — normalisation, the legacy
+`themeMode` migration, what `applyAppearance` writes and (just as importantly)
+what it *clears*, and the OKLCH ramps. What a unit test cannot cover is whether
+the attributes it writes are *answered* by a stylesheet: a palette whose CSS
+block was never written, or a finish whose tokens nothing reads, passes every
+unit test and paints exactly the same page. That is what the appearance step in
+`scripts/smoke.mjs` is for — it drives a real browser and asserts the painted
+`--accent`, the painted `--bg` and a real card's `box-shadow` actually change,
+and that the choice survives a reload.
+
+Card titles render as tracked small-caps, so `innerText` hands them back
+upper-cased. The smoke test compares through `shows()` (case-insensitive) rather
+than writing "STORAGE" into an assertion — otherwise a styling change and a
+missing card look identical.
+
 `npm run lint` is clean — keep it that way. `setState` inside an effect is the
 error you're most likely to hit; the fix is almost always to derive the value
 during render instead. The two allocation effects in `modals/category.jsx` are
@@ -870,6 +991,15 @@ so.
 - **Don't add a way to recover data without the secret or the recovery code.**
   There isn't one, and any hint otherwise in the UI is a lie the user will act on.
 - **Don't put business logic in views.** Views render and emit events. Logic goes in `utils.js` (pure) or `db.js` (DB operations) or `App.jsx` (orchestration).
+- **Don't let the two repositories' shared files drift.** `src/theme/`,
+  `src/components/ui.jsx`, `AppShell.jsx`, `AppearanceSettings.jsx`,
+  `DESIGN_SYSTEM.md` and everything in `index.css` above the app-specific marker
+  are the same file in Finesse Fit. Change one, copy it across in the same commit.
+- **Don't hard-code a colour, a radius or a spacing value.** See "Styling rules".
+- **Don't position a popover with `position: fixed` inside a card.** Under the
+  Glass finish it will anchor to the card. Use `Portal` from `ui.jsx`.
+- **Don't fetch a font from a CDN.** They're self-hosted via `@fontsource`; a
+  webfont request is a network call at runtime in an app that makes none.
 
 ---
 

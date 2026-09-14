@@ -166,10 +166,10 @@ export default function Calendar({
 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
+      <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '20px 22px' }}>
         <div className="mobile-row-stack" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <CalendarDays size={18} color="var(--accent-blue)" aria-hidden="true" />
+            <CalendarDays size={18} color="var(--accent-2)" aria-hidden="true" />
             <div>
               <CardTitle as="h2" style={{ fontSize: 16 }}>Financial Calendar</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>Paydays, resets, and subscriptions</div>
@@ -192,9 +192,9 @@ export default function Calendar({
           </div>
         </div>
 
-        <div className="finance-calendar">
+        <div className="calendar">
           {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => (
-            <div key={day} className="finance-calendar-weekday">{day}</div>
+            <div key={day} className="calendar-weekday">{day}</div>
           ))}
           {days.map(day => {
             const key = format(day, 'yyyy-MM-dd');
@@ -216,7 +216,7 @@ export default function Calendar({
                 onClick={() => setSelectedDay(day)}
                 aria-label={`${format(day, 'd MMMM yyyy')}, ${dayEvents.length} event${dayEvents.length === 1 ? '' : 's'}`}
                 aria-pressed={isSelected}
-                className={`finance-calendar-day${inMonth ? '' : ' muted'}${isToday ? ' today' : ''}${isSelected ? ' selected' : ''}`}
+                className={`calendar-day${inMonth ? '' : ' muted'}${isToday ? ' today' : ''}${isSelected ? ' selected' : ''}`}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <span style={{ fontSize: 12, fontWeight: isToday ? 800 : 600 }}>{format(day, 'd')}</span>
@@ -224,19 +224,19 @@ export default function Calendar({
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {dayEvents.slice(0, 2).map(event => (
-                    <div key={event.id} className={`finance-calendar-event ${event.type}`}>
+                    <div key={event.id} className={`calendar-event ${event.type}`}>
                       <span style={{
-                        width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                        background: event.type === 'income' ? 'var(--accent-mint)'
+                        width: 6, height: 6, borderRadius: 'var(--radius-full)', flexShrink: 0,
+                        background: event.type === 'income' ? 'var(--accent)'
                           : event.type === 'refund' ? 'var(--good)'
-                          : event.color || 'var(--accent-warm)',
+                          : event.color || 'var(--accent-4)',
                       }} />
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.title}</span>
                     </div>
                   ))}
                 </div>
                 {dayEvents.length > 0 && dayNet !== 0 && (
-                  <div style={{ marginTop: 'auto', paddingTop: 4, fontSize: 9, color: dayNet > 0 ? 'var(--accent-mint)' : 'var(--text-muted)' }}>
+                  <div style={{ marginTop: 'auto', paddingTop: 4, fontSize: 9, color: dayNet > 0 ? 'var(--accent)' : 'var(--text-muted)' }}>
                     {dayNet > 0 ? '+' : '−'}{fmt(Math.abs(dayNet))}
                   </div>
                 )}
@@ -247,7 +247,7 @@ export default function Calendar({
       </div>
 
       {selectedDay && (
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
+        <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '20px 22px' }}>
           <div className="mobile-row-stack" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
             <div>
               <CardTitle as="h2">{format(selectedDay, 'EEEE d MMMM')}</CardTitle>
@@ -276,10 +276,10 @@ export default function Calendar({
               {selectedEvents.map(event => (
                 <div key={event.id} style={{
                   display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '10px 12px', borderRadius: 10, background: 'rgba(255,255,255,0.04)',
+                  padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)',
                 }}>
-                  {event.type === 'income' ? <Wallet size={13} color="var(--accent-mint)" />
-                    : event.type === 'subscription' ? <CreditCard size={13} color={event.color || 'var(--accent-warm)'} />
+                  {event.type === 'income' ? <Wallet size={13} color="var(--accent)" />
+                    : event.type === 'subscription' ? <CreditCard size={13} color={event.color || 'var(--accent-4)'} />
                     : <Receipt size={13} color={event.color || 'var(--text-muted)'} />}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -291,7 +291,7 @@ export default function Calendar({
                   </div>
                   <div style={{
                     fontSize: 13, fontWeight: 700, flexShrink: 0,
-                    color: event.type === 'income' || event.type === 'refund' ? 'var(--accent-mint)' : 'var(--accent-warm)',
+                    color: event.type === 'income' || event.type === 'refund' ? 'var(--accent)' : 'var(--accent-4)',
                   }}>
                     {event.type === 'income' || event.type === 'refund' ? '+' : '-'}{fmt(event.amount)}
                   </div>
@@ -309,7 +309,7 @@ export default function Calendar({
       )}
 
       <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 14 }}>
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
+        <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '20px 22px' }}>
           <CardTitle as="h2" style={{ marginBottom: 12 }}>Upcoming</CardTitle>
           {upcoming.length === 0 ? (
             <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Nothing scheduled in this calendar view.</div>
@@ -321,13 +321,13 @@ export default function Calendar({
                   gridTemplateColumns: 'minmax(150px, 1fr) auto',
                   gap: 12,
                   padding: '10px 12px',
-                  borderRadius: 12,
-                  background: 'rgba(255,255,255,0.04)',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)',
                   alignItems: 'center',
                 }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      {event.type === 'income' ? <Wallet size={13} color="var(--accent-mint)" /> : <CreditCard size={13} color={event.color || 'var(--accent-warm)'} />}
+                      {event.type === 'income' ? <Wallet size={13} color="var(--accent)" /> : <CreditCard size={13} color={event.color || 'var(--accent-4)'} />}
                       <span style={{ fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.title}</span>
                     </div>
                     <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 2 }}>
@@ -335,7 +335,7 @@ export default function Calendar({
                       {event.date >= today ? ` · ${differenceInDays(event.date, today)}d` : ''}
                     </div>
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: event.type === 'income' ? 'var(--accent-mint)' : 'var(--accent-warm)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: event.type === 'income' ? 'var(--accent)' : 'var(--accent-4)' }}>
                     {event.type === 'income' ? '+' : '-'}{fmt(event.amount)}
                   </div>
                 </div>
@@ -344,7 +344,7 @@ export default function Calendar({
           )}
         </div>
 
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
+        <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '20px 22px' }}>
           <div className="mobile-row-stack" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
             <CardTitle as="h2">Subscriptions</CardTitle>
             <button className="btn-primary mobile-full" onClick={onAddSubscription}
@@ -366,14 +366,14 @@ export default function Calendar({
                 return (
                   <div key={subscription.id} style={{
                     padding: '10px 12px',
-                    borderRadius: 12,
-                    background: subscription.active === false ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.04)',
-                    border: subscription.active === false ? '1px solid rgba(251,191,112,0.16)' : '1px solid transparent',
+                    borderRadius: 'var(--radius-md)',
+                    background: subscription.active === false ? 'color-mix(in srgb, var(--text-primary) 2%, transparent)' : 'color-mix(in srgb, var(--text-primary) 4%, transparent)',
+                    border: subscription.active === false ? '1px solid color-mix(in srgb, var(--accent-4) 16%, transparent)' : '1px solid transparent',
                   }}>
                     <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) auto', gap: 10, alignItems: 'center' }}>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ width: 8, height: 8, borderRadius: '50%', background: category?.color || 'var(--accent-warm)', flexShrink: 0 }} />
+                          <span style={{ width: 8, height: 8, borderRadius: 'var(--radius-full)', background: category?.color || 'var(--accent-4)', flexShrink: 0 }} />
                           <span style={{ fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {subscription.name}
                           </span>
@@ -383,7 +383,7 @@ export default function Calendar({
                           {subscription.active === false ? ' · Paused' : ` · next ${format(new Date(subscription.nextDueAt), 'd MMM')}`}
                         </div>
                       </div>
-                      <div className="mobile-center-left" style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent-warm)', textAlign: 'right' }}>-{fmt(subscription.amount || 0)}</div>
+                      <div className="mobile-center-left" style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent-4)', textAlign: 'right' }}>-{fmt(subscription.amount || 0)}</div>
                     </div>
                     <div className="mobile-actions" style={{ display: 'flex', gap: 7, justifyContent: 'flex-end', marginTop: 8, flexWrap: 'wrap' }}>
                       <IconButton onClick={() => onToggleSubscription(subscription)}

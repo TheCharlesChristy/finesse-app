@@ -68,15 +68,6 @@ export default defineConfig({
         globIgnores: ['tesseract/**', 'assets/vendor-pdf-*.js', 'assets/vendor-ocr-*.js'],
         runtimeCaching: [
           {
-            urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts',
-              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-          {
             // Tesseract's worker/core/language files, pdf.js's worker, and
             // the vendor-pdf/vendor-ocr script chunks — all same-origin, none
             // precached (see globIgnores above), all cached after first use

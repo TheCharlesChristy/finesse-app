@@ -14,25 +14,10 @@ function DialogModal({ state, onClose }) {
   const handleCancel  = () => onClose(type === 'prompt' ? null : type === 'alert' ? undefined : false);
 
   return (
-    <Modal title={title ?? defaultTitle} onClose={handleCancel}>
-      {message && (
-        <p style={{ color: 'var(--text-secondary)', fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap', margin: '0 0 18px' }}>
-          {message}
-        </p>
-      )}
-      {type === 'prompt' && (
-        <input
-          className="glass-input"
-          autoFocus
-          placeholder={placeholder}
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && isValid) handleConfirm(); }}
-          style={{ marginBottom: 16 }}
-        />
-      )}
-      <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-        {type !== 'alert' && (
+    <Modal title={title ?? defaultTitle} onClose={handleCancel}
+      footer={<>
+        <span className="spacer" />
+{type !== 'alert' && (
           <button className="btn-secondary" onClick={handleCancel} style={{ flex: 1 }}>{cancelText}</button>
         )}
         <button
@@ -43,7 +28,24 @@ function DialogModal({ state, onClose }) {
         >
           {finalConfirmText}
         </button>
-      </div>
+      </>}
+    >
+      {message && (
+        <p style={{ color: 'var(--text-secondary)', fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap', margin: '0 0 18px' }}>
+          {message}
+        </p>
+      )}
+      {type === 'prompt' && (
+        <input
+          className="input"
+          autoFocus
+          placeholder={placeholder}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && isValid) handleConfirm(); }}
+          style={{ marginBottom: 16 }}
+        />
+      )}
     </Modal>
   );
 }

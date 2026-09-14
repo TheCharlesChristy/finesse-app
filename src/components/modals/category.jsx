@@ -113,11 +113,20 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
   };
 
   return (
-    <Modal title="Add Category" onClose={onClose}>
+    <Modal title="Add Category" onClose={onClose}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+            <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
+              disabled={!name.trim() || (pacedAllowanceEnabled ? !(parseFloat(pacedAllowanceAmount) > 0) : !allowanceInput) || (isFormula && formulaResult === null) || !allocationValidation.isValid}>
+              Add Category
+            </button>
+      </>}
+    >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <Field label="Name">
             {id => (
-              <input id={id} className="glass-input" placeholder="e.g. Groceries" value={name}
+              <input id={id} className="input" placeholder="e.g. Groceries" value={name}
                 onChange={e => setName(e.target.value)} autoFocus />
             )}
           </Field>
@@ -137,11 +146,11 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
               <div>
                 <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>I can spend</label>
                 <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 86px 1fr', gap: 8 }}>
-                  <input className="glass-input" type="number" min="0" step="0.01" placeholder="15.00" value={pacedAllowanceAmount}
+                  <input className="input" type="number" min="0" step="0.01" placeholder="15.00" value={pacedAllowanceAmount}
                     onChange={e => setPacedAllowanceAmount(e.target.value)} />
-                  <input className="glass-input" type="number" min="1" step="1" value={pacedAllowanceInterval}
+                  <input className="input" type="number" min="1" step="1" value={pacedAllowanceInterval}
                     onChange={e => setPacedAllowanceInterval(e.target.value)} />
-                  <select className="glass-input" value={pacedAllowanceUnit} onChange={e => setPacedAllowanceUnit(e.target.value)}>
+                  <select className="input" value={pacedAllowanceUnit} onChange={e => setPacedAllowanceUnit(e.target.value)}>
                     <option value="day">Day(s)</option>
                     <option value="week">Week(s)</option>
                     <option value="month">Month(s)</option>
@@ -158,9 +167,9 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
                 <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Allowance (£) or Formula</label>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, lineHeight: 1.5 }}>
                   Plain number, or type{' '}
-                  <span style={{ color: 'var(--accent-mint)', fontFamily: 'monospace' }}>$</span> for variables,{' '}
-                  <span style={{ color: 'var(--accent-blue)', fontFamily: 'monospace' }}>[</span> for categories,{' '}
-                  <span style={{ color: 'var(--accent-purple)', fontFamily: 'monospace' }}>{'{' }</span> for incomes — autocomplete will appear.
+                  <span style={{ color: 'var(--accent)', fontFamily: 'monospace' }}>$</span> for variables,{' '}
+                  <span style={{ color: 'var(--accent-2)', fontFamily: 'monospace' }}>[</span> for categories,{' '}
+                  <span style={{ color: 'var(--accent-3)', fontFamily: 'monospace' }}>{'{' }</span> for incomes — autocomplete will appear.
                 </div>
                 <FormulaInput
                   value={allowanceInput}
@@ -189,7 +198,7 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
           />
           {/* Rollover — opt-in, because most people want a clean slate each
               cycle and would be confused by a budget that quietly grows. */}
-          <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: '12px 14px' }}>
+          <div style={{ background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" checked={rolloverEnabled} onChange={e => setRolloverEnabled(e.target.checked)} />
               Roll unspent budget into next cycle
@@ -209,13 +218,6 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
             )}
           </div>
           <ColourPicker color={color} onChange={setColor} />
-          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-            <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-              disabled={!name.trim() || (pacedAllowanceEnabled ? !(parseFloat(pacedAllowanceAmount) > 0) : !allowanceInput) || (isFormula && formulaResult === null) || !allocationValidation.isValid}>
-              Add Category
-            </button>
-          </div>
         </div>
     </Modal>
   );
@@ -321,10 +323,19 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
   };
 
   return (
-    <Modal title="Edit Category" onClose={onClose}>
+    <Modal title="Edit Category" onClose={onClose}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+            <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
+              disabled={!name.trim() || (pacedAllowanceEnabled ? !(parseFloat(pacedAllowanceAmount) > 0) : !allowanceInput) || (isFormula && formulaResult === null) || !allocationValidation.isValid}>
+              Save Changes
+            </button>
+      </>}
+    >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <Field label="Name">
-            {id => <input id={id} className="glass-input" value={name} onChange={e => setName(e.target.value)} autoFocus />}
+            {id => <input id={id} className="input" value={name} onChange={e => setName(e.target.value)} autoFocus />}
           </Field>
           <div>
             <div className="field-label">Allowance Type</div>
@@ -342,11 +353,11 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
               <div>
                 <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>I can spend</label>
                 <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 86px 1fr', gap: 8 }}>
-                  <input className="glass-input" type="number" min="0" step="0.01" placeholder="15.00" value={pacedAllowanceAmount}
+                  <input className="input" type="number" min="0" step="0.01" placeholder="15.00" value={pacedAllowanceAmount}
                     onChange={e => setPacedAllowanceAmount(e.target.value)} />
-                  <input className="glass-input" type="number" min="1" step="1" value={pacedAllowanceInterval}
+                  <input className="input" type="number" min="1" step="1" value={pacedAllowanceInterval}
                     onChange={e => setPacedAllowanceInterval(e.target.value)} />
-                  <select className="glass-input" value={pacedAllowanceUnit} onChange={e => setPacedAllowanceUnit(e.target.value)}>
+                  <select className="input" value={pacedAllowanceUnit} onChange={e => setPacedAllowanceUnit(e.target.value)}>
                     <option value="day">Day(s)</option>
                     <option value="week">Week(s)</option>
                     <option value="month">Month(s)</option>
@@ -363,9 +374,9 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
                 <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Allowance (£) or Formula</label>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, lineHeight: 1.5 }}>
                   Plain number, or type{' '}
-                  <span style={{ color: 'var(--accent-mint)', fontFamily: 'monospace' }}>$</span> for variables,{' '}
-                  <span style={{ color: 'var(--accent-blue)', fontFamily: 'monospace' }}>[</span> for categories,{' '}
-                  <span style={{ color: 'var(--accent-purple)', fontFamily: 'monospace' }}>{'{' }</span> for incomes — autocomplete will appear.
+                  <span style={{ color: 'var(--accent)', fontFamily: 'monospace' }}>$</span> for variables,{' '}
+                  <span style={{ color: 'var(--accent-2)', fontFamily: 'monospace' }}>[</span> for categories,{' '}
+                  <span style={{ color: 'var(--accent-3)', fontFamily: 'monospace' }}>{'{' }</span> for incomes — autocomplete will appear.
                 </div>
                 <FormulaInput
                   value={allowanceInput}
@@ -395,7 +406,7 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
           />
           {/* Rollover — opt-in, because most people want a clean slate each
               cycle and would be confused by a budget that quietly grows. */}
-          <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 12, padding: '12px 14px' }}>
+          <div style={{ background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" checked={rolloverEnabled} onChange={e => setRolloverEnabled(e.target.checked)} />
               Roll unspent budget into next cycle
@@ -415,13 +426,6 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
             )}
           </div>
           <ColourPicker color={color} onChange={setColor} />
-          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-            <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-            <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-              disabled={!name.trim() || (pacedAllowanceEnabled ? !(parseFloat(pacedAllowanceAmount) > 0) : !allowanceInput) || (isFormula && formulaResult === null) || !allocationValidation.isValid}>
-              Save Changes
-            </button>
-          </div>
         </div>
     </Modal>
   );

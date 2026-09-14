@@ -24,11 +24,11 @@ export default function CategorySelect({
   const listId = useId();
 
   const options = useMemo(() => {
-    const base = includeAll ? [{ value: 'all', label: allLabel, color: 'rgba(255,255,255,0.35)' }] : [];
+    const base = includeAll ? [{ value: 'all', label: allLabel, color: 'color-mix(in srgb, var(--text-primary) 35%, transparent)' }] : [];
     return base.concat(categories.map(category => ({
       value: String(category.id),
       label: category.name,
-      color: category.color || 'var(--accent-blue)',
+      color: category.color || 'var(--accent-2)',
       // Effective allowance, so a topped-up category shows what's really left.
       remaining: getEffectiveAllowance(category) - (Number(category.spent) || 0),
     })));
@@ -140,7 +140,7 @@ export default function CategorySelect({
       <button
         ref={triggerRef}
         type="button"
-        className="glass-input category-select-trigger"
+        className="input category-select-trigger"
         disabled={disabled}
         role="combobox"
         aria-haspopup="listbox"
@@ -161,8 +161,8 @@ export default function CategorySelect({
         <span style={{
           width: 9,
           height: 9,
-          borderRadius: '50%',
-          background: selected?.color || 'rgba(255,255,255,0.14)',
+          borderRadius: 'var(--radius-full)',
+          background: selected?.color || 'color-mix(in srgb, var(--text-primary) 14%, transparent)',
           flexShrink: 0,
         }} />
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -188,7 +188,7 @@ export default function CategorySelect({
                 role="option"
                 aria-selected={option.value === String(value)}
                 className="category-select-option"
-                style={index === activeIndex ? { background: 'rgba(255,255,255,0.07)', color: 'var(--text-primary)' } : undefined}
+                style={index === activeIndex ? { background: 'color-mix(in srgb, var(--text-primary) 7%, transparent)', color: 'var(--text-primary)' } : undefined}
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => choose(option.value)}
               >
@@ -203,7 +203,7 @@ export default function CategorySelect({
                     </span>
                   )}
                 </span>
-                {option.value === String(value) && <Check size={14} color="var(--accent-mint)" />}
+                {option.value === String(value) && <Check size={14} color="var(--accent)" />}
               </button>
             </li>
           ))}

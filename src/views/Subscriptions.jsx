@@ -153,10 +153,10 @@ export default function Subscriptions({
 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
+      <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '20px 22px' }}>
         <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <CreditCard size={18} color="var(--accent-warm)" aria-hidden="true" />
+            <CreditCard size={18} color="var(--accent-4)" aria-hidden="true" />
             <div>
               <CardTitle as="h2" style={{ fontSize: 17 }}>Subscriptions</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>Recurring expenses and account management links</div>
@@ -178,7 +178,7 @@ export default function Subscriptions({
           ['Active', activeSubscriptions.length, 'Currently scheduled'],
           ['Paused', pausedSubscriptions.length, 'Excluded from auto-log'],
         ].map(([label, value, hint]) => (
-          <div key={label} className="glass" style={{ borderRadius: 14, padding: '15px 16px' }}>
+          <div key={label} className="card" style={{ borderRadius: 'var(--radius-md)', padding: '15px 16px' }}>
             <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 5 }}>{label}</div>
             <div style={{ fontSize: 20, fontWeight: 700 }}>{value}</div>
             <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 3 }}>{hint}</div>
@@ -186,11 +186,11 @@ export default function Subscriptions({
         ))}
       </div>
 
-      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '16px' }}>
-        <div className="subs-filter-bar">
-          <div className="subs-filter-search">
+      <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '16px' }}>
+        <div className="toolbar-row">
+          <div className="search-input">
             <Search size={15} aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-            <input className="glass-input" placeholder="Search subscriptions, categories, or links" value={search}
+            <input className="input" placeholder="Search subscriptions, categories, or links" value={search}
               aria-label="Search subscriptions" onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 36 }} />
           </div>
           <div role="group" aria-label="Filter subscriptions" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -205,7 +205,7 @@ export default function Subscriptions({
               </button>
             ))}
           </div>
-          <select className="glass-input subs-filter-sort" value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="Sort subscriptions">
+          <select className="input input-inline" value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="Sort subscriptions">
             {sortOptions.map(([value, label]) => <option key={value} value={value}>Sort: {label}</option>)}
           </select>
           {filtersActive && (
@@ -241,14 +241,14 @@ export default function Subscriptions({
               return (
                 <div key={subscription.id} style={{
                   padding: '14px',
-                  borderRadius: 14,
-                  border: active ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(251,191,112,0.18)',
-                  background: active ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.025)',
+                  borderRadius: 'var(--radius-md)',
+                  border: active ? '1px solid color-mix(in srgb, var(--text-primary) 8%, transparent)' : '1px solid color-mix(in srgb, var(--accent-4) 18%, transparent)',
+                  background: active ? 'color-mix(in srgb, var(--text-primary) 4%, transparent)' : 'color-mix(in srgb, var(--text-primary) 2%, transparent)',
                 }}>
                   <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: 'minmax(190px, 1fr) auto', gap: 12, alignItems: 'start' }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                        <span style={{ width: 9, height: 9, borderRadius: '50%', background: category?.color || 'var(--accent-warm)', flexShrink: 0 }} />
+                        <span style={{ width: 9, height: 9, borderRadius: 'var(--radius-full)', background: category?.color || 'var(--accent-4)', flexShrink: 0 }} />
                         <div className="mobile-no-nowrap" style={{ fontSize: 15, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {subscription.name}
                         </div>
@@ -264,13 +264,13 @@ export default function Subscriptions({
                       )}
                       {manageUrl && (
                         <a href={manageUrl} target="_blank" rel="noreferrer"
-                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--accent-blue)', fontSize: 12, marginTop: 8, textDecoration: 'none' }}>
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--accent-2)', fontSize: 12, marginTop: 8, textDecoration: 'none' }}>
                           <ExternalLink size={12} /> {displayLink(manageUrl)}
                         </a>
                       )}
                     </div>
                     <div className="mobile-center-left" style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--accent-warm)' }}>
+                      <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--accent-4)' }}>
                         -{fmt(subscription.amount || 0)}
                       </div>
                       <div style={{

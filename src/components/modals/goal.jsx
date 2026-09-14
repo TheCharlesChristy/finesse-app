@@ -70,7 +70,15 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
   };
 
   return (
-    <Modal title={isEditing ? 'Edit Goal' : 'Add Goal'} onClose={onClose}>
+    <Modal title={isEditing ? 'Edit Goal' : 'Add Goal'} onClose={onClose}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!canSubmit}>
+            {isEditing ? 'Save Changes' : `Add ${isDebt ? 'Debt' : 'Goal'}`}
+          </button>
+      </>}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div role="group" aria-label="Goal type" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
           <button type="button" aria-pressed={!isDebt} className={!isDebt ? 'btn-primary' : 'btn-secondary'}
@@ -85,7 +93,7 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
 
         <Field label="Name">
           {id => (
-            <input id={id} className="glass-input" value={name} autoFocus
+            <input id={id} className="input" value={name} autoFocus
               placeholder={isDebt ? 'e.g. Credit card' : 'e.g. Holiday'}
               onChange={e => setName(e.target.value)} />
           )}
@@ -93,14 +101,14 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
 
         <Field label={isDebt ? 'Total owed (£)' : 'Target amount (£)'}>
           {id => (
-            <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
+            <input id={id} className="input" type="number" min="0" step="0.01" placeholder="0.00"
               value={target} onChange={e => setTarget(e.target.value)} />
           )}
         </Field>
 
         <Field label={isDebt ? 'Already paid off (£)' : 'Already saved (£)'}>
           {id => (
-            <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
+            <input id={id} className="input" type="number" min="0" step="0.01" placeholder="0.00"
               value={saved} onChange={e => setSaved(e.target.value)} />
           )}
         </Field>
@@ -109,13 +117,13 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Field label="Interest rate (APR %)" hint="Leave blank if it charges none.">
               {id => (
-                <input id={id} className="glass-input" type="number" min="0" step="0.1" placeholder="0.0"
+                <input id={id} className="input" type="number" min="0" step="0.1" placeholder="0.0"
                   value={apr} onChange={e => setApr(e.target.value)} />
               )}
             </Field>
             <Field label="Minimum payment (£)" hint="Used when ordering payoffs.">
               {id => (
-                <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
+                <input id={id} className="input" type="number" min="0" step="0.01" placeholder="0.00"
                   value={minimumPayment} onChange={e => setMinimumPayment(e.target.value)} />
               )}
             </Field>
@@ -127,7 +135,7 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
             <Field label="Set aside automatically (£)"
               hint="Taken each time the chosen income is paid. Leave blank to top it up by hand.">
               {id => (
-                <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
+                <input id={id} className="input" type="number" min="0" step="0.01" placeholder="0.00"
                   value={perCycle} onChange={e => setPerCycle(e.target.value)} />
               )}
             </Field>
@@ -135,7 +143,7 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
             {perCycleValue > 0 && (
               <Field label="From which income">
                 {id => (
-                  <select id={id} className="glass-input" value={incomeId} onChange={e => setIncomeId(e.target.value)}>
+                  <select id={id} className="input" value={incomeId} onChange={e => setIncomeId(e.target.value)}>
                     {incomes.map(income => (
                       <option key={income.id} value={income.id}>{income.name}</option>
                     ))}
@@ -148,8 +156,8 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
 
         {payoff ? (
           <div style={{
-            fontSize: 12, borderRadius: 8, padding: '9px 12px', lineHeight: 1.6,
-            background: payoff.neverClears ? 'rgba(255,107,138,0.1)' : 'rgba(255,255,255,0.04)',
+            fontSize: 12, borderRadius: 'var(--radius-xs)', padding: '9px 12px', lineHeight: 1.6,
+            background: payoff.neverClears ? 'color-mix(in srgb, var(--danger) 10%, transparent)' : 'color-mix(in srgb, var(--text-primary) 4%, transparent)',
             color: payoff.neverClears ? 'var(--danger)' : 'var(--text-muted)',
           }}>
             {payoff.neverClears ? (
@@ -169,7 +177,7 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
             )}
           </div>
         ) : cyclesNeeded != null && targetValue > 0 && (
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '9px 12px', lineHeight: 1.6 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-xs)', padding: '9px 12px', lineHeight: 1.6 }}>
             {fmt(perCycleValue)} every {cycleNoun} — {cyclesNeeded} {cyclesNeeded === 1 ? cycleNoun : `× ${cycleNoun}`} to reach {fmt(targetValue)}.
             <span style={{ display: 'block', marginTop: 3 }}>
               Pending contributions are held back from your safe-to-spend figure.
@@ -187,12 +195,6 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
 
         <ColourPicker color={color} onChange={setColor} />
 
-        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!canSubmit}>
-            {isEditing ? 'Save Changes' : `Add ${isDebt ? 'Debt' : 'Goal'}`}
-          </button>
-        </div>
       </div>
     </Modal>
   );
@@ -210,38 +212,10 @@ export function SaveForItemModal({ item, incomes = [], onConfirm, onClose }) {
   const cycleNoun = linkedIncome ? (FREQ_NOUN[getIncomeFrequency(linkedIncome)] || 'month') : 'month';
 
   return (
-    <Modal title={`Save for ${item?.name || 'this'}`} onClose={onClose}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.6 }}>
-          Creates a goal for {fmt(price)}. The wishlist can only tell you when
-          something becomes affordable; a goal actually sets the money aside.
-        </p>
-
-        <Field label="Set aside each payday (£)">
-          {id => (
-            <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
-              value={perCycle} onChange={e => setPerCycle(e.target.value)} autoFocus />
-          )}
-        </Field>
-
-        {incomes.length > 0 && perCycleValue > 0 && (
-          <Field label="From which income">
-            {id => (
-              <select id={id} className="glass-input" value={incomeId} onChange={e => setIncomeId(e.target.value)}>
-                {incomes.map(income => <option key={income.id} value={income.id}>{income.name}</option>)}
-              </select>
-            )}
-          </Field>
-        )}
-
-        {cycles != null && (
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '9px 12px' }}>
-            About {cycles} {cycles === 1 ? cycleNoun : `× ${cycleNoun}`} to save {fmt(price)}.
-          </div>
-        )}
-
-        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+    <Modal title={`Save for ${item?.name || 'this'}`} onClose={onClose}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
           <button className="btn-primary" style={{ flex: 2 }}
             onClick={() => {
               onConfirm({
@@ -256,7 +230,37 @@ export function SaveForItemModal({ item, incomes = [], onConfirm, onClose }) {
             }}>
             Create Goal
           </button>
-        </div>
+      </>}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.6 }}>
+          Creates a goal for {fmt(price)}. The wishlist can only tell you when
+          something becomes affordable; a goal actually sets the money aside.
+        </p>
+
+        <Field label="Set aside each payday (£)">
+          {id => (
+            <input id={id} className="input" type="number" min="0" step="0.01" placeholder="0.00"
+              value={perCycle} onChange={e => setPerCycle(e.target.value)} autoFocus />
+          )}
+        </Field>
+
+        {incomes.length > 0 && perCycleValue > 0 && (
+          <Field label="From which income">
+            {id => (
+              <select id={id} className="input" value={incomeId} onChange={e => setIncomeId(e.target.value)}>
+                {incomes.map(income => <option key={income.id} value={income.id}>{income.name}</option>)}
+              </select>
+            )}
+          </Field>
+        )}
+
+        {cycles != null && (
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-xs)', padding: '9px 12px' }}>
+            About {cycles} {cycles === 1 ? cycleNoun : `× ${cycleNoun}`} to save {fmt(price)}.
+          </div>
+        )}
+
       </div>
     </Modal>
   );

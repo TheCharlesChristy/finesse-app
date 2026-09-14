@@ -70,7 +70,13 @@ export function ExportChatSummaryOptionsModal({ schema, onConfirm, onClose }) {
   return (
     <Modal title="Chat Summary Export"
       subtitle="Choose what to include. Free-text fields are unchecked by default since they may contain personal detail."
-      onClose={onClose}>
+      onClose={onClose}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+        <button className="btn-primary" onClick={() => onConfirm(selection)} style={{ flex: 2 }}>Generate Export</button>
+      </>}
+    >
       <div className="scroll-region" style={{ display: 'flex', flexDirection: 'column', gap: 18, maxHeight: '55vh', overflowY: 'auto', paddingRight: 4 }}>
         {tableEntries.map(([table, fields]) => {
           const allKeys = fields.map(f => f.key);
@@ -108,10 +114,6 @@ export function ExportChatSummaryOptionsModal({ schema, onConfirm, onClose }) {
         </div>
       </div>
 
-      <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-        <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-        <button className="btn-primary" onClick={() => onConfirm(selection)} style={{ flex: 2 }}>Generate Export</button>
-      </div>
     </Modal>
   );
 }

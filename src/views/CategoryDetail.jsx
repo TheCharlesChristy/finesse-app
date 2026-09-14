@@ -67,7 +67,7 @@ export default function CategoryDetail({
 
   if (!category) {
     return (
-      <div className="glass" style={{ borderRadius: 16, padding: '40px 24px', textAlign: 'center', color: 'var(--text-muted)' }}>
+      <div className="card" style={{ borderRadius: 'var(--radius-lg)', padding: '40px 24px', textAlign: 'center', color: 'var(--text-muted)' }}>
         That category no longer exists.
         <div style={{ marginTop: 14 }}>
           <button className="btn-primary" onClick={onBack}>Back to Dashboard</button>
@@ -93,7 +93,7 @@ export default function CategoryDetail({
   const pacedPeriod = category.rolloverEnabled ? null : getPacedPeriodStatus(category, transactions, cycle);
 
   const stat = (label, value, hint, color) => (
-    <div className="glass" style={{ borderRadius: 14, padding: '15px 16px' }}>
+    <div className="card" style={{ borderRadius: 'var(--radius-md)', padding: '15px 16px' }}>
       <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 5 }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 700, color }}>{value}</div>
       <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 3 }}>{hint}</div>
@@ -102,11 +102,11 @@ export default function CategoryDetail({
 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
+      <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '20px 22px' }}>
         <div className="mobile-row-stack" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
             <IconButton onClick={onBack} label="Back to Dashboard"><ArrowLeft size={15} /></IconButton>
-            <span style={{ width: 12, height: 12, borderRadius: '50%', background: category.color || 'var(--accent-blue)', flexShrink: 0 }} />
+            <span style={{ width: 12, height: 12, borderRadius: 'var(--radius-full)', background: category.color || 'var(--accent-2)', flexShrink: 0 }} />
             <div style={{ minWidth: 0 }}>
               <CardTitle as="h2" style={{ fontSize: 17 }}>{category.name}</CardTitle>
               <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
@@ -131,7 +131,7 @@ export default function CategoryDetail({
         <div className="progress-track" style={{ marginTop: 16 }}>
           <div className="progress-fill" style={{
             width: `${pct}%`,
-            background: pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warn)' : 'var(--accent-mint)',
+            background: pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warn)' : 'var(--accent)',
           }} />
         </div>
       </div>
@@ -146,7 +146,7 @@ export default function CategoryDetail({
         )}
         {stat('Spent', fmt(spent), `${thisCycle.length} transaction${thisCycle.length === 1 ? '' : 's'}`)}
         {stat('Safe per day', fmt(perDay), cycle ? `for ${cycle.remaining} more day${cycle.remaining === 1 ? '' : 's'}` : '—', 'var(--good)')}
-        {upcomingSubs > 0 && stat('Subscriptions due', fmt(upcomingSubs), 'before the next reset', 'var(--accent-purple)')}
+        {upcomingSubs > 0 && stat('Subscriptions due', fmt(upcomingSubs), 'before the next reset', 'var(--accent-3)')}
         {cumulative !== 0 && stat(
           cumulative > 0 ? 'Over, all time' : 'Under, all time',
           fmt(Math.abs(cumulative)),
@@ -156,7 +156,7 @@ export default function CategoryDetail({
       </div>
 
       {merchants.length > 0 && (
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
+        <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '20px 22px' }}>
           <CardTitle as="h2" style={{ marginBottom: 4 }}>Where It Went</CardTitle>
           <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 14 }}>Top merchants this cycle</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
@@ -169,7 +169,7 @@ export default function CategoryDetail({
                   <div className="progress-track" style={{ height: 6 }}>
                     <div className="progress-fill" style={{
                       width: `${Math.min(100, (entry.total / merchants[0].total) * 100)}%`,
-                      background: category.color || 'var(--accent-blue)',
+                      background: category.color || 'var(--accent-2)',
                     }} />
                   </div>
                 </div>
@@ -183,26 +183,26 @@ export default function CategoryDetail({
       )}
 
       {categorySubs.length > 0 && (
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
+        <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '20px 22px' }}>
           <CardTitle as="h2" style={{ marginBottom: 12 }}>Subscriptions</CardTitle>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {categorySubs.map(sub => (
-              <div key={sub.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: 10 }}>
-                <CreditCard size={14} style={{ color: 'var(--accent-warm)', flexShrink: 0 }} aria-hidden="true" />
+              <div key={sub.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-sm)' }}>
+                <CreditCard size={14} style={{ color: 'var(--accent-4)', flexShrink: 0 }} aria-hidden="true" />
                 <span style={{ flex: 1, minWidth: 0, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {sub.name}
                 </span>
                 <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                   {sub.active === false ? 'Paused' : sub.nextDueAt ? `next ${format(new Date(sub.nextDueAt), 'd MMM')}` : ''}
                 </span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent-warm)' }}>-{fmt(sub.amount || 0)}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent-4)' }}>-{fmt(sub.amount || 0)}</span>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '20px 22px' }}>
+      <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '20px 22px' }}>
         <CardTitle as="h2" style={{ marginBottom: 4 }}>Transactions</CardTitle>
         <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 14 }}>
           This cycle first, then earlier history
@@ -218,8 +218,8 @@ export default function CategoryDetail({
               const refund = isRefund(tx);
               return (
                 <div key={tx.id} className="mobile-list-row" style={{
-                  display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 10,
-                  background: inCycle ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.02)',
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 'var(--radius-sm)',
+                  background: inCycle ? 'color-mix(in srgb, var(--text-primary) 5%, transparent)' : 'color-mix(in srgb, var(--text-primary) 2%, transparent)',
                   opacity: inCycle ? 1 : 0.7,
                 }}>
                   <div className="mobile-list-main" style={{ flex: 1, minWidth: 0 }}>
@@ -232,7 +232,7 @@ export default function CategoryDetail({
                       {tx.splitGroupId ? ' · split' : ''}
                     </div>
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 600, flexShrink: 0, color: refund ? 'var(--good)' : 'var(--accent-warm)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, flexShrink: 0, color: refund ? 'var(--good)' : 'var(--accent-4)' }}>
                     {refund ? '+' : '-'}{fmt(tx.amount)}
                   </div>
                   <IconButton onClick={() => onEditTransaction(tx)} size={28} style={{ opacity: 0.6, flexShrink: 0 }}

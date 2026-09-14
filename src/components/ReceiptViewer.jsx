@@ -25,8 +25,8 @@ export function ReceiptThumb({ transaction, onOpen }) {
       aria-label={label}
       title={label}
       style={{
-        width: 30, height: 30, borderRadius: 8, flexShrink: 0, padding: 0, cursor: 'pointer',
-        border: '1px solid rgba(255,255,255,0.16)', background: 'rgba(255,255,255,0.05)',
+        width: 30, height: 30, borderRadius: 'var(--radius-xs)', flexShrink: 0, padding: 0, cursor: 'pointer',
+        border: '1px solid color-mix(in srgb, var(--text-primary) 16%, transparent)', background: 'color-mix(in srgb, var(--text-primary) 5%, transparent)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
         color: 'var(--text-muted)',
       }}
@@ -86,7 +86,7 @@ export function ReceiptViewer({ transaction, onClose }) {
             alt={`Receipt for ${transaction?.note || 'expense'}`}
             style={{
               maxWidth: '100%', minHeight: 0, objectFit: 'contain',
-              borderRadius: 12, border: '1px solid rgba(255,255,255,0.14)',
+              borderRadius: 'var(--radius-md)', border: '1px solid color-mix(in srgb, var(--text-primary) 14%, transparent)',
             }}
           />
         )}

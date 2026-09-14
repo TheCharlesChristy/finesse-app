@@ -27,9 +27,9 @@ const PACKS = [
     name: '50 / 30 / 20',
     description: 'Needs, wants, and saving. A sensible default if you are unsure.',
     categories: [
-      { name: 'Essentials', percent: 50, color: '#5db8ff' },
-      { name: 'Lifestyle', percent: 30, color: '#c084fc' },
-      { name: 'Savings', percent: 20, color: '#4fffb0' },
+      { name: 'Essentials', percent: 50, color: 'var(--accent-2)' },
+      { name: 'Lifestyle', percent: 30, color: 'var(--accent-3)' },
+      { name: 'Savings', percent: 20, color: 'var(--accent)' },
     ],
   },
   {
@@ -37,12 +37,12 @@ const PACKS = [
     name: 'Household',
     description: 'Rent and bills separated from food and everyday spending.',
     categories: [
-      { name: 'Rent', percent: 35, color: '#ff6b8a' },
-      { name: 'Bills', percent: 15, color: '#fbbf70' },
-      { name: 'Groceries', percent: 20, color: '#4fffb0' },
-      { name: 'Transport', percent: 10, color: '#5db8ff' },
-      { name: 'Fun', percent: 10, color: '#c084fc' },
-      { name: 'Savings', percent: 10, color: '#67e8f9' },
+      { name: 'Rent', percent: 35, color: 'var(--danger)' },
+      { name: 'Bills', percent: 15, color: 'var(--accent-4)' },
+      { name: 'Groceries', percent: 20, color: 'var(--accent)' },
+      { name: 'Transport', percent: 10, color: 'var(--accent-2)' },
+      { name: 'Fun', percent: 10, color: 'var(--accent-3)' },
+      { name: 'Savings', percent: 10, color: 'var(--series-5)' },
     ],
   },
   {
@@ -50,8 +50,8 @@ const PACKS = [
     name: 'Just the basics',
     description: 'Two categories. Add more once you see where the money goes.',
     categories: [
-      { name: 'Spending', percent: 70, color: '#5db8ff' },
-      { name: 'Savings', percent: 30, color: '#4fffb0' },
+      { name: 'Spending', percent: 70, color: 'var(--accent-2)' },
+      { name: 'Savings', percent: 30, color: 'var(--accent)' },
     ],
   },
   {
@@ -101,12 +101,12 @@ export default function Wizard({ onComplete, onSkip }) {
   };
 
   return (
-    <div className="glass mobile-card-pad" style={{
-      borderRadius: 18, padding: '24px',
-      borderColor: 'rgba(79,255,176,0.28)', background: 'rgba(79,255,176,0.05)',
+    <div className="card mobile-card-pad" style={{
+      borderRadius: 'var(--radius-lg)', padding: '24px',
+      borderColor: 'color-mix(in srgb, var(--accent) 28%, transparent)', background: 'color-mix(in srgb, var(--accent) 5%, transparent)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-        <Sparkles size={18} color="var(--accent-mint)" aria-hidden="true" />
+        <Sparkles size={18} color="var(--accent)" aria-hidden="true" />
         <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
           {step === 1 ? 'Welcome to Finesse' : 'Choose a starting point'}
         </h2>
@@ -122,20 +122,20 @@ export default function Wizard({ onComplete, onSkip }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <Field label="What do you call it?">
               {id => (
-                <input id={id} className="glass-input" value={name} autoFocus
+                <input id={id} className="input" value={name} autoFocus
                   onChange={e => setName(e.target.value)} placeholder="e.g. Salary" />
               )}
             </Field>
             <Field label="How much, each time you're paid? (£)">
               {id => (
-                <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00"
+                <input id={id} className="input" type="number" min="0" step="0.01" placeholder="0.00"
                   value={amount} onChange={e => setAmount(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && canContinue && setStep(2)} />
               )}
             </Field>
             <Field label="How often?">
               {id => (
-                <select id={id} className="glass-input" value={frequency} onChange={e => setFrequency(e.target.value)}>
+                <select id={id} className="input" value={frequency} onChange={e => setFrequency(e.target.value)}>
                   {FREQ_OPTIONS.map(option => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
@@ -145,14 +145,14 @@ export default function Wizard({ onComplete, onSkip }) {
             {frequency === 'monthly' && (
               <Field label="Which day of the month?">
                 {id => (
-                  <input id={id} className="glass-input" type="number" min="1" max="31"
+                  <input id={id} className="input" type="number" min="1" max="31"
                     value={payDay} onChange={e => setPayDay(e.target.value)} />
                 )}
               </Field>
             )}
           </div>
 
-          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+          <div className="form-actions" style={{ display: 'flex', gap: 10, marginTop: 18 }}>
             <button className="btn-secondary" onClick={onSkip} style={{ flex: 1 }}>Set up manually</button>
             <button className="btn-primary" onClick={() => setStep(2)} disabled={!canContinue} style={{ flex: 2 }}>
               Continue
@@ -174,22 +174,22 @@ export default function Wizard({ onComplete, onSkip }) {
                 <button key={entry.id} type="button" role="radio" aria-checked={selected}
                   onClick={() => setPackId(entry.id)}
                   style={{
-                    textAlign: 'left', cursor: 'pointer', padding: '13px 15px', borderRadius: 12,
+                    textAlign: 'left', cursor: 'pointer', padding: '13px 15px', borderRadius: 'var(--radius-md)',
                     fontFamily: 'DM Sans, sans-serif',
-                    border: `1px solid ${selected ? 'var(--accent-mint)' : 'var(--glass-border)'}`,
-                    background: selected ? 'rgba(79,255,176,0.1)' : 'rgba(255,255,255,0.04)',
+                    border: `1px solid ${selected ? 'var(--accent)' : 'var(--line)'}`,
+                    background: selected ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : 'color-mix(in srgb, var(--text-primary) 4%, transparent)',
                     color: 'var(--text-primary)',
                   }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
                     <span style={{ fontSize: 13, fontWeight: 700 }}>{entry.name}</span>
-                    {selected && <Check size={13} color="var(--accent-mint)" />}
+                    {selected && <Check size={13} color="var(--accent)" />}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>{entry.description}</div>
                   {entry.categories.length > 0 && amountValue > 0 && (
                     <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
                       {entry.categories.map(category => (
                         <span key={category.name} style={{
-                          fontSize: 10, padding: '2px 8px', borderRadius: 20,
+                          fontSize: 10, padding: '2px 8px', borderRadius: 'var(--radius-xl)',
                           background: `${category.color}22`, color: category.color,
                         }}>
                           {category.name} {fmt(roundMoney(amountValue * category.percent / 100))}
@@ -202,7 +202,7 @@ export default function Wizard({ onComplete, onSkip }) {
             })}
           </div>
 
-          <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+          <div className="form-actions" style={{ display: 'flex', gap: 10, marginTop: 18 }}>
             <button className="btn-secondary" onClick={() => setStep(1)} style={{ flex: 1 }}>Back</button>
             <button className="btn-primary" onClick={handleFinish} disabled={busy} style={{ flex: 2 }}>
               {busy ? 'Setting up…' : 'Start budgeting'}

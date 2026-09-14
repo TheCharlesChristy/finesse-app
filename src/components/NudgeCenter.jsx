@@ -10,7 +10,7 @@ const ICONS = {
 const COLORS = {
   danger: 'var(--danger)',
   warn: 'var(--warn)',
-  info: 'var(--accent-blue)',
+  info: 'var(--accent-2)',
 };
 
 /**
@@ -65,9 +65,9 @@ export default function NudgeCenter({ nudges = [], onDismiss, onNavigate }) {
           <span aria-hidden="true" style={{
             position: 'absolute', top: 4, right: 4,
             minWidth: 15, height: 15, padding: '0 4px',
-            borderRadius: 8, fontSize: 9, fontWeight: 700, lineHeight: '15px',
-            background: urgent > 0 ? 'var(--danger)' : 'var(--accent-blue)',
-            color: '#06121f',
+            borderRadius: 'var(--radius-xs)', fontSize: 9, fontWeight: 700, lineHeight: '15px',
+            background: urgent > 0 ? 'var(--danger)' : 'var(--accent-2)',
+            color: 'var(--on-accent)',
           }}>
             {nudges.length}
           </span>

@@ -199,10 +199,10 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Toolbar */}
-      <div className="glass mobile-card-pad" style={{ borderRadius: 16, padding: '16px 20px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '16px 20px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ position: 'relative', flex: '1 1 200px' }}>
           <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', pointerEvents: 'none' }} />
-          <input className="glass-input" placeholder="Search transactions…" value={search}
+          <input className="input" placeholder="Search transactions…" value={search}
             aria-label="Search transactions" onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 34 }} />
         </div>
         <CategorySelect
@@ -229,23 +229,23 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
         <button className="btn-primary mobile-full" onClick={onAdd} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
           + Add Expense
         </button>
-        <div className="transaction-filter-grid">
-          <select className="glass-input" value={dateFilter} onChange={e => setDateFilter(e.target.value)} aria-label="Filter by date">
+        <div className="filter-grid">
+          <select className="input" value={dateFilter} onChange={e => setDateFilter(e.target.value)} aria-label="Filter by date">
             {dateFilterOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
-          <select className="glass-input" value={amountFilter} onChange={e => setAmountFilter(e.target.value)} aria-label="Filter by amount">
+          <select className="input" value={amountFilter} onChange={e => setAmountFilter(e.target.value)} aria-label="Filter by amount">
             {amountFilterOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
-          <select className="glass-input" value={typeFilter} onChange={e => setTypeFilter(e.target.value)} aria-label="Filter by expense type">
+          <select className="input" value={typeFilter} onChange={e => setTypeFilter(e.target.value)} aria-label="Filter by expense type">
             {typeFilterOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
           {allTags.length > 0 && (
-            <select className="glass-input" value={tagFilter} onChange={e => setTagFilter(e.target.value)} aria-label="Filter by tag">
+            <select className="input" value={tagFilter} onChange={e => setTagFilter(e.target.value)} aria-label="Filter by tag">
               <option value="all">Any tag</option>
               {allTags.map(tag => <option key={tag} value={tag}>#{tag}</option>)}
             </select>
           )}
-          <select className="glass-input" value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="Sort transactions">
+          <select className="input" value={sortBy} onChange={e => setSortBy(e.target.value)} aria-label="Sort transactions">
             {sortOptions.map(([value, label]) => <option key={value} value={value}>Sort: {label}</option>)}
           </select>
           {filtersActive && (
@@ -268,7 +268,7 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
 
       {/* Transaction list */}
       {grouped.length === 0 ? (
-        <div className="glass" style={{ borderRadius: 16, padding: '40px 24px', textAlign: 'center' }}>
+        <div className="card" style={{ borderRadius: 'var(--radius-lg)', padding: '40px 24px', textAlign: 'center' }}>
           <div style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: transactions.length === 0 ? 14 : 0 }}>
             {transactions.length === 0 ? 'No expenses logged yet. Add your first one!' : 'No transactions match your filter.'}
           </div>
@@ -308,7 +308,7 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
                 {fmt(dayTotal)}
               </span>
             </div>
-            <div className="glass" style={{ borderRadius: 16, overflow: 'hidden' }}>
+            <div className="card" style={{ borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
               {txs.map((tx, i) => {
                 const cat = catMap[tx.categoryId];
                 const txDate = getTransactionDate(tx);
@@ -316,10 +316,10 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
                 return (
                   <div key={tx.id} className="mobile-list-row" style={{
                     display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px',
-                    borderBottom: i < txs.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none',
+                    borderBottom: i < txs.length - 1 ? '1px solid color-mix(in srgb, var(--text-primary) 5%, transparent)' : 'none',
                     transition: 'background 0.15s'
                   }}>
-                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: cat?.color || 'var(--accent-blue)', flexShrink: 0 }} />
+                    <div style={{ width: 10, height: 10, borderRadius: 'var(--radius-full)', background: cat?.color || 'var(--accent-2)', flexShrink: 0 }} />
                     <div className="mobile-list-main" style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {tx.note || cat?.name || 'Expense'}
@@ -328,17 +328,17 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
                         <span>{cat?.name || 'Unknown'} · {txDate ? format(txDate, 'HH:mm') : 'No time'}</span>
                         {unusual.has(tx.id) && (
                           <span title="Much larger than usual for this category"
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--warn)', background: 'rgba(251,191,112,0.12)', padding: '1px 6px', borderRadius: 10 }}>
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--warn)', background: 'color-mix(in srgb, var(--accent-4) 12%, transparent)', padding: '1px 6px', borderRadius: 'var(--radius-sm)' }}>
                             <AlertTriangle size={9} /> unusual
                           </span>
                         )}
                         {tx.splitGroupId && (
-                          <span title="Part of a split purchase" style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 6px', borderRadius: 10 }}>
+                          <span title="Part of a split purchase" style={{ background: 'color-mix(in srgb, var(--text-primary) 6%, transparent)', padding: '1px 6px', borderRadius: 'var(--radius-sm)' }}>
                             split
                           </span>
                         )}
                         {(tx.tags || []).map(tag => (
-                          <span key={tag} style={{ background: 'rgba(93,184,255,0.12)', color: 'var(--accent-blue)', padding: '1px 6px', borderRadius: 10 }}>
+                          <span key={tag} style={{ background: 'color-mix(in srgb, var(--accent-2) 12%, transparent)', color: 'var(--accent-2)', padding: '1px 6px', borderRadius: 'var(--radius-sm)' }}>
                             #{tag}
                           </span>
                         ))}
@@ -346,7 +346,7 @@ export default function Transactions({ transactions, categories, onDelete, onEdi
                     </div>
                     <div style={{
                       fontSize: 14, fontWeight: 600, flexShrink: 0,
-                      color: refund ? 'var(--good)' : 'var(--accent-warm)',
+                      color: refund ? 'var(--good)' : 'var(--accent-4)',
                       display: 'flex', alignItems: 'center', gap: 4,
                     }}>
                       {refund && <Undo2 size={12} aria-hidden="true" />}

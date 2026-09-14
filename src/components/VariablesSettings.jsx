@@ -5,8 +5,8 @@ import { fmt } from '../utils';
 import { CardTitle, IconButton } from './ui';
 
 const codeStyle = {
-  fontFamily: 'monospace', background: 'rgba(79,255,176,0.1)',
-  color: 'var(--accent-mint)', padding: '1px 6px', borderRadius: 5,
+  fontFamily: 'monospace', background: 'color-mix(in srgb, var(--accent) 10%, transparent)',
+  color: 'var(--accent)', padding: '1px 6px', borderRadius: 'var(--radius-xs)',
 };
 
 /**
@@ -45,9 +45,9 @@ export default function VariablesSettings({ variables = [], onAddVariable, onUpd
   };
 
   return (
-    <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px' }}>
+    <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '24px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 8 }}>
-        <SlidersHorizontal size={16} color="var(--accent-mint)" aria-hidden="true" />
+        <SlidersHorizontal size={16} color="var(--accent)" aria-hidden="true" />
         <CardTitle as="h2">Variables</CardTitle>
       </div>
       <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 14, lineHeight: 1.7 }}>
@@ -64,11 +64,11 @@ export default function VariablesSettings({ variables = [], onAddVariable, onUpd
             editingId === variable.id ? (
               <div key={variable.id} className="mobile-row-stack"
                 style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <input className="glass-input" value={editName} aria-label="Variable name"
+                <input className="input" value={editName} aria-label="Variable name"
                   onChange={e => setEditName(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
                   style={{ flex: 2 }}
                   onKeyDown={e => e.key === 'Enter' && commitEdit()} />
-                <input className="glass-input" type="number" step="0.01" value={editValue} aria-label="Variable value"
+                <input className="input" type="number" step="0.01" value={editValue} aria-label="Variable value"
                   onChange={e => setEditValue(e.target.value)}
                   style={{ flex: 1 }}
                   onKeyDown={e => e.key === 'Enter' && commitEdit()} />
@@ -80,7 +80,7 @@ export default function VariablesSettings({ variables = [], onAddVariable, onUpd
             ) : (
               <div key={variable.id} className="mobile-list-row" style={{
                 display: 'flex', alignItems: 'center', gap: 10,
-                padding: '10px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: 10,
+                padding: '10px 12px', background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-sm)',
               }}>
                 <span className="mobile-list-main" style={{
                   ...codeStyle, fontSize: 13, flex: 1, minWidth: 0,
@@ -108,14 +108,14 @@ export default function VariablesSettings({ variables = [], onAddVariable, onUpd
       <div className="mobile-row-stack" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
         <div style={{ flex: '2 1 160px' }}>
           <label htmlFor="new-variable-name" className="field-label">Name</label>
-          <input id="new-variable-name" className="glass-input" placeholder="e.g. salary"
+          <input id="new-variable-name" className="input" placeholder="e.g. salary"
             value={newName}
             onChange={e => setNewName(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
             onKeyDown={e => e.key === 'Enter' && handleAdd()} />
         </div>
         <div style={{ flex: '1 1 120px' }}>
           <label htmlFor="new-variable-value" className="field-label">Value (£)</label>
-          <input id="new-variable-value" className="glass-input" type="number" step="0.01" placeholder="2500"
+          <input id="new-variable-value" className="input" type="number" step="0.01" placeholder="2500"
             value={newValue}
             onChange={e => setNewValue(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleAdd()} />

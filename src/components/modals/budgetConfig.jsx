@@ -8,15 +8,15 @@ import { fmt } from '../../utils';
 // ── Presentation helpers ─────────────────────────────────────────────────────
 
 const ACTION_STYLE = {
-  create: { label: 'New', color: 'var(--good)', background: 'rgba(79,255,176,0.12)', Icon: Plus },
-  update: { label: 'Changed', color: 'var(--accent-blue)', background: 'rgba(93,184,255,0.12)', Icon: Pencil },
-  keep: { label: 'Unchanged', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.05)', Icon: Minus },
+  create: { label: 'New', color: 'var(--good)', background: 'color-mix(in srgb, var(--accent) 12%, transparent)', Icon: Plus },
+  update: { label: 'Changed', color: 'var(--accent-2)', background: 'color-mix(in srgb, var(--accent-2) 12%, transparent)', Icon: Pencil },
+  keep: { label: 'Unchanged', color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--text-primary) 5%, transparent)', Icon: Minus },
 };
 
 function Tag({ color, background, children, title }) {
   return (
     <span title={title} style={{
-      fontSize: 10, color, background, padding: '1px 6px', borderRadius: 10, whiteSpace: 'nowrap',
+      fontSize: 10, color, background, padding: '1px 6px', borderRadius: 'var(--radius-sm)', whiteSpace: 'nowrap',
     }}>
       {children}
     </span>
@@ -25,12 +25,12 @@ function Tag({ color, background, children, title }) {
 
 function Notice({ tone, icon: Icon, children }) {
   const color = tone === 'danger' ? 'var(--danger)' : tone === 'warn' ? 'var(--warn)' : 'var(--text-secondary)';
-  const background = tone === 'danger' ? 'rgba(255,107,138,0.1)'
-    : tone === 'warn' ? 'rgba(251,191,112,0.1)' : 'rgba(255,255,255,0.04)';
+  const background = tone === 'danger' ? 'color-mix(in srgb, var(--danger) 10%, transparent)'
+    : tone === 'warn' ? 'color-mix(in srgb, var(--accent-4) 10%, transparent)' : 'color-mix(in srgb, var(--text-primary) 4%, transparent)';
   return (
     <div style={{
       display: 'flex', gap: 9, alignItems: 'flex-start', background, color,
-      borderRadius: 12, padding: '10px 12px', fontSize: 12, lineHeight: 1.5,
+      borderRadius: 'var(--radius-md)', padding: '10px 12px', fontSize: 12, lineHeight: 1.5,
     }}>
       <Icon size={14} style={{ flexShrink: 0, marginTop: 2 }} />
       <div style={{ minWidth: 0 }}>{children}</div>
@@ -222,25 +222,25 @@ export function ImportBudgetConfigModal({
                       const style = ACTION_STYLE[row.action];
                       return (
                         <tr key={`${row.action}-${row.id ?? row.name}`}
-                          style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                          style={{ borderTop: '1px solid color-mix(in srgb, var(--text-primary) 6%, transparent)' }}>
                           <td style={{ padding: '8px 8px 8px 0' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                               <span style={{ fontWeight: 500 }}>{row.name}</span>
                               <Tag color={style.color} background={style.background}>{style.label}</Tag>
                               {row.renamed && (
-                                <Tag color="var(--accent-purple)" background="rgba(167,139,250,0.12)"
+                                <Tag color="var(--accent-3)" background="color-mix(in srgb, var(--accent-3) 12%, transparent)"
                                   title={`Keeps id ${row.id} and all its transactions`}>
                                   was “{row.previousName}”
                                 </Tag>
                               )}
                               {row.rollover && (
-                                <Tag color="var(--accent-blue)" background="rgba(93,184,255,0.12)"
+                                <Tag color="var(--accent-2)" background="color-mix(in srgb, var(--accent-2) 12%, transparent)"
                                   title="Unspent money accumulates instead of resetting each cycle">
                                   rollover
                                 </Tag>
                               )}
                               {row.usedFallback && (
-                                <Tag color="var(--warn)" background="rgba(251,191,112,0.12)"
+                                <Tag color="var(--warn)" background="color-mix(in srgb, var(--accent-4) 12%, transparent)"
                                   title="The main formula could not be evaluated — this is the fallback">
                                   fallback
                                 </Tag>
@@ -269,7 +269,7 @@ export function ImportBudgetConfigModal({
                     })}
                   </tbody>
                   <tfoot>
-                    <tr style={{ borderTop: '1px solid rgba(255,255,255,0.14)' }}>
+                    <tr style={{ borderTop: '1px solid color-mix(in srgb, var(--text-primary) 14%, transparent)' }}>
                       <td style={{ padding: '10px 8px 0 0', color: 'var(--text-secondary)' }}>
                         Allocated of {plan.meta.baselineIncomeName} income
                       </td>

@@ -43,11 +43,20 @@ export function AddSubscriptionModal({ categories = [], onAdd, onClose, subscrip
   };
 
   return (
-    <Modal title={isEditing ? 'Edit Subscription' : 'Add Subscription'} onClose={onClose}>
+    <Modal title={isEditing ? 'Edit Subscription' : 'Add Subscription'} onClose={onClose}
+      footer={<>
+        <span className="spacer" />
+<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
+            disabled={!name.trim() || !amount || !catId || !(Number(interval) > 0)}>
+            {isEditing ? 'Save Changes' : 'Add Subscription'}
+          </button>
+      </>}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <Field label="Name">
           {id => (
-            <input id={id} className="glass-input" placeholder="e.g. Netflix" value={name}
+            <input id={id} className="input" placeholder="e.g. Netflix" value={name}
               onChange={e => setName(e.target.value)} autoFocus />
           )}
         </Field>
@@ -56,7 +65,7 @@ export function AddSubscriptionModal({ categories = [], onAdd, onClose, subscrip
         </Field>
         <Field label="Amount (£)">
           {id => (
-            <input id={id} className="glass-input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
+            <input id={id} className="input" type="number" min="0" step="0.01" placeholder="0.00" value={amount}
               onChange={e => setAmount(e.target.value)} />
           )}
         </Field>
@@ -64,9 +73,9 @@ export function AddSubscriptionModal({ categories = [], onAdd, onClose, subscrip
         <div>
           <div className="field-label">Repeats</div>
           <div className="mobile-stack" style={{ display: 'grid', gridTemplateColumns: '96px 1fr', gap: 8 }}>
-            <input className="glass-input" type="number" min="1" step="1" value={interval}
+            <input className="input" type="number" min="1" step="1" value={interval}
               aria-label="Repeat interval" onChange={e => setInterval(e.target.value)} />
-            <select className="glass-input" value={intervalUnit} aria-label="Repeat unit" onChange={e => setIntervalUnit(e.target.value)}>
+            <select className="input" value={intervalUnit} aria-label="Repeat unit" onChange={e => setIntervalUnit(e.target.value)}>
               <option value="day">Day(s)</option>
               <option value="week">Week(s)</option>
               <option value="month">Month(s)</option>
@@ -76,13 +85,13 @@ export function AddSubscriptionModal({ categories = [], onAdd, onClose, subscrip
         </div>
         <Field label="Management link">
           {id => (
-            <input id={id} className="glass-input" type="url" placeholder="Optional, e.g. netflix.com/account" value={manageUrl}
+            <input id={id} className="input" type="url" placeholder="Optional, e.g. netflix.com/account" value={manageUrl}
               onChange={e => setManageUrl(e.target.value)} />
           )}
         </Field>
         <Field label="Note">
           {id => (
-            <input id={id} className="glass-input" placeholder="Optional" value={note}
+            <input id={id} className="input" placeholder="Optional" value={note}
               onChange={e => setNote(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
           )}
@@ -91,13 +100,6 @@ export function AddSubscriptionModal({ categories = [], onAdd, onClose, subscrip
           <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} />
           Active
         </label>
-        <div className="modal-actions" style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-          <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-            disabled={!name.trim() || !amount || !catId || !(Number(interval) > 0)}>
-            {isEditing ? 'Save Changes' : 'Add Subscription'}
-          </button>
-        </div>
       </div>
     </Modal>
   );

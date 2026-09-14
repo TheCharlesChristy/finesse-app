@@ -46,8 +46,8 @@ export default function ReceiptField({ value, onChange, disabled = false }) {
             src={previewUrl}
             alt="Attached receipt"
             style={{
-              width: 54, height: 54, objectFit: 'cover', borderRadius: 10,
-              border: '1px solid rgba(255,255,255,0.14)', flexShrink: 0,
+              width: 54, height: 54, objectFit: 'cover', borderRadius: 'var(--radius-sm)',
+              border: '1px solid color-mix(in srgb, var(--text-primary) 14%, transparent)', flexShrink: 0,
             }}
           />
           <div style={{ flex: 1, minWidth: 0, fontSize: 11, color: 'var(--text-muted)' }}>

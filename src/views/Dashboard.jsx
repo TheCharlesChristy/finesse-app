@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { AlertCircle, Zap, Clock, Pencil, Trash2, Gift, CreditCard, Sparkles, SlidersHorizontal } from 'lucide-react';
+import { AlertCircle, Zap, Clock, Pencil, Trash2, Gift, CreditCard, Sparkles, SlidersHorizontal, Wallet } from 'lucide-react';
 import {
   fmt,
   calcNextReset,
@@ -23,7 +23,7 @@ import {
   isRefund,
 } from '../utils';
 import { addDays, format } from 'date-fns';
-import { CardTitle, IconButton } from '../components/ui';
+import { CardTitle, EmptyState, IconButton } from '../components/ui';
 import Wizard from '../components/Wizard';
 
 const INCOME_PERIOD_LABEL = { week: 'Weekly', month: 'Monthly', year: 'Yearly' };
@@ -120,9 +120,9 @@ export default function Dashboard({
         <Wizard onComplete={onRunWizard} onSkip={() => setWizardDismissed(true)} />
       )}
       {isNewUser && (!onRunWizard || wizardDismissed) && (
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '24px', borderColor: 'rgba(79,255,176,0.28)', background: 'rgba(79,255,176,0.05)' }}>
+        <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '24px', borderColor: 'color-mix(in srgb, var(--accent) 28%, transparent)', background: 'color-mix(in srgb, var(--accent) 5%, transparent)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-            <Sparkles size={18} color="var(--accent-mint)" aria-hidden="true" />
+            <Sparkles size={18} color="var(--accent)" aria-hidden="true" />
             <CardTitle as="h2">Welcome to Finesse</CardTitle>
           </div>
           <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 16px', lineHeight: 1.6 }}>
@@ -135,7 +135,7 @@ export default function Dashboard({
               ['3', 'Log expenses', 'Track spending and see what is left in real time.'],
             ].map(([n, title, desc]) => (
               <li key={n} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                <span style={{ flexShrink: 0, width: 24, height: 24, borderRadius: '50%', background: 'rgba(79,255,176,0.15)', color: 'var(--accent-mint)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700 }}>{n}</span>
+                <span style={{ flexShrink: 0, width: 24, height: 24, borderRadius: 'var(--radius-full)', background: 'color-mix(in srgb, var(--accent) 15%, transparent)', color: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700 }}>{n}</span>
                 <span style={{ minWidth: 0 }}>
                   <span style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>{title}</span>
                   <span style={{ display: 'block', fontSize: 12, color: 'var(--text-muted)', marginTop: 1 }}>{desc}</span>
@@ -153,7 +153,7 @@ export default function Dashboard({
           The question the app is actually for. Everything else on this page is
           a component of this number; none of them answered it directly. */}
       {categories.length > 0 && (
-        <div className="glass safe-to-spend" style={{ borderRadius: 18 }}>
+        <div className="card safe-to-spend" style={{ borderRadius: 'var(--radius-lg)' }}>
           <div className="safe-to-spend-main">
             <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 5 }}>
               Safe to spend today
@@ -173,12 +173,12 @@ export default function Dashboard({
             <div className="safe-to-spend-reserved">
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Already spoken for</div>
               {safeToSpend.committedSubscriptions > 0 && (
-                <div style={{ fontSize: 12, color: 'var(--accent-purple)' }}>
+                <div style={{ fontSize: 12, color: 'var(--accent-3)' }}>
                   {fmt(safeToSpend.committedSubscriptions)} subscriptions
                 </div>
               )}
               {safeToSpend.committedGoals > 0 && (
-                <div style={{ fontSize: 12, color: 'var(--accent-blue)' }}>
+                <div style={{ fontSize: 12, color: 'var(--accent-2)' }}>
                   {fmt(safeToSpend.committedGoals)} savings
                 </div>
               )}
@@ -188,8 +188,8 @@ export default function Dashboard({
       )}
 
       {/* ── Budget Summary ── */}
-      <div className="glass dashboard-summary-card">
-        <div className="dashboard-summary-grid">
+      <div className="card summary-card">
+        <div className="summary-grid">
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 5, flexWrap: 'wrap' }}>
               <span style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
@@ -200,18 +200,18 @@ export default function Dashboard({
                   <button key={period} type="button" aria-pressed={incomePeriod === period}
                     onClick={() => setIncomePeriod(period)}
                     style={{
-                      padding: '2px 8px', fontSize: 10, borderRadius: 7, cursor: 'pointer',
+                      padding: '2px 8px', fontSize: 10, borderRadius: 'var(--radius-xs)', cursor: 'pointer',
                       fontFamily: 'DM Sans, sans-serif', textTransform: 'capitalize',
-                      border: '1px solid ' + (incomePeriod === period ? 'rgba(79,255,176,0.4)' : 'transparent'),
-                      background: incomePeriod === period ? 'rgba(79,255,176,0.12)' : 'rgba(255,255,255,0.05)',
-                      color: incomePeriod === period ? 'var(--accent-mint)' : 'var(--text-muted)',
+                      border: '1px solid ' + (incomePeriod === period ? 'color-mix(in srgb, var(--accent) 40%, transparent)' : 'transparent'),
+                      background: incomePeriod === period ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'color-mix(in srgb, var(--text-primary) 5%, transparent)',
+                      color: incomePeriod === period ? 'var(--accent)' : 'var(--text-muted)',
                     }}>
                     {period}
                   </button>
                 ))}
               </div>
             </div>
-            <div className="font-display dashboard-summary-value" style={{ color: 'var(--accent-mint)' }}>{fmt(monthlyIncome)}</div>
+            <div className="font-display summary-value" style={{ color: 'var(--accent)' }}>{fmt(monthlyIncome)}</div>
             <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
               {fmt(monthlyAllocated)} allocated · {fmt(roundMoney(monthlyIncome - monthlyAllocated))} unallocated
               {totalAdded > 0 ? ` · ${fmt(totalAdded)} added` : ''}
@@ -225,22 +225,22 @@ export default function Dashboard({
 
           <div>
             <div style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 700, marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Budget Remaining</div>
-            <div className="font-display dashboard-summary-value" style={{ color: totalLeft < 0 ? 'var(--danger)' : 'var(--text-primary)' }}>{fmt(totalLeft)}</div>
+            <div className="font-display summary-value" style={{ color: totalLeft < 0 ? 'var(--danger)' : 'var(--text-primary)' }}>{fmt(totalLeft)}</div>
             <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
               {fmt(totalSpent)} spent · {spendPct.toFixed(0)}%
             </div>
           </div>
         </div>
 
-        <div className="dashboard-summary-bars">
+        <div className="summary-bars">
           {monthlyIncome > 0 && (
             <div>
-              <div style={{ display: 'flex', height: 6, borderRadius: 99, overflow: 'hidden', background: 'rgba(255,255,255,0.06)', gap: 1 }}>
+              <div style={{ display: 'flex', height: 6, borderRadius: 'var(--radius-full)', overflow: 'hidden', background: 'color-mix(in srgb, var(--text-primary) 6%, transparent)', gap: 1 }}>
                 {categories.filter(c => (c.allowance || 0) > 0).map(cat => {
                   const monthlyShare = getNormalisedCategoryAllowance(cat, incomes, incomePeriod);
                   return (
                     <div key={cat.id} title={`${cat.name}: ${fmt(monthlyShare)}/${incomePeriod}`}
-                      style={{ width: `${Math.min(100, (monthlyShare / monthlyIncome) * 100)}%`, background: cat.color || 'var(--accent-blue)', height: '100%', minWidth: 2 }} />
+                      style={{ width: `${Math.min(100, (monthlyShare / monthlyIncome) * 100)}%`, background: cat.color || 'var(--accent-2)', height: '100%', minWidth: 2 }} />
                   );
                 })}
               </div>
@@ -262,7 +262,7 @@ export default function Dashboard({
 
       {/* ── Over-budget alerts ── */}
       {overBudgetCats.length > 0 && (
-        <div className="glass" style={{ borderRadius: 14, padding: '14px 18px', borderColor: 'rgba(255,107,138,0.3)', background: 'rgba(255,107,138,0.06)' }}>
+        <div className="card" style={{ borderRadius: 'var(--radius-md)', padding: '14px 18px', borderColor: 'color-mix(in srgb, var(--danger) 30%, transparent)', background: 'color-mix(in srgb, var(--danger) 6%, transparent)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger)', fontSize: 13, fontWeight: 600, marginBottom: overBudgetCats.length > 0 ? 10 : 0 }}>
             <AlertCircle size={15} aria-hidden="true" />
             Over budget
@@ -282,7 +282,7 @@ export default function Dashboard({
                     <button
                       className="btn-secondary"
                       onClick={() => onAdjust(c.id)}
-                      style={{ padding: '5px 12px', fontSize: 11, flexShrink: 0, borderColor: 'rgba(255,107,138,0.4)', color: 'var(--danger)' }}>
+                      style={{ padding: '5px 12px', fontSize: 11, flexShrink: 0, borderColor: 'color-mix(in srgb, var(--danger) 40%, transparent)', color: 'var(--danger)' }}>
                       Fix
                     </button>
                   )}
@@ -294,7 +294,7 @@ export default function Dashboard({
       )}
 
       {(fundingIssueCats.length > 0 || overAllocatedIncomes.length > 0) && (
-        <div className="glass" style={{ borderRadius: 14, padding: '14px 18px', borderColor: 'rgba(251,191,112,0.3)', background: 'rgba(251,191,112,0.06)' }}>
+        <div className="card" style={{ borderRadius: 'var(--radius-md)', padding: '14px 18px', borderColor: 'color-mix(in srgb, var(--accent-4) 30%, transparent)', background: 'color-mix(in srgb, var(--accent-4) 6%, transparent)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--warn)', fontSize: 13, fontWeight: 500 }}>
             <AlertCircle size={15} />
             Funding check: {[...fundingIssueCats.map(c => c.name), ...overAllocatedIncomes.map(i => i.name)].join(', ')}
@@ -303,7 +303,7 @@ export default function Dashboard({
       )}
 
       {/* ── Income Sources ── */}
-      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+      <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
         <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12 }}>
           <CardTitle as="h2">Income Sources</CardTitle>
           <div className="mobile-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -317,9 +317,14 @@ export default function Dashboard({
           </div>
         </div>
         {incomes.length === 0 ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: 14, textAlign: 'center', padding: '20px 0' }}>
-            No income sources yet — add one to track your earnings
-          </div>
+          <EmptyState
+            icon={Wallet}
+            title="No income sources yet"
+            center
+            action={<button className="btn-primary" onClick={onAddIncome}>Add your first income</button>}
+          >
+            Finesse budgets from what you actually earn, so everything else starts here.
+          </EmptyState>
         ) : (
           <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -332,12 +337,12 @@ export default function Dashboard({
               const free = (income.amount || 0) - used;
               const usedPct = income.amount > 0 ? Math.min(100, (used / income.amount) * 100) : 0;
               return (
-                <div key={income.id} className="dashboard-income-row">
-                  <div className="dashboard-income-main">
+                <div key={income.id} className="income-row">
+                  <div className="income-main">
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
                       <span style={{ fontSize: 13, fontWeight: 600 }}>{income.name}</span>
                       {income.holdActive && (
-                        <span className="status-warn" style={{ fontSize: 10, padding: '2px 7px', borderRadius: 20 }}>HELD</span>
+                        <span className="status-warn" style={{ fontSize: 10, padding: '2px 7px', borderRadius: 'var(--radius-xl)' }}>HELD</span>
                       )}
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
@@ -348,23 +353,23 @@ export default function Dashboard({
                     <div style={{ fontSize: 11, color: free < 0 ? 'var(--danger)' : 'var(--text-muted)', marginTop: 3 }}>
                       {fmt(used)} allocated · {fmt(free)} free
                     </div>
-                    <div className="progress-track dashboard-income-progress" style={{ height: 4, marginTop: 7 }}>
-                      <div className="progress-fill" style={{ width: `${usedPct}%`, background: free < 0 ? 'var(--danger)' : 'var(--accent-mint)' }} />
+                    <div className="progress-track income-progress" style={{ height: 4, marginTop: 7 }}>
+                      <div className="progress-fill" style={{ width: `${usedPct}%`, background: free < 0 ? 'var(--danger)' : 'var(--accent)' }} />
                     </div>
                   </div>
-                  <div className="dashboard-income-side">
-                    <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--accent-mint)' }}>
+                  <div className="income-side">
+                    <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--accent)' }}>
                       {fmt(income.amount || 0)}
                     </span>
-                    <div className="dashboard-income-actions">
-                      <button className="btn-secondary dashboard-income-quick" onClick={() => onIncomeFastForward(income.id)}>
+                    <div className="income-actions">
+                      <button className="btn-secondary btn-ghost" onClick={() => onIncomeFastForward(income.id)}>
                         <Zap size={11} /> Early
                       </button>
-                      <button className="btn-secondary dashboard-income-quick" onClick={() => onIncomeHoldToggle(income.id)}>
+                      <button className="btn-secondary btn-ghost" onClick={() => onIncomeHoldToggle(income.id)}>
                         <Clock size={11} /> {income.holdActive ? 'Unhold' : 'Hold'}
                       </button>
                     </div>
-                    <div className="dashboard-income-icon-actions">
+                    <div className="income-actions">
                       <IconButton onClick={() => onEditIncome(income)} label={`Edit ${income.name}`}
                         size={28} style={{ opacity: 0.65 }}>
                         <Pencil size={12} />
@@ -390,7 +395,7 @@ export default function Dashboard({
       </div>
 
       {/* ── Category Breakdown ── */}
-      <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+      <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
         <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12 }}>
           <CardTitle as="h2">Category Breakdown</CardTitle>
           <div className="mobile-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -426,7 +431,7 @@ export default function Dashboard({
               // balance, and the pacing tags that measure a cycle's progress
               // say nothing useful about a pot being saved into.
               const isRollover = Boolean(cat.rolloverEnabled);
-              const barColor = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warn)' : 'var(--accent-mint)';
+              const barColor = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warn)' : 'var(--accent)';
               const allocations = normalizeIncomeAllocations(cat.incomeAllocations);
               const allocationTotal = getAllocationPercentTotal(allocations);
               const fundingLabel = allocations
@@ -461,7 +466,7 @@ export default function Dashboard({
                 <div key={cat.id}>
                   <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                      <div style={{ width: 8, height: 8, borderRadius: '50%', background: cat.color || 'var(--accent-blue)', flexShrink: 0 }} />
+                      <div style={{ width: 8, height: 8, borderRadius: 'var(--radius-full)', background: cat.color || 'var(--accent-2)', flexShrink: 0 }} />
                       <div style={{ minWidth: 0 }}>
                         {onOpenCategory ? (
                           <button type="button" onClick={() => onOpenCategory(cat.id)}
@@ -480,8 +485,8 @@ export default function Dashboard({
                           <div style={{ display: 'flex', gap: 5, marginTop: 2, flexWrap: 'wrap' }}>
                             {boost > 0 && (
                               <span title="Extra budget added for this cycle — clears at next reset" style={{
-                                fontSize: 10, color: 'var(--accent-mint)', background: 'rgba(79,255,176,0.12)',
-                                padding: '1px 6px', borderRadius: 10,
+                                fontSize: 10, color: 'var(--accent)', background: 'color-mix(in srgb, var(--accent) 12%, transparent)',
+                                padding: '1px 6px', borderRadius: 'var(--radius-sm)',
                               }}>
                                 +{fmt(boost)} added
                               </span>
@@ -489,17 +494,17 @@ export default function Dashboard({
                             {roundMoney(cat.rolloverBalance || 0) !== 0 && (
                               <span title="Carried over from previous cycles" style={{
                                 fontSize: 10,
-                                color: (cat.rolloverBalance || 0) > 0 ? 'var(--accent-blue)' : 'var(--danger)',
-                                background: (cat.rolloverBalance || 0) > 0 ? 'rgba(93,184,255,0.12)' : 'rgba(255,107,138,0.1)',
-                                padding: '1px 6px', borderRadius: 10,
+                                color: (cat.rolloverBalance || 0) > 0 ? 'var(--accent-2)' : 'var(--danger)',
+                                background: (cat.rolloverBalance || 0) > 0 ? 'color-mix(in srgb, var(--accent-2) 12%, transparent)' : 'color-mix(in srgb, var(--danger) 10%, transparent)',
+                                padding: '1px 6px', borderRadius: 'var(--radius-sm)',
                               }}>
                                 {(cat.rolloverBalance || 0) > 0 ? '+' : '−'}{fmt(Math.abs(cat.rolloverBalance))} rolled over
                               </span>
                             )}
                             {boost < 0 && (
                               <span title="Lent to another category this cycle — restored at next reset" style={{
-                                fontSize: 10, color: 'var(--warn)', background: 'rgba(251,191,112,0.12)',
-                                padding: '1px 6px', borderRadius: 10,
+                                fontSize: 10, color: 'var(--warn)', background: 'color-mix(in srgb, var(--accent-4) 12%, transparent)',
+                                padding: '1px 6px', borderRadius: 'var(--radius-sm)',
                               }}>
                                 −{fmt(Math.abs(boost))} lent
                               </span>
@@ -507,10 +512,10 @@ export default function Dashboard({
                             {allocations.length > 0 ? (
                               <span title={fundingLabel} style={{
                                 fontSize: 10,
-                                color: fundingOk ? 'var(--accent-blue)' : 'var(--danger)',
-                                background: fundingOk ? 'rgba(93,184,255,0.08)' : 'rgba(255,107,138,0.1)',
+                                color: fundingOk ? 'var(--accent-2)' : 'var(--danger)',
+                                background: fundingOk ? 'color-mix(in srgb, var(--accent-2) 8%, transparent)' : 'color-mix(in srgb, var(--danger) 10%, transparent)',
                                 padding: '1px 6px',
-                                borderRadius: 10,
+                                borderRadius: 'var(--radius-sm)',
                                 maxWidth: 230,
                                 overflow: 'hidden',
                                 textOverflow: 'ellipsis',
@@ -519,16 +524,16 @@ export default function Dashboard({
                                 {fundingLabel || 'Funding missing'}
                               </span>
                             ) : cat.resetFrequency ? (
-                              <span style={{ fontSize: 10, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.06)', padding: '1px 6px', borderRadius: 10 }}>
+                              <span style={{ fontSize: 10, color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--text-primary) 6%, transparent)', padding: '1px 6px', borderRadius: 'var(--radius-sm)' }}>
                                 Legacy · {FREQ_LABEL[cat.resetFrequency]}
                               </span>
                             ) : (
-                              <span style={{ fontSize: 10, color: 'var(--danger)', background: 'rgba(255,107,138,0.1)', padding: '1px 6px', borderRadius: 10 }}>
+                              <span style={{ fontSize: 10, color: 'var(--danger)', background: 'color-mix(in srgb, var(--danger) 10%, transparent)', padding: '1px 6px', borderRadius: 'var(--radius-sm)' }}>
                                 Funding missing
                               </span>
                             )}
                             {cat.allowanceFormula && (
-                              <span style={{ fontSize: 10, color: 'var(--accent-mint)', background: 'rgba(79,255,176,0.08)', padding: '1px 6px', borderRadius: 10 }}>
+                              <span style={{ fontSize: 10, color: 'var(--accent)', background: 'color-mix(in srgb, var(--accent) 8%, transparent)', padding: '1px 6px', borderRadius: 'var(--radius-sm)' }}>
                                 ƒ formula
                               </span>
                             )}
@@ -536,9 +541,9 @@ export default function Dashboard({
                               <span style={{
                                 fontSize: 10,
                                 color: pacedStatus.availablePerPeriod >= pacedStatus.amount ? 'var(--good)' : pacedStatus.availablePerPeriod > 0 ? 'var(--warn)' : 'var(--danger)',
-                                background: 'rgba(255,255,255,0.06)',
+                                background: 'color-mix(in srgb, var(--text-primary) 6%, transparent)',
                                 padding: '1px 6px',
-                                borderRadius: 10,
+                                borderRadius: 'var(--radius-sm)',
                               }}>
                                 {fmt(Math.max(0, pacedStatus.availablePerPeriod))}/{pacedStatus.periodLabel}
                               </span>
@@ -552,9 +557,9 @@ export default function Dashboard({
                                 style={{
                                   fontSize: 10,
                                   color: pacedPeriod.left > 0.005 ? 'var(--good)' : pacedPeriod.left < -0.005 ? 'var(--danger)' : 'var(--warn)',
-                                  background: pacedPeriod.left > 0.005 ? 'rgba(79,255,176,0.12)' : pacedPeriod.left < -0.005 ? 'rgba(255,107,138,0.1)' : 'rgba(251,191,112,0.12)',
+                                  background: pacedPeriod.left > 0.005 ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : pacedPeriod.left < -0.005 ? 'color-mix(in srgb, var(--danger) 10%, transparent)' : 'color-mix(in srgb, var(--accent-4) 12%, transparent)',
                                   padding: '1px 6px',
-                                  borderRadius: 10,
+                                  borderRadius: 'var(--radius-sm)',
                                 }}>
                                 {pacedPeriod.left >= -0.005
                                   ? `${fmt(Math.max(0, pacedPeriod.left))} left ${pacedPeriod.scopeLabel}`
@@ -565,9 +570,9 @@ export default function Dashboard({
                               <span style={{
                                 fontSize: 10,
                                 color: pacedStatus.paceBalance > 0 ? 'var(--good)' : 'var(--danger)',
-                                background: pacedStatus.paceBalance > 0 ? 'rgba(79,255,176,0.12)' : 'rgba(255,107,138,0.1)',
+                                background: pacedStatus.paceBalance > 0 ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'color-mix(in srgb, var(--danger) 10%, transparent)',
                                 padding: '1px 6px',
-                                borderRadius: 10,
+                                borderRadius: 'var(--radius-sm)',
                               }}>
                                 {pacedStatus.paceBalance > 0 ? '+' : ''}{fmt(pacedStatus.paceBalance)} {pacedStatus.paceBalance > 0 ? 'ahead' : 'behind'}
                               </span>
@@ -575,10 +580,10 @@ export default function Dashboard({
                             {catSubCost > 0 && (
                               <span title={`${fmt(catSubCost)} in upcoming subscriptions this period`} style={{
                                 fontSize: 10,
-                                color: projectedLeft >= 0 ? 'var(--accent-purple)' : 'var(--danger)',
-                                background: projectedLeft >= 0 ? 'rgba(167,139,250,0.12)' : 'rgba(255,107,138,0.1)',
+                                color: projectedLeft >= 0 ? 'var(--accent-3)' : 'var(--danger)',
+                                background: projectedLeft >= 0 ? 'color-mix(in srgb, var(--accent-3) 12%, transparent)' : 'color-mix(in srgb, var(--danger) 10%, transparent)',
                                 padding: '1px 6px',
-                                borderRadius: 10,
+                                borderRadius: 'var(--radius-sm)',
                               }}>
                                 {fmt(Math.abs(projectedLeft))} {projectedLeft >= 0 ? 'left after subs' : 'over after subs'}
                               </span>
@@ -587,9 +592,9 @@ export default function Dashboard({
                               <span title="Running total of over/underspend vs allowance across all budget cycles" style={{
                                 fontSize: 10,
                                 color: cumulativeOverspend > 0 ? 'var(--danger)' : 'var(--good)',
-                                background: cumulativeOverspend > 0 ? 'rgba(255,107,138,0.1)' : 'rgba(79,255,176,0.12)',
+                                background: cumulativeOverspend > 0 ? 'color-mix(in srgb, var(--danger) 10%, transparent)' : 'color-mix(in srgb, var(--accent) 12%, transparent)',
                                 padding: '1px 6px',
-                                borderRadius: 10,
+                                borderRadius: 'var(--radius-sm)',
                               }}>
                                 {cumulativeOverspend > 0 ? '+' : '-'}{fmt(Math.abs(cumulativeOverspend))} all-time
                               </span>
@@ -642,7 +647,7 @@ export default function Dashboard({
            A total on its own says nothing about whether it's good or bad.
            Compared against the same point last cycle, it does. */}
       {comparison.previousTotal > 0 && (
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+        <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
           <div className="mobile-row-stack" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 4 }}>
             <CardTitle as="h2">This Cycle vs Last</CardTitle>
             <span style={{ fontSize: 13, fontWeight: 700, color: comparison.change > 0 ? 'var(--danger)' : 'var(--good)' }}>
@@ -657,7 +662,7 @@ export default function Dashboard({
             {comparison.categories.filter(row => row.change !== 0).slice(0, 5).map(row => (
               <div key={row.id} className="cycle-compare-row">
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: row.color || 'var(--accent-blue)', flexShrink: 0 }} />
+                  <span style={{ width: 7, height: 7, borderRadius: 'var(--radius-full)', background: row.color || 'var(--accent-2)', flexShrink: 0 }} />
                   <span style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</span>
                 </div>
                 <span style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
@@ -674,21 +679,21 @@ export default function Dashboard({
 
       {/* ── Recent Transactions ── */}
       {recentTxs.length > 0 && (
-        <div className="glass mobile-card-pad" style={{ borderRadius: 18, padding: '22px 24px' }}>
+        <div className="card mobile-card-pad" style={{ borderRadius: 'var(--radius-lg)', padding: '22px 24px' }}>
           <CardTitle as="h2" style={{ marginBottom: 14 }}>Recent Transactions</CardTitle>
           <div className="scroll-region" style={{ maxHeight: 400, overflowY: 'auto', paddingRight: 4, display: 'flex', flexDirection: 'column', gap: 10 }}>
             {recentTxs.map(tx => {
               const refund = isRefund(tx);
               return (
-                <div key={tx.id} className="mobile-list-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'rgba(255,255,255,0.04)', borderRadius: 10 }}>
+                <div key={tx.id} className="mobile-list-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-sm)' }}>
                   <div className="mobile-list-main" style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: tx.cat?.color || 'var(--accent-blue)', flexShrink: 0 }} />
+                    <div style={{ width: 8, height: 8, borderRadius: 'var(--radius-full)', background: tx.cat?.color || 'var(--accent-2)', flexShrink: 0 }} />
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tx.note || tx.cat?.name || 'Expense'}</div>
                       <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{tx.cat?.name} · {format(new Date(tx.date), 'd MMM')}</div>
                     </div>
                   </div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: refund ? 'var(--good)' : 'var(--accent-warm)', flexShrink: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: refund ? 'var(--good)' : 'var(--accent-4)', flexShrink: 0 }}>
                     {refund ? '+' : '-'}{fmt(tx.amount)}
                   </div>
                   {/* Spotting a mistake here and having to go elsewhere to fix
