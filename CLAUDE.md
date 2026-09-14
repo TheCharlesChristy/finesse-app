@@ -183,7 +183,7 @@ Splits are N ordinary transactions sharing a `splitGroupId` — not a parent row
 with children — so every existing query, filter and reset handles them with no
 special-casing, and a single part can be edited or deleted on its own.
 
-### Statement reconciliation — dates drift, matching must tolerate it
+### Statement reconciliation — three piles, and who decides each one
 
 A bank doesn't post a transaction the day it happened: a card purchase clears
 a day or two later, a weekend purchase clears the following Monday, a direct
@@ -192,15 +192,49 @@ and OCR statement-import paths) therefore matches on amount within a
 `dateToleranceDays` window (default 3, adjustable in the review step), not
 just the exact day.
 
-That match is **never allowed to auto-exclude a row** — a cross-date hit
-always comes back `ROW_SIMILAR` (included by default), never `ROW_DUPLICATE`.
-The reason is the same one already written above the same-day loose match: a
-daily coffee, a weekly petrol fill-up, or any other same-amount purchase at
-the same merchant a few days apart is exactly what a genuine repeat
-transaction looks like, and silently dropping one because it resembles an
-earlier row would be worse than asking the user to glance at a row flagged
-"similar" and confirm it's new. Description similarity (`similarDescriptions`)
-only changes how confident the row's message reads, never the include default.
+**One index, one ranked answer.** Every candidate comes out of a single map
+bucketed by amount to the penny, and `rankMatches` orders them by description
+similarity, closeness in date, and whether the direction agrees. There used to
+be three passes with three different notions of a match, and the only one that
+could say *what* it had matched was the one that ran last — so a row could be
+excluded as "Already logged" without naming the transaction it supposedly
+duplicated, which is unfalsifiable from the user's side. A row now carries
+`matches`: the actual candidates, `id` and all.
+
+Three outcomes, and the rule is about **who is entitled to decide**:
+
+- **Already in** (`ROW_DUPLICATE`, excluded). Same day, same amount, same
+  direction, and a recognisable name — `descriptionSimilarity` at or above
+  `SIMILAR_DESCRIPTION`, not an identical string. That loosening matters: the
+  bank writes "TESCO STORES 3294 LONDON GB" and the user typed "Tesco", and
+  demanding equality is why a statement read after a week of hand-typing came
+  back full of rows already in the ledger.
+- **Needs checking** (`ROW_SIMILAR`, included). Everything else the pass found.
+- **Needs adding** (`ROW_NEW`, included). Nothing looked like it.
+
+**A cross-date match is never allowed to auto-exclude a row.** A daily coffee,
+a weekly petrol fill-up, any same-amount purchase at the same merchant a few
+days apart is exactly what a genuine repeat transaction looks like, and
+silently dropping one would be worse than asking. It always comes back
+"needs checking".
+
+What makes that bearable is that the asking is now a real place rather than a
+sentence in a list. The review step groups rows into those three piles, a
+`<select>` on each row moves it between them, and `BUCKETS` in `statement.jsx`
+ties pile to `status` **and** to `include` — one control for one decision,
+because two controls for one decision is how a review screen ends up promising
+to import eight rows and importing five. The `check` step then walks the
+"needs checking" pile one row at a time: the statement row, the transactions it
+could already be, and three answers.
+
+**`findNearbyTransactions` is the point of that screen, not a garnish.** The
+automatic pass only ever considers the same amount to the penny — the right bar
+for a decision made without asking, and useless the moment a person wants to
+settle a row by eye. A purchase typed as £12.50 when the card took £12.49, one
+statement line covering a split, a tip added afterwards: no rule will ever put
+those in front of anyone, and all of them are obvious to whoever made the
+purchase. So the check step also offers *every* transaction within a week of
+the row, whatever it cost.
 
 **If you add another way to bring transactions in, route it through
 `buildImportRows`.** It is the one place this reconciliation logic lives;
@@ -391,6 +425,15 @@ Lloyds-shaped PDF through the real pipeline, not by reasoning:
   in "paid out", displaces the amount, and the row reaches review with nothing
   to import. `repairMoneyColumns` sorts the words by what they are once their
   column is known.
+- **Punctuation clings to a merchant's name, and means nothing.** A leader
+  dot, a bullet from a symbol font, the period an abbreviated month leaves in
+  the date column ("05 Jan." put a bare `.` in front of every merchant on the
+  page), a separator stranded by a column boundary landing a character off.
+  `tidyDescription` removes it from both ends unconditionally rather than
+  chasing each cause: the causes are many, the fix is the same for all of them,
+  and leading punctuation is never part of a name. It matters beyond looks — a
+  description reading ". SAINSBURYS" is what gets stored as the merchant *and*
+  what every comparison against a hand-typed transaction runs against.
 - **The payment-type code is not part of the merchant.** `DD`, `SO`, `FPI`,
   `FPO`, `DEB`, `BGC`, `CPT`, `TFR`, `CHQ`, `INT` — Lloyds gives it a column,
   other banks put it in front of the merchant, and a narrow gap between two

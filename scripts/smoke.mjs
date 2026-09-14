@@ -557,7 +557,7 @@ await page.waitForTimeout(600);
 await page.getByRole('button', { name: /Review 3 rows/ }).click();
 await page.waitForTimeout(500);
 const secondPass = await page.getByRole('dialog').innerText();
-if (!/Already logged/.test(secondPass)) errors.push('re-import did not flag duplicates');
+if (!/Already in/i.test(secondPass)) errors.push('re-import did not flag duplicates');
 if (await page.getByRole('button', { name: /^Import \d+ transactions?$/ }).isEnabled()) {
   errors.push('re-import still offers to import already-logged rows');
 }
@@ -606,6 +606,59 @@ if (pdfInputs.some(v => /^DEB /.test(v))) errors.push(`payment-type code left in
 await page.getByRole('button', { name: 'Close dialog' }).click();
 await page.waitForTimeout(300);
 step('PDF statement read as real columns, with money in and out told apart');
+
+// ── Cross-referencing a drifted row by hand ─────────────────────────────────
+//
+// The case the whole three-pile flow exists for: a statement row that is the
+// same purchase as something already logged, on a different day, which no rule
+// may settle on its own. It has to reach the "needs checking" pile, be
+// answerable one row at a time against the actual transaction it matches, and
+// drop out of the import when answered.
+
+await page.getByRole('button', { name: /Import Statement/ }).click();
+await page.getByRole('dialog').waitFor({ timeout: 5000 });
+await page.setInputFiles('input[type="file"][accept*="csv"]', {
+  name: 'drifted.csv',
+  mimeType: 'text/csv',
+  buffer: Buffer.from(
+    'Date,Description,Amount\n'
+    + '03/07/2026,COFFEE HUT LONDON,-3.20\n'     // same £3.20 logged on 01/07
+    + '20/07/2026,SOMETHING BRAND NEW,-9.99\n',
+  ),
+});
+await page.waitForTimeout(600);
+await page.getByRole('button', { name: /Review 2 rows/ }).click();
+await page.waitForTimeout(500);
+
+const piles = await page.getByRole('dialog').innerText();
+if (!/needs checking . 1/i.test(piles)) errors.push(`drifted row did not reach "needs checking":\n${piles}`);
+if (!/needs adding . 1/i.test(piles)) errors.push(`new row did not reach "needs adding":\n${piles}`);
+// The match has to name what it matched, or there is nothing to check against.
+if (!/COFFEE HUT/.test(piles)) errors.push(`match did not name the logged transaction:\n${piles}`);
+
+await page.getByRole('button', { name: /Check it one by one/ }).click();
+await page.waitForTimeout(400);
+const checking = await page.getByRole('dialog').innerText();
+if (!/Check 1 of 1/.test(checking)) errors.push(`check step did not open on the row:\n${checking}`);
+if (!/same amount, already logged/i.test(checking)) errors.push(`check step offered no candidate:\n${checking}`);
+
+// Tapping the candidate is the answer: this row is that transaction. Scoped to
+// the dialog — the Transactions list behind the overlay has a COFFEE HUT row of
+// its own, and it is pinned out of view while a modal is open.
+await page.getByRole('dialog').getByRole('button', { name: /COFFEE HUT/ }).first().click();
+await page.waitForTimeout(300);
+await page.getByRole('button', { name: /Back to the list/ }).click();
+await page.waitForTimeout(400);
+
+const settled = await page.getByRole('dialog').innerText();
+if (!/already in . 1/i.test(settled)) errors.push(`answered row did not move to "already in":\n${settled}`);
+if (/needs checking . \d/i.test(settled)) errors.push(`row stayed in "needs checking" after being answered:\n${settled}`);
+// Answering "already in" has to take it out of the import, not just relabel it.
+await page.getByRole('button', { name: /^Import 1 transaction$/ }).waitFor({ timeout: 3000 });
+
+await page.getByRole('button', { name: 'Close dialog' }).click();
+await page.waitForTimeout(300);
+step('a drifted row is checked by hand against the transaction it matches');
 
 // ── Looking back ─────────────────────────────────────────────────────────
 

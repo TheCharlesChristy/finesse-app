@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, ArrowLeft, Camera, Check, Columns3, FileUp, Loader2, Scale, Upload,
+  AlertTriangle, ArrowLeft, ArrowRight, Camera, Check, Columns3, FileUp, HelpCircle,
+  Loader2, Plus, Scale, SearchCheck, Upload,
 } from 'lucide-react';
+
+import { format } from 'date-fns';
 
 import { Modal, Field } from '../ui';
 import CategorySelect from '../CategorySelect';
 import {
-  buildImportRows, guessColumnMapping, inferClosingBalance, parseAmount, parseCsv,
-  parseStatementLines, parseStatementText, reconcile, summariseRows, toTransactionPayload,
-  ROW_DUPLICATE, ROW_INVALID, ROW_SIMILAR,
+  buildImportRows, findNearbyTransactions, guessColumnMapping, inferClosingBalance,
+  parseAmount, parseCsv, parseStatementLines, parseStatementText, reconcile, summariseRows,
+  toTransactionPayload, ROW_DUPLICATE, ROW_INVALID, ROW_NEW, ROW_SIMILAR,
 } from '../../csv';
 import { fmt, suggestCategoryForNote, TX_EXPENSE, TX_REFUND } from '../../utils';
 
@@ -52,11 +55,118 @@ function describeLayout(layout) {
   };
 }
 
+/**
+ * The three answers a person can give about a statement row, and the one the
+ * app gives when it can't read the row at all.
+ *
+ * These are the review step's organising idea rather than a decoration on it. A
+ * flat list of rows each carrying a sentence about what it might be leaves the
+ * reader to hold the sorting in their head; a row belongs in exactly one of
+ * these piles, the pile says what will happen to it, and moving it between
+ * piles is the whole decision. `status` on the row is what a bucket *is* — so
+ * changing the bucket changes the status, and `summariseRows` counts the
+ * result with nothing extra taught to it.
+ */
+const BUCKETS = [
+  {
+    id: 'needsChecking',
+    status: ROW_SIMILAR,
+    include: true,
+    label: 'Needs checking',
+    color: 'var(--warn)',
+    blurb: 'Might already be in Finesse. These will be imported unless you say otherwise.',
+  },
+  {
+    id: 'needsAdding',
+    status: ROW_NEW,
+    include: true,
+    label: 'Needs adding',
+    color: 'var(--accent-mint)',
+    blurb: 'Nothing already logged looks like these.',
+  },
+  {
+    id: 'alreadyIn',
+    status: ROW_DUPLICATE,
+    include: false,
+    label: 'Already in',
+    color: 'var(--text-muted)',
+    blurb: 'Matched against something you have already logged, so these won’t be imported.',
+  },
+  {
+    id: 'cantImport',
+    status: ROW_INVALID,
+    include: false,
+    label: 'Can’t import',
+    color: 'var(--danger)',
+    blurb: 'Finesse couldn’t read a date or an amount on these.',
+  },
+];
+
+const BUCKET_BY_STATUS = Object.fromEntries(BUCKETS.map(bucket => [bucket.status, bucket]));
+const BUCKET_BY_ID = Object.fromEntries(BUCKETS.map(bucket => [bucket.id, bucket]));
+// The three a person can choose between; "can't import" is the app's verdict,
+// not an option, since nothing can be written from a row with no amount.
+const CHOOSABLE = BUCKETS.filter(bucket => bucket.id !== 'cantImport');
+
 const STATUS_STYLES = {
-  duplicate: { label: 'Already logged', color: 'var(--text-muted)' },
-  similar: { label: 'Looks familiar', color: 'var(--warn)' },
+  duplicate: { label: 'Already in', color: 'var(--text-muted)' },
+  similar: { label: 'Needs checking', color: 'var(--warn)' },
   invalid: { label: 'Can’t import', color: 'var(--danger)' },
 };
+
+/**
+ * One transaction already in Finesse, offered as what a statement row might
+ * already be.
+ *
+ * Tapping it answers "is this already logged?", so it has to show enough to
+ * recognise a purchase by from memory: when it was, how much, what it was
+ * called, and which category it went to. An automatic match that can only say
+ * "something with this amount exists" is what made cross-referencing useless.
+ */
+/**
+ * A `yyyy-MM-dd` day as the rest of the app writes one.
+ *
+ * Built from the parts rather than parsed: `new Date('2026-09-12')` is read as
+ * UTC midnight and renders as the 11th anywhere west of Greenwich, which on a
+ * screen whose whole job is comparing two dates would be its own bug.
+ */
+function shortDate(iso) {
+  const [year, month, day] = String(iso || '').split('-').map(Number);
+  if (!year || !month || !day) return iso || '';
+  return format(new Date(year, month - 1, day), 'd MMM yyyy');
+}
+
+function MatchCandidate({ match, categoryName, onPick }) {
+  const when = match.days === 0
+    ? 'same day'
+    : `${match.days} day${match.days === 1 ? '' : 's'} ${match.drift < 0 ? 'earlier' : 'later'}`;
+
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+        padding: '9px 11px', borderRadius: 10, cursor: 'pointer',
+        background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
+        color: 'var(--text-primary)',
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {match.description || 'No description'}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+          {shortDate(match.date)} · {when} · {categoryName(match.categoryId)}
+          {match.type === TX_REFUND ? ' · refund' : ''}
+        </div>
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 600, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+        {fmt(match.amount)}
+      </div>
+    </button>
+  );
+}
 
 const MAPPING_FIELDS = [
   ['date', 'Date', true],
@@ -202,7 +312,7 @@ export function ImportStatementModal({
   onImport,
   onClose,
 }) {
-  const [step, setStep] = useState('file'); // file | extracting | map | review
+  const [step, setStep] = useState('file'); // file | extracting | map | review | check
   const [fileName, setFileName] = useState('');
   const [headers, setHeaders] = useState([]); // non-empty only for a CSV source
   const [parsedRows, setParsedRows] = useState(null);
@@ -215,6 +325,12 @@ export function ImportStatementModal({
   // balance agrees with the result. Null for a CSV, where the user chose the
   // columns themselves and has nothing to be told.
   const [layout, setLayout] = useState(null);
+  // The rows being checked one at a time, snapshotted on entering that step.
+  // Recomputing it live would renumber the queue under the reader's feet the
+  // moment they answered one — the row they just settled leaves the pile.
+  const [checkQueue, setCheckQueue] = useState([]);
+  const [checkAt, setCheckAt] = useState(0);
+  const [showNearby, setShowNearby] = useState(false);
   const [error, setError] = useState('');
   // Set when some (not all) pages of a PDF failed to read — non-blocking,
   // shown alongside whatever rows the readable pages still produced.
@@ -275,6 +391,28 @@ export function ImportStatementModal({
   );
   const layoutNote = useMemo(() => describeLayout(layout), [layout]);
 
+  const categoryName = (id) => categories.find(c => c.id === Number(id))?.name || 'No category';
+
+  /**
+   * Move a row to one of the three piles.
+   *
+   * The pile *is* the decision, so it sets what will happen to the row as well
+   * as where it appears — two controls for one choice is how a review screen
+   * ends up saying it will import eight rows and importing five.
+   */
+  const setBucket = (index, bucketId, matchedId = null) => {
+    const bucket = BUCKET_BY_ID[bucketId];
+    if (!bucket) return;
+    setOverride(index, { status: bucket.status, include: bucket.include, matchedId });
+  };
+
+  const openCheck = () => {
+    setCheckQueue(rows.filter(row => row.status === ROW_SIMILAR).map(row => row.index));
+    setCheckAt(0);
+    setShowNearby(false);
+    setStep('check');
+  };
+
   const setOverride = (index, patch) => {
     setOverrides(current => {
       const prev = current[index] || {};
@@ -309,6 +447,7 @@ export function ImportStatementModal({
       setMapping(guessed);
       setLayout(null);
       setOverrides({});
+      setCheckQueue([]);
       setStep('map');
     } catch {
       setError('That file couldn’t be read.');
@@ -356,6 +495,7 @@ export function ImportStatementModal({
       setMapping(result.mapping);
       setLayout(result.layout);
       setOverrides({});
+      setCheckQueue([]);
       setStep('review');
     } catch (err) {
       setError(describeOcrFailure(err, ocrModule));
@@ -515,7 +655,274 @@ export function ImportStatementModal({
     );
   }
 
+  // ── Step: check (the "needs checking" pile, one row at a time) ──
+  //
+  // The review list can say a row "might be one of these", but it cannot ask.
+  // This can: one statement row, the transactions it could already be, and
+  // three answers. It also offers every transaction near the row's date, not
+  // just the same-amount candidates — a purchase typed as £12.50 when the card
+  // took £12.49 is exactly the kind of thing only a person can recognise, and
+  // no automatic rule will ever put it in front of them.
+  if (step === 'check') {
+    const total = checkQueue.length;
+    const position = Math.min(checkAt, Math.max(total - 1, 0));
+    const row = total ? rows.find(item => item.index === checkQueue[position]) : null;
+    const done = (
+      <button className="btn-primary" onClick={() => setStep('review')}
+        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
+        <Check size={14} /> Back to the list
+      </button>
+    );
+
+    if (!row) {
+      return (
+        <Modal title="Nothing to check" subtitle={fileName} onClose={onClose} maxWidth={520}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+              None of these rows look like anything you have already logged.
+            </div>
+            <div className="modal-actions">{done}</div>
+          </div>
+        </Modal>
+      );
+    }
+
+    const bucket = BUCKET_BY_STATUS[row.status];
+    const matches = row.matches || [];
+    const matchedIds = new Set(matches.map(match => match.id));
+    const nearby = findNearbyTransactions(transactions, { date: row.date, windowDays: 7 })
+      .filter(item => !matchedIds.has(item.id));
+
+    // Answering moves to the next row rather than sitting on the one just
+    // settled: the pile is the task, and stopping to admire each answer is
+    // what makes a six-row check feel like twelve.
+    const answer = (bucketId, matchedId = null) => {
+      setBucket(row.index, bucketId, matchedId);
+      setShowNearby(false);
+      if (position < total - 1) setCheckAt(position + 1);
+    };
+
+    return (
+      <Modal
+        title={`Check ${position + 1} of ${total}`}
+        subtitle="Is this already in Finesse?"
+        onClose={onClose}
+        maxWidth={520}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>
+              From your statement
+            </div>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 10,
+              background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{row.description || 'No description'}</div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+                  {shortDate(row.date)}{row.type === TX_REFUND ? ' · money in' : ''}
+                </div>
+              </div>
+              <div style={{
+                fontSize: 15, fontWeight: 600, fontVariantNumeric: 'tabular-nums',
+                color: row.type === TX_REFUND ? 'var(--good)' : 'var(--text-primary)',
+              }}>
+                {row.type === TX_REFUND ? '+' : '−'}{fmt(row.amount)}
+              </div>
+            </div>
+          </div>
+
+          {bucket && bucket.id !== 'needsChecking' && (
+            <div style={{ fontSize: 11, color: bucket.color }}>
+              Marked <strong>{bucket.label.toLowerCase()}</strong>
+              {row.matchedId != null && ' — matched to a transaction you already have'}.
+            </div>
+          )}
+
+          {matches.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+                Same amount, already logged — tap the one it is
+              </div>
+              {matches.map(match => (
+                <MatchCandidate
+                  key={match.id ?? `${match.date}-${match.amount}`}
+                  match={match}
+                  categoryName={categoryName}
+                  onPick={() => answer('alreadyIn', match.id)}
+                />
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
+            <button className="btn-secondary" onClick={() => answer('needsAdding')}
+              style={{ flex: '1 1 150px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 12 }}>
+              <Plus size={13} /> It&rsquo;s new — add it
+            </button>
+            <button className="btn-secondary" onClick={() => answer('needsChecking')}
+              style={{ flex: '1 1 120px', fontSize: 12, color: 'var(--text-secondary)' }}>
+              Decide later
+            </button>
+          </div>
+
+          {/* The manual cross-reference: everything near this date, whatever it
+              cost. Collapsed, because on most rows the candidates above are the
+              answer and this is a longer list than anyone wants by default. */}
+          {nearby.length > 0 && (
+            showNearby
+              ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+                    Everything else within a week of {shortDate(row.date)}
+                  </div>
+                  <div className="scroll-region" style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {nearby.map(item => (
+                      <MatchCandidate
+                        key={item.id ?? `${item.date}-${item.amount}`}
+                        match={item}
+                        categoryName={categoryName}
+                        onPick={() => answer('alreadyIn', item.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )
+              : (
+                <button
+                  type="button"
+                  onClick={() => setShowNearby(true)}
+                  style={{
+                    background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left',
+                    fontSize: 11, color: 'var(--accent-mint)', display: 'flex', alignItems: 'center', gap: 6,
+                  }}
+                >
+                  <SearchCheck size={13} /> Compare against my other {nearby.length} transaction
+                  {nearby.length === 1 ? '' : 's'} near this date
+                </button>
+              )
+          )}
+
+          <div className="modal-actions" style={{ display: 'flex', gap: 10 }}>
+            <button className="btn-secondary" onClick={() => setCheckAt(Math.max(0, position - 1))}
+              disabled={position === 0}
+              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              <ArrowLeft size={13} /> Previous
+            </button>
+            {position < total - 1
+              ? (
+                <button className="btn-primary" onClick={() => { setShowNearby(false); setCheckAt(position + 1); }}
+                  style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  Next <ArrowRight size={13} />
+                </button>
+              )
+              : done}
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
   // ── Step: review ──
+  const renderRow = (row) => {
+    const invalid = row.status === ROW_INVALID;
+    const style = STATUS_STYLES[row.status];
+    return (
+      <div key={row.index} style={{
+        display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px',
+        background: 'rgba(255,255,255,0.035)', borderRadius: 10,
+        opacity: invalid ? 0.7 : 1,
+      }}>
+        <div style={{ flex: '1 1 150px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <input
+            type="text"
+            className="glass-input"
+            value={row.description}
+            onChange={e => setOverride(row.index, { fields: { description: e.target.value } })}
+            placeholder="No description"
+            aria-label="Description"
+            style={{ padding: '5px 8px', fontSize: 12, fontWeight: 500 }}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              className="glass-input"
+              value={row.rawDate}
+              onChange={e => setOverride(row.index, { fields: { date: e.target.value } })}
+              placeholder="Date"
+              aria-label="Date"
+              style={{ padding: '3px 6px', fontSize: 10, width: 96 }}
+            />
+            {/* One control for one decision: which pile a row is in decides
+                whether it gets written. */}
+            <select
+              className="glass-input"
+              value={invalid ? 'cantImport' : (BUCKET_BY_STATUS[row.status]?.id || 'needsAdding')}
+              onChange={e => setBucket(row.index, e.target.value)}
+              disabled={invalid}
+              aria-label={`What to do with ${row.description || 'this row'}`}
+              style={{ padding: '3px 6px', fontSize: 10 }}
+            >
+              {invalid
+                ? <option value="cantImport">Can’t import</option>
+                : CHOOSABLE.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+            {row.suggestion?.source === 'rule' && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>matched a rule</span>}
+          </div>
+          {(row.problem || invalid) && (
+            <div style={{ fontSize: 10, color: style?.color || 'var(--text-muted)', lineHeight: 1.5 }}>
+              {row.problem || style?.label}
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => setOverride(row.index, { type: row.type === TX_REFUND ? TX_EXPENSE : TX_REFUND })}
+            disabled={invalid}
+            title={row.type === TX_REFUND ? 'Refund — click to flip to spending' : 'Spending — click to flip to a refund'}
+            style={{
+              background: 'none', border: 'none', padding: '0 2px', cursor: invalid ? 'default' : 'pointer',
+              fontSize: 15, fontWeight: 700, lineHeight: 1,
+              color: row.type === TX_REFUND ? 'var(--good)' : 'var(--accent-warm)',
+            }}
+          >
+            {row.type === TX_REFUND ? '+' : '−'}
+          </button>
+          {mapping.amount != null
+            ? (
+              <AmountField
+                value={row.amount}
+                disabled={invalid}
+                onCommit={amount => setOverride(row.index, { amount })}
+              />
+            )
+            : (
+              <div style={{ fontSize: 13, fontWeight: 600, minWidth: 64, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                {invalid ? '—' : fmt(row.amount)}
+              </div>
+            )}
+        </div>
+        <div style={{ flex: '0 1 150px', minWidth: 120 }}>
+          <CategorySelect
+            categories={categories}
+            value={String(row.categoryId || '')}
+            onChange={id => setOverride(row.index, { categoryId: Number(id) })}
+            disabled={invalid}
+            placeholder="Pick one"
+            aria-label={`Category for ${row.description || 'row'}`}
+          />
+        </div>
+      </div>
+    );
+  };
+
+  const grouped = BUCKETS
+    .map(bucket => ({ bucket, items: rows.filter(row => row.status === bucket.status) }))
+    .filter(group => group.items.length > 0);
+  const needsChecking = rows.filter(row => row.status === ROW_SIMILAR).length;
+
   return (
     <Modal title="Review before importing" subtitle={fileName} onClose={onClose} maxWidth={760}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -603,89 +1010,41 @@ export function ImportStatementModal({
           </div>
         )}
 
+        {/* The pile that needs a person. Loud, because a row sitting here is
+            the one thing on this screen the app genuinely cannot settle — and
+            because it will be imported if nobody looks, which is the safer
+            default (never silently drop a real transaction) but only while the
+            count is impossible to miss. */}
+        {needsChecking > 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+            padding: '11px 13px', borderRadius: 10,
+            background: 'rgba(251,191,112,0.09)', color: 'var(--warn)',
+          }}>
+            <HelpCircle size={14} style={{ flexShrink: 0 }} aria-hidden="true" />
+            <span style={{ flex: '1 1 200px', fontSize: 12, lineHeight: 1.6 }}>
+              {needsChecking} row{needsChecking === 1 ? '' : 's'} might already be in Finesse.
+              They&rsquo;ll be imported unless you say otherwise.
+            </span>
+            <button className="btn-secondary" onClick={openCheck}
+              style={{ flexShrink: 0, fontSize: 12, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 6 }}>
+              Check {needsChecking === 1 ? 'it' : 'them'} one by one <ArrowRight size={13} />
+            </button>
+          </div>
+        )}
+
         <div className="scroll-region" style={{ maxHeight: 340, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {rows.map(row => {
-            const invalid = row.status === ROW_INVALID;
-            const style = STATUS_STYLES[row.status];
-            return (
-              <div key={row.index} style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px',
-                background: 'rgba(255,255,255,0.035)', borderRadius: 10,
-                opacity: invalid ? 0.7 : 1,
-              }}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(row.include) && !invalid}
-                  disabled={invalid}
-                  onChange={e => setOverride(row.index, { include: e.target.checked })}
-                  aria-label={`Import ${row.description || 'row'} on ${row.date || 'unknown date'}`}
-                  style={{ width: 15, height: 15, flexShrink: 0, accentColor: 'var(--accent-mint)' }}
-                />
-                <div style={{ flex: '1 1 150px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  <input
-                    type="text"
-                    className="glass-input"
-                    value={row.description}
-                    onChange={e => setOverride(row.index, { fields: { description: e.target.value } })}
-                    placeholder="No description"
-                    aria-label="Description"
-                    style={{ padding: '5px 8px', fontSize: 12, fontWeight: 500 }}
-                  />
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-                    <input
-                      type="text"
-                      className="glass-input"
-                      value={row.rawDate}
-                      onChange={e => setOverride(row.index, { fields: { date: e.target.value } })}
-                      placeholder="Date"
-                      aria-label="Date"
-                      style={{ padding: '3px 6px', fontSize: 10, width: 96 }}
-                    />
-                    {style && <span style={{ fontSize: 10, color: style.color }}>{row.problem || style.label}</span>}
-                    {row.suggestion?.source === 'rule' && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>· matched a rule</span>}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-                  <button
-                    type="button"
-                    onClick={() => setOverride(row.index, { type: row.type === TX_REFUND ? TX_EXPENSE : TX_REFUND })}
-                    disabled={invalid}
-                    title={row.type === TX_REFUND ? 'Refund — click to flip to spending' : 'Spending — click to flip to a refund'}
-                    style={{
-                      background: 'none', border: 'none', padding: '0 2px', cursor: invalid ? 'default' : 'pointer',
-                      fontSize: 15, fontWeight: 700, lineHeight: 1,
-                      color: row.type === TX_REFUND ? 'var(--good)' : 'var(--accent-warm)',
-                    }}
-                  >
-                    {row.type === TX_REFUND ? '+' : '−'}
-                  </button>
-                  {mapping.amount != null
-                    ? (
-                      <AmountField
-                        value={row.amount}
-                        disabled={invalid}
-                        onCommit={amount => setOverride(row.index, { amount })}
-                      />
-                    )
-                    : (
-                      <div style={{ fontSize: 13, fontWeight: 600, minWidth: 64, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                        {invalid ? '—' : fmt(row.amount)}
-                      </div>
-                    )}
-                </div>
-                <div style={{ flex: '0 1 150px', minWidth: 120 }}>
-                  <CategorySelect
-                    categories={categories}
-                    value={String(row.categoryId || '')}
-                    onChange={id => setOverride(row.index, { categoryId: Number(id) })}
-                    disabled={invalid}
-                    placeholder="Pick one"
-                    aria-label={`Category for ${row.description || 'row'}`}
-                  />
-                </div>
+          {grouped.map(({ bucket, items }) => (
+            <div key={bucket.id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', padding: '6px 2px 0' }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: bucket.color, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  {bucket.label} · {items.length}
+                </span>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{bucket.blurb}</span>
               </div>
-            );
-          })}
+              {items.map(renderRow)}
+            </div>
+          ))}
         </div>
 
         <div className="modal-actions" style={{ display: 'flex', gap: 10 }}>
