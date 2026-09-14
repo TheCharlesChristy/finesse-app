@@ -1341,10 +1341,20 @@ export function buildImportRows({
       }
     }
 
-    // An exact duplicate is off by default; a loose match is left on, because
-    // two coffees on one day is at least as likely as a double import.
-    row.include = row.status === ROW_NEW || row.status === ROW_SIMILAR;
-    if (row.status === ROW_INVALID) row.include = false;
+    // Only a row nothing looked like is written without being asked about.
+    //
+    // A "needs checking" row used to be included by default, on the reasoning
+    // that two coffees on one day is at least as likely as a double import —
+    // and that silently dropping a real transaction is the worse failure. Both
+    // are true, and the conclusion was still wrong: it made the pile's whole
+    // purpose advisory. Someone who read every flagged row, left them flagged
+    // because they *were* unsure, and pressed Import got all of them anyway,
+    // which is the one outcome the three piles exist to prevent.
+    //
+    // Nothing is dropped silently instead: the review step shows the count in
+    // its own loud banner, with one tap to accept the lot and one to walk them
+    // row by row. The decision is still the user's — it just has to be made.
+    row.include = row.status === ROW_NEW;
 
     return row;
   });

@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   db,
+  isDatabaseClosedError,
+  reopenDatabase,
   addAccount,
   updateCategory,
   addCategory,
@@ -752,5 +754,46 @@ describe('derived allowances settle', () => {
 
     expect(await runEffectPass()).toEqual([]);
     expect((await getCategory(catId)).allowance).toBe(180);
+  });
+});
+
+/**
+ * The connection going away is not a bug in any one query, and it used to take
+ * the whole app with it.
+ *
+ * iOS Safari closes a backgrounded PWA's IndexedDB connection without warning.
+ * Dexie does not reopen by itself — every later read rejects with
+ * `DatabaseClosedError`, `useLiveQuery` re-throws that during render, and with
+ * nothing above it to catch, React unmounts the tree and the user gets a blank
+ * screen. That is the "it just breaks sometimes" report, and why it always
+ * seemed to follow having left the app for a while.
+ */
+describe('surviving a closed connection', () => {
+  it('reads again after the connection is reopened', async () => {
+    const accountId = await addAccount({ name: 'Main', balance: 100 });
+
+    db.close();
+    expect(db.isOpen()).toBe(false);
+    await expect(db.accounts.get(accountId)).rejects.toThrow();
+
+    expect(await reopenDatabase()).toBe(true);
+    expect(db.isOpen()).toBe(true);
+    // Nothing lost: the same row is there, not a fresh empty store.
+    expect((await db.accounts.get(accountId)).name).toBe('Main');
+  });
+
+  it('is a no-op on a connection that is already open', async () => {
+    expect(db.isOpen()).toBe(true);
+    expect(await reopenDatabase()).toBe(true);
+  });
+
+  it('tells a closed connection apart from an ordinary failure', async () => {
+    db.close();
+    const closed = await db.accounts.toArray().catch(error => error);
+    expect(isDatabaseClosedError(closed)).toBe(true);
+    await reopenDatabase();
+
+    expect(isDatabaseClosedError(new Error('category not found'))).toBe(false);
+    expect(isDatabaseClosedError(null)).toBe(false);
   });
 });

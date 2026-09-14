@@ -662,6 +662,25 @@ if (!/needs adding . 1/i.test(piles)) errors.push(`new row did not reach "needs 
 // The match has to name what it matched, or there is nothing to check against.
 if (!/COFFEE HUT/.test(piles)) errors.push(`match did not name the logged transaction:\n${piles}`);
 
+// The row that needs checking is *not* in the import until someone says so —
+// the new row is, and the button must promise only that. Getting this wrong is
+// how a review screen ends up importing rows the reader deliberately flagged.
+await page.getByRole('button', { name: /^Import 1 transaction$/ }).waitFor({ timeout: 3000 });
+if (!/not being imported yet/i.test(piles)) {
+  errors.push(`review did not say the flagged row is held back:\n${piles}`);
+}
+
+// …and accepting the pile wholesale is one tap, so holding rows back never
+// turns into fourteen questions for someone who has already read the list.
+await page.getByRole('button', { name: /Import it anyway/ }).click();
+await page.waitForTimeout(300);
+await page.getByRole('button', { name: /^Import 2 transactions$/ }).waitFor({ timeout: 3000 });
+step('a flagged row is held back until accepted, and accepting is one tap');
+
+// Put it back in the needs-checking pile to answer it properly below.
+await page.getByRole('combobox', { name: /What to do with COFFEE HUT/i }).selectOption('needsChecking');
+await page.waitForTimeout(300);
+
 await page.getByRole('button', { name: /Check it one by one/ }).click();
 await page.waitForTimeout(400);
 const checking = await page.getByRole('dialog').innerText();

@@ -4,6 +4,7 @@ import { Camera, Loader2, Trash2 } from 'lucide-react';
 import { buildReceipt, receiptsSupported } from '../receipts';
 import { formatBytes } from '../storage';
 import { useBlobUrl } from './useBlobUrl';
+import { holdLockAcrossNativeSheet } from '../lock';
 
 /**
  * Attach one photo to a transaction.
@@ -80,10 +81,13 @@ export default function ReceiptField({ value, onChange, disabled = false }) {
       >
         {busy ? <Loader2 size={13} className="spin" aria-hidden="true" /> : <Camera size={13} aria-hidden="true" />}
         {busy ? 'Processing…' : 'Add a photo'}
+        {/* The camera takes the whole screen. Without the hold, the screen
+            lock counts photographing a receipt as leaving the app. */}
         <input
           type="file"
           accept="image/*"
           capture="environment"
+          onClick={() => holdLockAcrossNativeSheet()}
           onChange={handlePick}
           disabled={disabled || busy}
           style={{ display: 'none' }}

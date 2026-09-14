@@ -45,7 +45,7 @@ import NudgeCenter from './components/NudgeCenter';
 import { notifyNudges } from './notifications';
 import { getPersistenceState, requestPersistence, STORAGE_PERSISTED } from './storage';
 import { shareCsv, shareJson, SHARE_CANCELLED, SHARE_SHARED } from './share';
-import { DEFAULT_LOCK_DELAY_MS, shouldRelock } from './lock';
+import { DEFAULT_LOCK_DELAY_MS, isLockHeld, shouldRelock } from './lock';
 import LockScreen from './components/LockScreen';
 
 const NAV = [
@@ -286,18 +286,39 @@ export default function App() {
   const settingsLoaded = accountsQuery !== undefined && settings !== undefined;
   const privacyScreenOn = settings?.privacyScreenEnabled !== false;
 
+  // Leaving the app, and what the app itself opened.
+  //
+  // Every way the page can stop being frontmost looks the same from here: a
+  // blur and a `visibilitychange` are what the app switcher produces, and they
+  // are also exactly what a file picker, the camera and the share sheet
+  // produce. Treating the second kind as time away is what sent someone
+  // importing a statement straight to the lock screen the instant they tapped
+  // "choose a file" — immediately on the "Immediately" setting, and on any
+  // setting at all once finding the file took longer than the delay. The app
+  // locked them out of a sheet it had opened itself.
+  //
+  // So the clock still starts on any departure — a desktop window losing focus
+  // is a real one, and `visibilitychange` alone never fires for it — but a
+  // standing hold means "this absence was ours" and the return is not counted.
+  // `holdLockAcrossNativeSheet` in `lock.js` is taken by every file input and
+  // by `share.js`; it expires on its own, so a leaked hold costs one window
+  // rather than the session.
   useEffect(() => {
     if (!privacyScreenOn && !lockRequired) return undefined;
 
-    const hide = () => {
-      hiddenSince.current = Date.now();
+    const leave = () => {
+      // The *first* departure is the one that counts. Overwriting it on a
+      // trailing event — iOS fires blur, visibilitychange and pagehide for one
+      // backgrounding — would quietly shorten every measured absence.
+      if (hiddenSince.current == null) hiddenSince.current = Date.now();
       if (privacyScreenOn) setObscured(true);
     };
-    const show = () => {
+    const returned = () => {
       setObscured(false);
-      // Re-lock only after enough time away: asking for the PIN again because
-      // you glanced at a notification is how people turn this off.
-      if (lockRequired && shouldRelock(hiddenSince.current, settings?.lockDelayMs ?? DEFAULT_LOCK_DELAY_MS)) {
+      // Re-lock only after enough genuine time away: asking for the PIN again
+      // because you glanced at a notification is how people turn this off.
+      if (lockRequired && !isLockHeld()
+        && shouldRelock(hiddenSince.current, settings?.lockDelayMs ?? DEFAULT_LOCK_DELAY_MS)) {
         setUnlocked(false);
         // The key goes with it. Re-deriving costs a second at the next unlock,
         // which is the price of not leaving it in memory on a phone sitting on
@@ -306,19 +327,21 @@ export default function App() {
       }
       hiddenSince.current = null;
     };
-    const onVisibilityChange = () => (document.visibilityState === 'hidden' ? hide() : show());
+    const onVisibilityChange = () => (
+      document.visibilityState === 'hidden' ? leave() : returned()
+    );
 
     document.addEventListener('visibilitychange', onVisibilityChange);
     // iOS fires pagehide where visibilitychange can be unreliable, and blur
-    // catches the app switcher being summoned without a full background.
-    window.addEventListener('pagehide', hide);
-    window.addEventListener('blur', hide);
-    window.addEventListener('focus', show);
+    // catches a desktop window losing focus, which fires neither.
+    window.addEventListener('pagehide', leave);
+    window.addEventListener('blur', leave);
+    window.addEventListener('focus', returned);
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
-      window.removeEventListener('pagehide', hide);
-      window.removeEventListener('blur', hide);
-      window.removeEventListener('focus', show);
+      window.removeEventListener('pagehide', leave);
+      window.removeEventListener('blur', leave);
+      window.removeEventListener('focus', returned);
     };
   }, [privacyScreenOn, lockRequired, encryptionEnabled, settings?.lockDelayMs]);
 
@@ -666,11 +689,7 @@ export default function App() {
       }
       setPendingImport(null);
       setModal(null);
-      console.info('Import completed in App', {
-        mode,
-        activeAccountId,
-        summary,
-      });
+      console.info('Import completed in App', { mode, summary });
 
       const tableOrder = [
         'accounts',
@@ -1341,7 +1360,7 @@ export default function App() {
               onDeleteCategory={handleDeleteCategory}
               onEditTransaction={handleEditTransaction}
               onDeleteTransaction={handleDeleteTransaction}
-              onOpenCategory={(id) => { setDetailCategoryId(id); setView('categoryDetail'); }}
+              onOpenCategory={(id) => { setDetailCategoryId(id); navigate('categoryDetail'); }}
               onAdjust={handleOpenAdjust}
               onRunWizard={handleRunWizard}
             />
@@ -1353,7 +1372,7 @@ export default function App() {
               subscriptions={subscriptions}
               incomes={incomes}
               settings={settings}
-              onBack={() => { setView('dashboard'); setDetailCategoryId(null); }}
+              onBack={() => { navigate('dashboard'); setDetailCategoryId(null); }}
               onEdit={handleEditCategory}
               onAdjust={handleOpenAdjust}
               onEditTransaction={handleEditTransaction}
@@ -1557,7 +1576,7 @@ export default function App() {
           <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 18 }}>
             Add an expense category from the Dashboard first.
           </div>
-          <button className="btn-primary" onClick={() => { setModal(null); setView('dashboard'); }}>
+          <button className="btn-primary" onClick={() => { setModal(null); navigate('dashboard'); }}>
             Go to Dashboard
           </button>
         </Modal>

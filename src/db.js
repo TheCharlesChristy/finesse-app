@@ -180,6 +180,88 @@ db.version(9).stores({
 // pass-through, so a database that never turns encryption on pays nothing.
 db.use(encryptionMiddleware());
 
+/**
+ * Survive the connection being taken away.
+ *
+ * An IndexedDB connection is not something the page owns for as long as it
+ * wants. iOS Safari closes it out from under a backgrounded PWA and never says
+ * why; a second tab upgrading the schema closes it deliberately; a storage
+ * eviction closes it too. Dexie does not reopen on its own — every later
+ * operation rejects with `DatabaseClosedError` instead, which `useLiveQuery`
+ * re-throws during render, which (with nothing above it to catch) takes the
+ * whole app down to a blank page. That is the "it just breaks sometimes"
+ * failure, and it is why it always seemed to follow leaving the app for a
+ * while.
+ *
+ * So: reopen. Once, immediately, and then with a widening delay so a database
+ * that genuinely cannot be opened doesn't become a spin loop. Dexie's live
+ * queries re-subscribe once the connection is back, so a successful reopen
+ * repaints the app with nothing lost — and `ErrorBoundary` catches the frames
+ * in between rather than leaving a white screen behind.
+ */
+const REOPEN_DELAYS_MS = [0, 500, 2000, 5000, 15000];
+let reopenAttempt = 0;
+let reopening = null;
+let reopenAbandoned = false;
+
+/**
+ * The one failure reopening cannot fix: another tab has upgraded the store past
+ * the schema this build knows. Retrying would spin for ever — this build will
+ * never be able to open a newer database — so it stops and lets the UI say the
+ * only useful thing, which is to reload onto the newer build.
+ */
+function isUnopenableHere(error) {
+  return error?.name === 'VersionError' || error?.inner?.name === 'VersionError';
+}
+
+export function reopenDatabase() {
+  if (db.isOpen()) { reopenAttempt = 0; reopenAbandoned = false; return Promise.resolve(true); }
+  if (reopenAbandoned) return Promise.resolve(false);
+  if (reopening) return reopening;
+
+  const wait = REOPEN_DELAYS_MS[Math.min(reopenAttempt, REOPEN_DELAYS_MS.length - 1)];
+  reopenAttempt += 1;
+  reopening = new Promise(resolve => setTimeout(resolve, wait))
+    .then(() => db.open())
+    .then(() => { reopenAttempt = 0; return true; })
+    .catch(error => {
+      if (isUnopenableHere(error)) reopenAbandoned = true;
+      console.error('Could not reopen the database', error);
+      return false;
+    })
+    .finally(() => { reopening = null; });
+
+  return reopening;
+}
+
+db.on('close', () => {
+  console.warn('The database connection closed — reopening.');
+  reopenDatabase();
+});
+
+// A second tab (or the Safari tab beside the installed app) upgrading the
+// schema asks every other connection to get out of the way. Refusing would
+// block that tab's upgrade forever, so this closes and then reopens on the new
+// version rather than holding the line.
+db.on('versionchange', (event) => {
+  console.warn('Another tab upgraded the database', event?.newVersion);
+  db.close();
+  // Let the other connection finish its upgrade before asking for the store
+  // back; arriving during it only makes this one block the tab that is doing
+  // the work. If the new schema is beyond this build, the reopen abandons.
+  setTimeout(() => reopenDatabase(), 250);
+});
+
+/**
+ * Whether an error is the connection having gone rather than the operation
+ * being wrong. Callers use it to decide between retrying and reporting.
+ */
+export function isDatabaseClosedError(error) {
+  const name = error?.name || error?.inner?.name || '';
+  return name === 'DatabaseClosedError' || name === 'InvalidStateError'
+    || /database.*clos/i.test(String(error?.message || ''));
+}
+
 // Stored as token references rather than hex, so a category or account keeps
 // its *role* in the palette and re-tints when the user changes theme.
 const ACCOUNT_COLORS = ['var(--accent)', 'var(--accent-2)', 'var(--accent-3)', 'var(--accent-4)', 'var(--danger)', 'var(--series-5)'];
