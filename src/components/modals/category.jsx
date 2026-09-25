@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Modal, Field } from '../ui';
+import { useModalAction } from '../useModalAction';
 import {
   evaluateFormula,
   formatPacedAllowancePeriod,
@@ -24,6 +25,7 @@ import {
 
 // ── Add Category Modal ───────────────────────────────────────────────────────
 export function AddCategoryModal({ onAdd, onClose, variables = [], categories = [], incomes = [] }) {
+  const modalAction = useModalAction(onClose, 'Could not save the category. Your entries are still here; please try again.');
   const [name, setName] = useState('');
   const [allowanceInput, setAllowanceInput] = useState('');
   const [pacedAllowanceEnabled, setPacedAllowanceEnabled] = useState(false);
@@ -90,7 +92,7 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
     if (isFormula && formulaResult === null) return;
     if (!allocationValidation.isValid) return;
     const numericValue = pacedAllowanceEnabled ? pacedMonthlyAllowance : isFormula ? formulaResult : (parseFloat(allowanceInput) || 0);
-    onAdd({
+    const data = {
       name: name.trim(),
       allowance: numericValue,
       allowanceFormula: pacedAllowanceEnabled ? null : isFormula ? allowanceInput : null,
@@ -108,18 +110,18 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
       rolloverCarryOverspend,
       rolloverBalance: 0,
       color,
-    });
-    onClose();
+    };
+    return modalAction.run(() => onAdd(data));
   };
 
   return (
-    <Modal title="Add Category" onClose={onClose}
+    <Modal title="Add Category" onClose={modalAction.dismiss}
       footer={<>
         <span className="spacer" />
-<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+<button className="btn-secondary" onClick={modalAction.dismiss} style={{ flex: 1 }} disabled={modalAction.isSubmitting}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-              disabled={!name.trim() || (pacedAllowanceEnabled ? !(parseFloat(pacedAllowanceAmount) > 0) : !allowanceInput) || (isFormula && formulaResult === null) || !allocationValidation.isValid}>
-              Add Category
+              disabled={modalAction.isSubmitting || !name.trim() || (pacedAllowanceEnabled ? !(parseFloat(pacedAllowanceAmount) > 0) : !allowanceInput) || (isFormula && formulaResult === null) || !allocationValidation.isValid}>
+              {modalAction.isSubmitting ? 'Saving…' : 'Add Category'}
             </button>
       </>}
     >
@@ -218,6 +220,7 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
             )}
           </div>
           <ColourPicker color={color} onChange={setColor} />
+          {modalAction.error && <div className="field-error" role="alert">{modalAction.error}</div>}
         </div>
     </Modal>
   );
@@ -225,6 +228,7 @@ export function AddCategoryModal({ onAdd, onClose, variables = [], categories = 
 
 // ── Edit Category Modal ───────────────────────────────────────────────────────
 export function EditCategoryModal({ category, onSave, onClose, variables = [], categories = [], incomes = [] }) {
+  const modalAction = useModalAction(onClose, 'Could not save the category. Your entries are still here; please try again.');
   const [name, setName] = useState(category.name || '');
   const [allowanceInput, setAllowanceInput] = useState(category.allowanceFormula || String(category.allowance ?? ''));
   const [pacedAllowanceEnabled, setPacedAllowanceEnabled] = useState(Boolean(category.pacedAllowanceEnabled || category.dailyAllowanceEnabled));
@@ -299,7 +303,7 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
     if (isFormula && formulaResult === null) return;
     if (!allocationValidation.isValid) return;
     const numericValue = pacedAllowanceEnabled ? pacedMonthlyAllowance : isFormula ? formulaResult : (parseFloat(allowanceInput) || 0);
-    onSave(category.id, {
+    const data = {
       name: name.trim(),
       allowance: numericValue,
       allowanceFormula: pacedAllowanceEnabled ? null : isFormula ? allowanceInput : null,
@@ -318,18 +322,18 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
       // leaving invisible budget attached to the category.
       ...(rolloverEnabled ? {} : { rolloverBalance: 0 }),
       color,
-    });
-    onClose();
+    };
+    return modalAction.run(() => onSave(category.id, data));
   };
 
   return (
-    <Modal title="Edit Category" onClose={onClose}
+    <Modal title="Edit Category" onClose={modalAction.dismiss}
       footer={<>
         <span className="spacer" />
-<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+<button className="btn-secondary" onClick={modalAction.dismiss} style={{ flex: 1 }} disabled={modalAction.isSubmitting}>Cancel</button>
             <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-              disabled={!name.trim() || (pacedAllowanceEnabled ? !(parseFloat(pacedAllowanceAmount) > 0) : !allowanceInput) || (isFormula && formulaResult === null) || !allocationValidation.isValid}>
-              Save Changes
+              disabled={modalAction.isSubmitting || !name.trim() || (pacedAllowanceEnabled ? !(parseFloat(pacedAllowanceAmount) > 0) : !allowanceInput) || (isFormula && formulaResult === null) || !allocationValidation.isValid}>
+              {modalAction.isSubmitting ? 'Saving…' : 'Save Changes'}
             </button>
       </>}
     >
@@ -426,6 +430,7 @@ export function EditCategoryModal({ category, onSave, onClose, variables = [], c
             )}
           </div>
           <ColourPicker color={color} onChange={setColor} />
+          {modalAction.error && <div className="field-error" role="alert">{modalAction.error}</div>}
         </div>
     </Modal>
   );

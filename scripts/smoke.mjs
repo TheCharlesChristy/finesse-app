@@ -100,7 +100,32 @@ const PAGE_OF = {
 const SMOKE_PASSPHRASE = 'smoke-test-passphrase';
 
 const browser = await chromium.launch({ executablePath: findChromium() });
-const page = await browser.newPage();
+const page = await browser.newPage(process.env.SMOKE_MOBILE === '1' ? {
+  viewport: { width: 390, height: 844 },
+  deviceScaleFactor: 3,
+  isMobile: true,
+  hasTouch: true,
+} : {});
+
+// Make the intermittent storage-failure path controllable from the smoke
+// walk. This is installed before the app opens Dexie, so the simulated failure
+// exercises the same IndexedDB transaction boundary as a real closed store.
+await page.addInitScript(() => {
+  window.__failIndexedDbStores = [];
+  window.__smokeUnhandledRejections = [];
+  window.addEventListener('unhandledrejection', event => {
+    window.__smokeUnhandledRejections.push(String(event.reason));
+  });
+
+  const original = IDBDatabase.prototype.transaction;
+  IDBDatabase.prototype.transaction = function (stores, mode, ...rest) {
+    const names = Array.isArray(stores) ? stores : [stores];
+    if (mode === 'readwrite' && window.__failIndexedDbStores.some(name => names.includes(name))) {
+      throw new DOMException('Simulated IndexedDB write failure', 'InvalidStateError');
+    }
+    return original.call(this, stores, mode, ...rest);
+  };
+});
 
 page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
 page.on('console', m => {
@@ -122,10 +147,25 @@ const shows = (haystack, needle) => haystack.toLowerCase().includes(needle.toLow
 
 async function go(name) {
   const parent = PAGE_OF[name];
-  await page.getByRole('button', { name: parent || name, exact: true }).click();
+  await navigate(parent || name);
   await page.waitForTimeout(300);
   if (parent) await page.getByRole('tab', { name, exact: true }).click();
   await page.waitForTimeout(350);
+}
+
+async function navigate(name) {
+  const buttons = page.getByRole('button', { name, exact: true });
+  for (let index = 0; index < await buttons.count(); index += 1) {
+    const button = buttons.nth(index);
+    if (await button.isVisible().catch(() => false)) {
+      await button.click();
+      return;
+    }
+  }
+  {
+    await page.getByRole('button', { name: 'More sections' }).click();
+    await page.getByRole('button', { name, exact: true }).last().click();
+  }
 }
 
 /**
@@ -134,7 +174,7 @@ async function go(name) {
  * to reach straight for a card by its text goes through here instead.
  */
 async function settingsTab(tab) {
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await navigate('Settings');
   await page.waitForTimeout(300);
   await page.getByRole('tab', { name: tab, exact: true }).click();
   await page.waitForTimeout(400);
@@ -162,6 +202,13 @@ await page.getByRole('button', { name: '+ Category' }).click();
 await page.getByRole('dialog').waitFor();
 await page.getByLabel('Name').fill('Groceries');
 await page.locator('input[placeholder*="300"]').fill('400');
+await page.evaluate(() => { window.__failIndexedDbStores = ['categories']; });
+await page.getByRole('button', { name: 'Add Category', exact: true }).click();
+await page.getByRole('dialog').getByText(/Could not save the category/).waitFor({ timeout: 5000 });
+if (await page.getByLabel('Name').inputValue() !== 'Groceries') errors.push('failed category save discarded the entered name');
+const categoryWriteRejections = await page.evaluate(() => window.__smokeUnhandledRejections.length);
+if (categoryWriteRejections) errors.push(`failed category save caused ${categoryWriteRejections} unhandled rejection(s)`);
+await page.evaluate(() => { window.__failIndexedDbStores = []; });
 await page.getByRole('button', { name: 'Add Category', exact: true }).click();
 await page.getByRole('dialog').waitFor({ state: 'detached' });
 step('category added and funded');
@@ -182,7 +229,7 @@ for (const expected of ['£2,000.00', '£400.00 allocated', '£1,600.00 unalloca
 step('dashboard totals reconcile (2000 income − 400 allocated, 374.50 left of 400)');
 
 for (const name of ['Accounts', 'Activity', 'Insights', 'Goals & Wishlist', 'Settings', 'Dashboard']) {
-  await page.getByRole('button', { name, exact: true }).click();
+  await navigate(name);
   await page.waitForTimeout(350);
   const heading = await page.locator('h1').innerText();
   if (!heading.includes(name)) errors.push(`view "${name}" did not render (h1 was "${heading}")`);
@@ -209,7 +256,7 @@ for (const [name, marker] of [
 step('all 9 tabs render inside their pages');
 
 // Back to where the walkthrough continues from.
-await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+await navigate('Dashboard');
 await page.waitForTimeout(400);
 
 await page.getByRole('button', { name: 'Adjust Groceries' }).click();
@@ -234,7 +281,7 @@ if (!(await page.locator('h1').innerText()).includes('Insights')) {
 step('command palette navigates');
 
 // Merchant memory: typing a known merchant should re-suggest its category.
-await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+await navigate('Dashboard');
 await page.waitForTimeout(300);
 await page.keyboard.press('a'); // shortcut
 await page.getByRole('dialog').waitFor({ timeout: 5000 });
@@ -249,6 +296,15 @@ step('“a” shortcut opens capture; merchant memory suggests a category');
 
 // Refund: reduces category spend rather than inflating it.
 await page.getByRole('button', { name: 'Refund' }).click();
+await page.evaluate(() => { window.__failIndexedDbStores = ['transactions']; });
+await page.getByRole('button', { name: 'Add Refund', exact: true }).click();
+const failedRefund = page.getByRole('dialog').getByText(/Could not save this transaction/);
+await failedRefund.waitFor({ timeout: 5000 });
+if (await page.getByRole('dialog').count() !== 1) errors.push('failed refund closed the transaction dialog');
+if (await page.getByLabel('Amount (£)').inputValue() !== '12') errors.push('failed refund discarded the entered amount');
+const failedWriteRejections = await page.evaluate(() => window.__smokeUnhandledRejections.length);
+if (failedWriteRejections) errors.push(`failed refund caused ${failedWriteRejections} unhandled rejection(s)`);
+await page.evaluate(() => { window.__failIndexedDbStores = []; });
 await page.getByRole('button', { name: 'Add Refund', exact: true }).click();
 await page.getByRole('dialog').waitFor({ state: 'detached' });
 await page.waitForTimeout(400);
@@ -267,7 +323,11 @@ await page.locator('input[placeholder*="300"]').fill('200');
 await page.getByRole('button', { name: 'Add Category', exact: true }).click();
 await page.getByRole('dialog').waitFor({ state: 'detached' });
 
-await page.keyboard.press('a');
+if (process.env.SMOKE_MOBILE === '1') {
+  await page.getByRole('button', { name: '+ Log Expense' }).click();
+} else {
+  await page.keyboard.press('a');
+}
 await page.getByRole('dialog').waitFor();
 await page.getByLabel('Amount (£)').fill('50');
 await page.getByLabel('Note / merchant').fill('Big shop');
@@ -294,7 +354,7 @@ step('split writes one row per category, tagged as a split');
 
 // ── Insight ──────────────────────────────────────────────────────────────
 
-await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+await navigate('Dashboard');
 await page.waitForTimeout(400);
 // innerText reflects CSS text-transform, so this label comes back uppercased.
 const dash = await page.locator('body').innerText();
@@ -365,7 +425,7 @@ if (!/25%/.test(contributed)) errors.push('goal progress percentage wrong');
 step('contribution recorded as an earmark');
 
 // Pending savings are held back from safe-to-spend.
-await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+await navigate('Dashboard');
 await page.waitForTimeout(500);
 const dashWithGoal = await page.locator('body').innerText();
 if (!/savings/i.test(dashWithGoal)) {
@@ -923,7 +983,7 @@ if (!/New budget applies on/i.test(staged)) errors.push(`no staged-budget banner
 if (/Groceries Renamed/.test(staged)) errors.push('staging applied the config immediately');
 step('staging shows a banner and leaves the current cycle untouched');
 
-await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
+await navigate('Dashboard');
 await page.waitForTimeout(500);
 if (!/New budget applies on/i.test(await page.locator('body').innerText())) {
   errors.push('staged-budget banner does not follow the user across views');

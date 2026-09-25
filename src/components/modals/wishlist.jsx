@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Modal, Field } from '../ui';
+import { useModalAction } from '../useModalAction';
 import { ColourPicker, PALETTE } from './shared';
 
 // ── Add Wishlist Item Modal ───────────────────────────────────────────────────
@@ -11,6 +12,7 @@ function flattenWishlistCategories(cats, parentId = null, depth = 0) {
 }
 
 export function AddWishlistItemModal({ expenseCategories, wishlistCategories, onAdd, onClose, defaultCategoryId = null, item = null, onSave }) {
+  const modalAction = useModalAction(onClose, 'Could not save this wishlist item. Your entries are still here; please try again.');
   const [name, setName] = useState(item?.name || '');
   const [price, setPrice] = useState(item?.price != null ? String(item.price) : '');
   const [note, setNote] = useState(item?.note || '');
@@ -39,22 +41,19 @@ export function AddWishlistItemModal({ expenseCategories, wishlistCategories, on
       wishlistCategoryId: wishCatId ? Number(wishCatId) : null,
       categoryIds: selectedExpCats,
     };
-    if (isEditing && onSave) {
-      onSave(item.id, data);
-    } else {
-      onAdd(data);
-    }
-    onClose();
+    return modalAction.run(() => (
+      isEditing && onSave ? onSave(item.id, data) : onAdd(data)
+    ));
   };
 
   return (
-    <Modal title={isEditing ? 'Edit Wishlist Item' : 'Add to Wishlist'} onClose={onClose}
+    <Modal title={isEditing ? 'Edit Wishlist Item' : 'Add to Wishlist'} onClose={modalAction.dismiss}
       footer={<>
         <span className="spacer" />
-<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+<button className="btn-secondary" onClick={modalAction.dismiss} style={{ flex: 1 }} disabled={modalAction.isSubmitting}>Cancel</button>
           <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-            disabled={!name.trim() || !price}>
-            {isEditing ? 'Save Changes' : 'Add to Wishlist'}
+            disabled={modalAction.isSubmitting || !name.trim() || !price}>
+            {modalAction.isSubmitting ? 'Saving…' : isEditing ? 'Save Changes' : 'Add to Wishlist'}
           </button>
       </>}
     >
@@ -123,6 +122,7 @@ export function AddWishlistItemModal({ expenseCategories, wishlistCategories, on
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
           )}
         </Field>
+        {modalAction.error && <div className="field-error" role="alert">{modalAction.error}</div>}
       </div>
     </Modal>
   );
@@ -137,6 +137,7 @@ function collectDescendantIds(cats, id, acc = new Set()) {
 }
 
 export function EditWishlistListModal({ list, wishlistCategories, onSave, onClose }) {
+  const modalAction = useModalAction(onClose, 'Could not save this list. Your entries are still here; please try again.');
   const [name, setName] = useState(list.name || '');
   const [color, setColor] = useState(list.color || PALETTE[0]);
   const [parentId, setParentId] = useState(list.parentId != null ? String(list.parentId) : '');
@@ -149,21 +150,21 @@ export function EditWishlistListModal({ list, wishlistCategories, onSave, onClos
 
   const handleSubmit = () => {
     if (!name.trim()) return;
-    onSave(list.id, {
+    const data = {
       name: name.trim(),
       color,
       parentId: parentId ? Number(parentId) : null,
-    });
-    onClose();
+    };
+    return modalAction.run(() => onSave(list.id, data));
   };
 
   return (
-    <Modal title="Edit List" onClose={onClose}
+    <Modal title="Edit List" onClose={modalAction.dismiss}
       footer={<>
         <span className="spacer" />
-<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!name.trim()}>
-            Save Changes
+<button className="btn-secondary" onClick={modalAction.dismiss} style={{ flex: 1 }} disabled={modalAction.isSubmitting}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!name.trim() || modalAction.isSubmitting}>
+            {modalAction.isSubmitting ? 'Saving…' : 'Save Changes'}
           </button>
       </>}
     >
@@ -184,6 +185,7 @@ export function EditWishlistListModal({ list, wishlistCategories, onSave, onClos
           )}
         </Field>
         <ColourPicker color={color} onChange={setColor} />
+        {modalAction.error && <div className="field-error" role="alert">{modalAction.error}</div>}
       </div>
     </Modal>
   );

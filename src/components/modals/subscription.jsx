@@ -3,10 +3,12 @@ import { format } from 'date-fns';
 import CategorySelect from '../CategorySelect';
 import DateInput from '../DateInput';
 import { Modal, Field } from '../ui';
+import { useModalAction } from '../useModalAction';
 import { dateOnlyToISO } from '../../utils';
 
 // ── Add Subscription Modal ───────────────────────────────────────────────────
 export function AddSubscriptionModal({ categories = [], onAdd, onClose, subscription = null, onSave, defaultCategoryId = null }) {
+  const modalAction = useModalAction(onClose, 'Could not save this subscription. Your entries are still here; please try again.');
   const fallbackCategoryId = categories.some(category => Number(category.id) === Number(defaultCategoryId))
     ? defaultCategoryId
     : categories[0]?.id;
@@ -34,22 +36,19 @@ export function AddSubscriptionModal({ categories = [], onAdd, onClose, subscrip
       note: note.trim(),
       active,
     };
-    if (isEditing && onSave) {
-      onSave(subscription.id, data);
-    } else {
-      onAdd(data);
-    }
-    onClose();
+    return modalAction.run(() => (
+      isEditing && onSave ? onSave(subscription.id, data) : onAdd(data)
+    ));
   };
 
   return (
-    <Modal title={isEditing ? 'Edit Subscription' : 'Add Subscription'} onClose={onClose}
+    <Modal title={isEditing ? 'Edit Subscription' : 'Add Subscription'} onClose={modalAction.dismiss}
       footer={<>
         <span className="spacer" />
-<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+<button className="btn-secondary" onClick={modalAction.dismiss} style={{ flex: 1 }} disabled={modalAction.isSubmitting}>Cancel</button>
           <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-            disabled={!name.trim() || !amount || !catId || !(Number(interval) > 0)}>
-            {isEditing ? 'Save Changes' : 'Add Subscription'}
+            disabled={modalAction.isSubmitting || !name.trim() || !amount || !catId || !(Number(interval) > 0)}>
+            {modalAction.isSubmitting ? 'Saving…' : isEditing ? 'Save Changes' : 'Add Subscription'}
           </button>
       </>}
     >
@@ -96,6 +95,7 @@ export function AddSubscriptionModal({ categories = [], onAdd, onClose, subscrip
               onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
           )}
         </Field>
+        {modalAction.error && <div className="field-error" role="alert">{modalAction.error}</div>}
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} />
           Active
