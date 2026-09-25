@@ -2323,18 +2323,25 @@ function getCycleStartForDate(date, payDay) {
  * past budget cycle.
  *
  * `options` may be a plain pay-day number (legacy monthly behaviour) or
- * `{ freq, payDayOfMonth, anchor }`. Weekly/fortnightly/4-weekly cycles are
- * bucketed by offset from `anchor` — slicing them by day-of-month, as this
- * previously did, put several cycles' spend into a single bucket and reported
- * phantom overspend.
+ * `{ freq, payDayOfMonth, anchor, resetAt }`. Weekly/fortnightly/4-weekly
+ * cycles are bucketed by offset from `anchor` — slicing them by day-of-month,
+ * as this previously did, put several cycles' spend into a single bucket and
+ * reported phantom overspend.
+ *
+ * `resetAt`, when set, excludes every transaction dated before it — this is
+ * the user zeroing the all-time counter from `CategoryDetail`, not a change
+ * to the transaction log itself.
  */
 export function getCumulativeOverspend(categoryId, allowance, transactions, options = 1) {
   if (!allowance || allowance <= 0) return 0;
 
-  const catTxs = transactions.filter(tx => Number(tx.categoryId) === Number(categoryId));
+  const config = (options && typeof options === 'object') ? options : { payDayOfMonth: options };
+  const resetAt = toValidDate(config.resetAt);
+
+  const catTxs = transactions.filter(tx => Number(tx.categoryId) === Number(categoryId)
+    && (!resetAt || (toValidDate(tx.date) && toValidDate(tx.date) >= resetAt)));
   if (!catTxs.length) return 0;
 
-  const config = (options && typeof options === 'object') ? options : { payDayOfMonth: options };
   const freq = config.freq || 'monthly';
   const payDay = Number(config.payDayOfMonth) || 1;
   const anchor = toValidDate(config.anchor);

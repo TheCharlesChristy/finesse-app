@@ -20,6 +20,9 @@ import {
   resetBudget,
   resetCategoriesForIncome,
   resetCategoryTopUps,
+  clearCategoryRollover,
+  resetCategoryOverspend,
+  getTransactions,
   transferMoney,
   addSplitTransaction,
   addRule,
@@ -57,6 +60,18 @@ async function makeCategory(overrides = {}) {
   }, accountId);
   return id;
 }
+
+describe('getTransactions ordering', () => {
+  it('orders same-day transactions by when they were added, newest last-in first', async () => {
+    const catId = await makeCategory();
+    const today = new Date().toISOString();
+    const firstId = await addTransaction({ accountId, categoryId: catId, amount: 10, date: today, note: 'Morning' });
+    const secondId = await addTransaction({ accountId, categoryId: catId, amount: 20, date: today, note: 'Evening' });
+
+    const rows = await getTransactions(accountId);
+    expect(rows.map(r => r.id)).toEqual([secondId, firstId]);
+  });
+});
 
 describe('spend counter invariants', () => {
   it('increments category spend and debits the account on add', async () => {
@@ -624,6 +639,30 @@ describe('category rollover', () => {
 
     await resetCategoriesForIncome(2, new Date().toISOString(), accountId);
     expect((await getCategory(catId)).rolloverBalance).toBe(140);
+  });
+
+  it('clearCategoryRollover zeroes the carried-over balance without disabling rollover', async () => {
+    const catId = await makeCategory({ allowance: 100, rolloverEnabled: true });
+    await resetBudget(accountId);
+    expect((await getCategory(catId)).rolloverBalance).toBe(100);
+
+    await clearCategoryRollover(catId);
+    const cat = await getCategory(catId);
+    expect(cat.rolloverBalance).toBe(0);
+    expect(cat.rolloverEnabled).toBe(true);
+  });
+});
+
+describe('resetCategoryOverspend', () => {
+  it('sets overspendResetAt without touching spent or the transaction log', async () => {
+    const catId = await makeCategory({ allowance: 100 });
+    await addTransaction({ accountId, categoryId: catId, amount: 20 });
+
+    await resetCategoryOverspend(catId);
+    const cat = await getCategory(catId);
+    expect(cat.overspendResetAt).toBeTruthy();
+    expect(cat.spent).toBe(20);
+    expect(await getTransactions(accountId)).toHaveLength(1);
   });
 });
 

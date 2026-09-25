@@ -44,7 +44,7 @@ export const APPLY_NEXT_CYCLE = 'next-cycle';
  */
 export const RUNTIME_CATEGORY_FIELDS = [
   'spent', 'spentByIncome', 'lastReset', 'incomeResetAt',
-  'temporaryBoost', 'boostSources', 'cycleClearedSpend',
+  'temporaryBoost', 'boostSources', 'cycleClearedSpend', 'overspendResetAt',
 ];
 
 /** The only category fields an import is allowed to set. */
