@@ -671,7 +671,7 @@ input, select, textarea { font-size: max(16px, 1em); }
 .page-narrow { max-width: 760px; }
 
 /* ── Page header ───────────────────────────────────────────────────────
-   Eyebrow, title, subtitle, actions. The 2px rule under it is the app's
+   Eyebrow, title, subtitle, actions. The fine rule under it is the app's
    editorial signature and the thing that tells you a new page has started
    without a card having to be drawn around it. */
 .page { display: grid; gap: var(--gap-lg); align-content: start; min-width: 0; max-width: var(--content-max); }
@@ -682,7 +682,7 @@ input, select, textarea { font-size: max(16px, 1em); }
   gap: var(--gap-sm);
   flex-wrap: wrap;
   padding: 0 2px 13px;
-  border-bottom: 2px solid var(--text-primary);
+  border-bottom: 1px solid var(--line-strong);
 }
 .page-head-main { min-width: 0; display: grid; gap: 5px; }
 .page-title { font-family: var(--font-display); font-size: clamp(2.1rem, 3.6vw, 3.2rem); line-height: 1; margin: 0; letter-spacing: -0.02em; font-weight: 400; }
@@ -1078,8 +1078,9 @@ details > summary::-webkit-details-marker { color: var(--text-muted); }
 .toast-stack {
   position: fixed; left: 50%; transform: translateX(-50%);
   bottom: max(20px, env(safe-area-inset-bottom));
-  z-index: 70; display: flex; flex-direction: column; gap: 8px;
-  width: min(460px, calc(100vw - 28px)); pointer-events: none;
+  z-index: 70; display: flex; flex-direction: column; gap: calc(8px * var(--density-scale));
+  width: min(460px, calc(100vw - 28px)); max-height: min(60dvh, 420px);
+  overflow-y: auto; overscroll-behavior: contain; pointer-events: none;
 }
 .toast {
   pointer-events: auto; display: flex; align-items: center; gap: 10px;
@@ -1088,7 +1089,8 @@ details > summary::-webkit-details-marker { color: var(--text-muted); }
      The tone bar is an inset shadow rather than a `border-left`, because a
      coloured border on a heavily rounded box follows the corner and renders as
      a crescent hanging off the side. */
-  padding: 11px 14px; border-radius: var(--radius-lg); font-weight: 600; font-size: 0.9rem;
+  padding: calc(11px * var(--density-scale)) calc(14px * var(--density-scale));
+  border-radius: var(--radius-lg); font-weight: 600; font-size: 0.9rem;
   box-shadow: var(--raised-shadow), inset 3px 0 0 var(--tone, var(--accent));
   animation: toast-in var(--t-base) var(--ease);
 }
@@ -1096,13 +1098,15 @@ details > summary::-webkit-details-marker { color: var(--text-muted); }
 .toast.warn { --tone: var(--warn); }
 .toast.danger { --tone: var(--danger); }
 .toast.highlight { --tone: var(--accent-4); }
-.toast > svg { flex: none; }
-.toast-text { flex: 1; min-width: 0; }
+.toast.info { --tone: var(--info); }
+.toast > svg { flex: none; color: var(--tone); }
+.toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast-text .list-title { line-height: 1.35; }
+.toast-text .list-sub { margin-top: 2px; line-height: 1.4; overflow-wrap: anywhere; }
+.toast-action-button { flex: none; white-space: nowrap; }
+.toast-dismiss { flex: none; }
 .toast-action { flex: none; min-height: 32px; padding: 0 13px; margin-left: 2px; border-radius: var(--radius-full); background: var(--accent); color: var(--on-accent); font-weight: 700; font-size: 0.85rem; }
 .toast-action:hover { background: var(--accent-hover); }
-.toast.good > svg { color: var(--good); }
-.toast.danger > svg { color: var(--danger); }
-.toast.highlight > svg { color: var(--accent-4); }
 
 /* ── Banners ───────────────────────────────────────────────────────────
    An inline message attached to the thing it is about. Toned by a modifier
@@ -1402,6 +1406,8 @@ details > summary::-webkit-details-marker { color: var(--text-muted); }
 @media (pointer: coarse) {
   :root { --control-h: max(44px, clamp(40px, calc(44px * var(--density-scale)), 58px)); --control-h-sm: max(38px, clamp(32px, calc(36px * var(--density-scale)), 46px)); }
   .nav-key { display: none; }
+  .btn-icon.btn-sm.nudge-dismiss, .btn-icon.btn-sm.toast-dismiss { width: 44px; min-height: 44px; }
+  .toast-action-button { min-height: 44px; }
 }
 
 /* ── Reduced motion ────────────────────────────────────────────────────
@@ -1531,11 +1537,26 @@ details > summary::-webkit-details-marker { color: var(--text-muted); }
 
 /* ── Nudges ───────────────────────────────────────────────────────────── */
 .nudge-panel { position: absolute; z-index: 40; top: calc(100% + 8px); right: 0; width: min(360px, calc(100vw - 32px)); overflow: hidden; border-radius: var(--radius-md); }
-.nudge-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+.nudge-panel-header { display: flex; align-items: center; justify-content: space-between; gap: var(--gap-sm); padding: calc(11px * var(--density-scale)) calc(14px * var(--density-scale)); border-bottom: 1px solid var(--line); }
 .nudge-panel-list { max-height: 60dvh; overflow-y: auto; overscroll-behavior: contain; }
-.nudge-item { display: flex; align-items: flex-start; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--line); font-size: 0.86rem; }
+.nudge-item { display: flex; align-items: flex-start; gap: var(--gap-sm); padding: calc(11px * var(--density-scale)) calc(14px * var(--density-scale)); border-bottom: 1px solid var(--line); font-size: 0.86rem; }
 .nudge-item:last-child { border-bottom: 0; }
+.nudge-panel-title { min-width: 0; font-size: 0.86rem; font-weight: 700; line-height: 1.35; }
+.nudge-empty { padding: calc(22px * var(--density-scale)) calc(16px * var(--density-scale)); color: var(--text-muted); font-size: 0.84rem; text-align: center; }
+.nudge-copy { flex: 1; min-width: 0; }
+.nudge-title { display: block; width: 100%; padding: 0; background: transparent; color: var(--text-primary); text-align: left; font-size: 0.84rem; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+.nudge-title:hover { color: var(--accent-ink); }
+.nudge-body { margin-top: 2px; color: var(--text-muted); font-size: 0.76rem; line-height: 1.45; overflow-wrap: anywhere; }
+.nudge-trigger { position: relative; }
+.nudge-dismiss { flex: none; }
 .nudge-dot { position: absolute; top: 6px; right: 6px; width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--danger); }
+
+@media (max-width: 860px) {
+  /* The bell sits at the start of the full-width mobile action row. Aligning
+     the panel's right edge to its 44px trigger pushes most of the panel off
+     screen; use the trigger's left edge on phones. */
+  .nudge-panel { left: 0; right: auto; }
+}
 
 /* ── Privacy veil ──────────────────────────────────────────────────────
    Covers the app the instant it goes to the background, so the snapshot

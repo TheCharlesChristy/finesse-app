@@ -54,11 +54,10 @@ export default function NudgeCenter({ nudges = [], onDismiss, onNavigate }) {
       <button
         ref={buttonRef}
         type="button"
-        className="btn-icon"
+        className="btn-icon nudge-trigger"
         aria-label={nudges.length ? `${nudges.length} notifications` : 'No notifications'}
         aria-expanded={open}
         onClick={() => setOpen(value => !value)}
-        style={{ width: 38, height: 38, position: 'relative' }}
       >
         <Bell size={16} aria-hidden="true" />
         {nudges.length > 0 && (
@@ -75,19 +74,19 @@ export default function NudgeCenter({ nudges = [], onDismiss, onNavigate }) {
       </button>
 
       {open && (
-        <div ref={panelRef} className="nudge-panel" role="dialog" aria-label="Notifications">
+        <div ref={panelRef} className="nudge-panel card-raised" role="dialog" aria-label="Notifications">
           <div className="nudge-panel-header">
-            <span style={{ fontSize: 13, fontWeight: 700 }}>
+            <span className="nudge-panel-title">
               {nudges.length > 0 ? `${nudges.length} thing${nudges.length === 1 ? '' : 's'} to look at` : 'All clear'}
             </span>
-            <button type="button" className="btn-icon" aria-label="Close notifications"
-              onClick={() => setOpen(false)} style={{ width: 26, height: 26 }}>
-              <X size={12} />
+            <button type="button" className="btn-icon btn-sm btn-icon-quiet nudge-dismiss" aria-label="Close notifications"
+              onClick={() => setOpen(false)}>
+              <X size={14} />
             </button>
           </div>
 
           {nudges.length === 0 ? (
-            <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+            <div className="nudge-empty">
               Nothing needs your attention.
             </div>
           ) : (
@@ -97,24 +96,21 @@ export default function NudgeCenter({ nudges = [], onDismiss, onNavigate }) {
                 return (
                   <div key={nudge.id} className="nudge-item">
                     <Icon size={14} aria-hidden="true" style={{ color: COLORS[nudge.severity], flexShrink: 0, marginTop: 2 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="nudge-copy">
                       <button
                         type="button"
+                        className="nudge-title"
                         onClick={() => { onNavigate?.(nudge); setOpen(false); }}
-                        style={{
-                          background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                          textAlign: 'left', fontFamily: 'DM Sans, sans-serif',
-                          fontSize: 13, fontWeight: 600, color: 'var(--text-primary)',
-                        }}>
+                      >
                         {nudge.title}
                       </button>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.5 }}>
+                      <div className="nudge-body">
                         {nudge.body}
                       </div>
                     </div>
-                    <button type="button" className="btn-icon" aria-label={`Dismiss: ${nudge.title}`}
-                      onClick={() => onDismiss(nudge)} style={{ width: 24, height: 24, flexShrink: 0 }}>
-                      <X size={11} />
+                    <button type="button" className="btn-icon btn-sm btn-icon-quiet nudge-dismiss" aria-label={`Dismiss: ${nudge.title}`}
+                      onClick={() => onDismiss(nudge)}>
+                      <X size={14} />
                     </button>
                   </div>
                 );

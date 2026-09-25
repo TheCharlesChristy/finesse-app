@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components -- ToastStack is internal to the useToast hook in this file */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 
 import { IconButton } from './ui';
 
@@ -11,10 +11,18 @@ function Toast({ toast, onDismiss }) {
   const { id, message, detail, severity, action } = toast;
   // The tone is a class, so the stylesheet decides the colour and the shape of
   // the bar — see `.toast` in index.css.
-  const tone = severity === 'danger' ? 'danger' : severity === 'warn' ? 'warn' : 'good';
+  const requestedTone = severity === 'success' ? 'good' : severity;
+  const tone = ['good', 'warn', 'danger', 'highlight', 'info'].includes(requestedTone)
+    ? requestedTone
+    : 'info';
+  const Icon = tone === 'good' ? CheckCircle2
+    : tone === 'warn' ? AlertTriangle
+      : tone === 'danger' ? AlertCircle
+        : Info;
 
   return (
     <div className={`toast card-raised ${tone}`}>
+      <Icon className="toast-icon" size={17} aria-hidden="true" />
       <div className="toast-text">
         <div className="list-title">{message}</div>
         {detail && <div className="list-sub">{detail}</div>}
@@ -22,7 +30,7 @@ function Toast({ toast, onDismiss }) {
       {action && (
         <button
           type="button"
-          className="btn-secondary btn-sm"
+          className="btn-secondary btn-sm toast-action-button"
           onClick={() => { action.onClick(); onDismiss(id); }}
         >
           {action.label}
@@ -30,7 +38,7 @@ function Toast({ toast, onDismiss }) {
       )}
       <IconButton
         label="Dismiss notification"
-        className="btn-icon btn-sm btn-icon-quiet"
+        className="btn-icon btn-sm btn-icon-quiet toast-dismiss"
         onClick={() => onDismiss(id)}
       >
         <X size={14} />
