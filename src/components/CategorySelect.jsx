@@ -177,7 +177,7 @@ export default function CategorySelect({
           id={listId}
           role="listbox"
           aria-label={ariaLabel || placeholder}
-          className="category-select-menu"
+          className="category-select-menu card-raised"
           style={{ position: 'fixed', top: position.top, left: position.left, width: position.width, right: 'auto', zIndex: 500, listStyle: 'none', margin: 0 }}
         >
           {options.map((option, index) => (
