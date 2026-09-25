@@ -1,9 +1,10 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { Plus, Split, Undo2, X } from 'lucide-react';
 import { format } from 'date-fns';
 import CategorySelect from '../CategorySelect';
 import DateInput from '../DateInput';
 import ReceiptField from '../ReceiptField';
+import { useModalAction } from '../useModalAction';
 import { EMPTY_RECEIPT } from '../../receipts';
 import { Modal, IconButton, Field } from '../ui';
 import {
@@ -106,6 +107,9 @@ export function AddTransactionModal({
   const [splitOpen, setSplitOpen] = useState(false);
   const [splitParts, setSplitParts] = useState([{ categoryId: '', amount: '' }]);
   const [suggestion, setSuggestion] = useState(null);
+  const [submitError, setSubmitError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitting = useRef(false);
   // Held as the same shape `buildReceipt` returns, so an existing receipt and a
   // freshly-taken one are indistinguishable from here on. null means "remove".
   const [receipt, setReceipt] = useState(() => (
@@ -155,53 +159,68 @@ export function AddTransactionModal({
     setSplitParts(current => current.map((part, i) => (i === index ? { ...part, ...patch } : part)));
   };
 
-  const handleSubmit = () => {
-    if (!canSubmit) return;
-    const tags = normaliseTags(tagInput);
-    const trimmedNote = note.trim();
+  const dismissWhenIdle = () => {
+    if (!submitting.current) onClose();
+  };
 
-    if (splitOpen && !isEditing) {
-      onAddSplit?.({
-        parts: splitParts
-          .filter(p => p.categoryId && parseFloat(p.amount) > 0)
-          .map(p => ({ categoryId: Number(p.categoryId), amount: parseFloat(p.amount) })),
-        note: trimmedNote,
-        merchant: trimmedNote,
-        tags,
-        type,
-        date: dateOnlyToISO(date),
-      });
+  const handleSubmit = async () => {
+    if (!canSubmit || submitting.current) return;
+    submitting.current = true;
+    setIsSubmitting(true);
+    setSubmitError('');
+
+    try {
+      const tags = normaliseTags(tagInput);
+      const trimmedNote = note.trim();
+
+      if (splitOpen && !isEditing) {
+        await onAddSplit?.({
+          parts: splitParts
+            .filter(p => p.categoryId && parseFloat(p.amount) > 0)
+            .map(p => ({ categoryId: Number(p.categoryId), amount: parseFloat(p.amount) })),
+          note: trimmedNote,
+          merchant: trimmedNote,
+          tags,
+          type,
+          date: dateOnlyToISO(date),
+        });
+      } else {
+        const data = {
+          categoryId: Number(catId),
+          amount: amountValue,
+          note: trimmedNote,
+          merchant: trimmedNote,
+          tags,
+          type,
+          date: dateOnlyToISO(date),
+          // Always written, never merged: EMPTY_RECEIPT is what makes "remove"
+          // reach the database rather than leaving the old blobs in place.
+          ...(receipt || EMPTY_RECEIPT),
+        };
+        if (isEditing && onSave) await onSave(transaction.id, data);
+        else await onAdd(data);
+      }
+
       onClose();
-      return;
+    } catch (error) {
+      console.warn('Could not save transaction', error);
+      setSubmitError('Could not save this transaction. Your entry is still here; please try again.');
+    } finally {
+      submitting.current = false;
+      setIsSubmitting(false);
     }
-
-    const data = {
-      categoryId: Number(catId),
-      amount: amountValue,
-      note: trimmedNote,
-      merchant: trimmedNote,
-      tags,
-      type,
-      date: dateOnlyToISO(date),
-      // Always written, never merged: EMPTY_RECEIPT is what makes "remove"
-      // reach the database rather than leaving the old blobs in place.
-      ...(receipt || EMPTY_RECEIPT),
-    };
-    if (isEditing && onSave) onSave(transaction.id, data);
-    else onAdd(data);
-    onClose();
   };
 
   const suggestedCategory = suggestion && categories.find(c => Number(c.id) === Number(suggestion.categoryId));
   const title = isEditing ? 'Edit Transaction' : isRefundMode ? 'Log Refund' : 'Log Expense';
 
   return (
-    <Modal title={title} onClose={onClose}
+    <Modal title={title} onClose={dismissWhenIdle}
       footer={<>
         <span className="spacer" />
-<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!canSubmit}>
-            {isEditing ? 'Save Changes' : splitOpen ? 'Add Split' : isRefundMode ? 'Add Refund' : 'Add Expense'}
+<button className="btn-secondary" onClick={dismissWhenIdle} style={{ flex: 1 }} disabled={isSubmitting}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!canSubmit || isSubmitting}>
+            {isSubmitting ? 'Saving…' : isEditing ? 'Save Changes' : splitOpen ? 'Add Split' : isRefundMode ? 'Add Refund' : 'Add Expense'}
           </button>
       </>}
     >
@@ -314,6 +333,8 @@ export function AddTransactionModal({
 
         <DateInput value={date} onChange={setDate} />
 
+        {submitError && <div className="field-error" role="alert">{submitError}</div>}
+
       </div>
     </Modal>
   );
@@ -369,6 +390,7 @@ function parseBulkExpenseLine(line, fallbackDate) {
 
 // ── Bulk Add Expenses Modal ──────────────────────────────────────────────────
 export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCategoryId = null, rules = [], transactions = [] }) {
+  const modalAction = useModalAction(onClose, 'Could not save these expenses. Your entries are still here; please try again.');
   const fallbackCategoryId = categories.some(category => Number(category.id) === Number(defaultCategoryId))
     ? defaultCategoryId
     : categories[0]?.id;
@@ -425,24 +447,24 @@ export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCatego
 
   const handleSubmit = () => {
     if (validRows.length === 0) return;
-    onAdd(validRows.map(row => ({
+    const data = validRows.map(row => ({
       categoryId: row.categoryId,
       amount: row.amount,
       note: row.note,
       merchant: row.note,
       date: dateOnlyToISO(row.date),
-    })));
-    onClose();
+    }));
+    return modalAction.run(() => onAdd(data));
   };
 
   return (
-    <Modal title="Bulk Add Expenses" subtitle="Add several expenses to one category in one pass." onClose={onClose} maxWidth={760}
+    <Modal title="Bulk Add Expenses" subtitle="Add several expenses to one category in one pass." onClose={modalAction.dismiss} maxWidth={760}
       footer={<>
         <span className="spacer" />
-<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" onClick={handleSubmit} disabled={validRows.length === 0}
+<button className="btn-secondary" onClick={modalAction.dismiss} style={{ flex: 1 }} disabled={modalAction.isSubmitting}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} disabled={validRows.length === 0 || modalAction.isSubmitting}
             style={{ flex: 2 }}>
-            Add {validRows.length || ''} Expense{validRows.length === 1 ? '' : 's'}
+            {modalAction.isSubmitting ? 'Saving…' : `Add ${validRows.length || ''} Expense${validRows.length === 1 ? '' : 's'}`}
           </button>
       </>}
     >
@@ -525,6 +547,7 @@ export function BulkAddExpensesModal({ categories, onAdd, onClose, defaultCatego
             <span style={{ color: 'var(--accent-4)', fontWeight: 700 }}>{fmt(totalAmount)}</span>
           </div>
         </div>
+        {modalAction.error && <div className="field-error" role="alert">{modalAction.error}</div>}
 
     </Modal>
   );

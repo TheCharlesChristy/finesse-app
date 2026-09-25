@@ -314,6 +314,11 @@ export default function App() {
       if (privacyScreenOn) setObscured(true);
     };
     const returned = () => {
+      // Some mobile browsers dispatch `focus`/`blur` while the software
+      // keyboard is opening or closing. A focus event is not a return to the
+      // app while the document is still backgrounded; wait for visibility to
+      // confirm that transition before clearing the departure timestamp.
+      if (document.visibilityState === 'hidden') return;
       setObscured(false);
       // Re-lock only after enough genuine time away: asking for the PIN again
       // because you glanced at a notification is how people turn this off.
@@ -330,17 +335,26 @@ export default function App() {
     const onVisibilityChange = () => (
       document.visibilityState === 'hidden' ? leave() : returned()
     );
+    const onWindowBlur = () => {
+      // Touch browsers can blur the window just to show the on-screen
+      // keyboard. Their app-switcher path also emits pagehide or
+      // visibilitychange, which remain the reliable lock signals here.
+      const touchDevice = window.matchMedia?.('(pointer: coarse)').matches
+        || navigator.maxTouchPoints > 0;
+      if (!touchDevice) leave();
+    };
 
     document.addEventListener('visibilitychange', onVisibilityChange);
     // iOS fires pagehide where visibilitychange can be unreliable, and blur
-    // catches a desktop window losing focus, which fires neither.
+    // catches a desktop window losing focus, which fires neither. On touch
+    // devices blur alone is ambiguous because the software keyboard can cause it.
     window.addEventListener('pagehide', leave);
-    window.addEventListener('blur', leave);
+    window.addEventListener('blur', onWindowBlur);
     window.addEventListener('focus', returned);
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('pagehide', leave);
-      window.removeEventListener('blur', leave);
+      window.removeEventListener('blur', onWindowBlur);
       window.removeEventListener('focus', returned);
     };
   }, [privacyScreenOn, lockRequired, encryptionEnabled, settings?.lockDelayMs]);
@@ -1498,7 +1512,7 @@ export default function App() {
           variables={variables}
           categories={categories.filter(c => c.id !== editingCategory.id)}
           incomes={incomes}
-          onSave={(id, data) => { updateCategory(id, data); setModal(null); setEditingCategory(null); }}
+          onSave={(id, data) => updateCategory(id, data)}
           onClose={() => { setModal(null); setEditingCategory(null); }}
         />
       )}
@@ -1518,7 +1532,7 @@ export default function App() {
           categories={categories}
           subscription={editingSubscription}
           defaultCategoryId={settings?.defaultCategoryId}
-          onSave={(id, data) => { handleUpdateSubscription(id, data); setModal(null); setEditingSubscription(null); }}
+          onSave={(id, data) => handleUpdateSubscription(id, data)}
           onClose={() => { setModal(null); setEditingSubscription(null); }}
         />
       )}
@@ -1528,7 +1542,7 @@ export default function App() {
       {modal === 'editIncome' && editingIncome && (
         <AddIncomeModal
           income={editingIncome}
-          onSave={(id, data) => { updateIncome(id, data); setModal(null); setEditingIncome(null); }}
+          onSave={(id, data) => updateIncome(id, data)}
           onClose={() => { setModal(null); setEditingIncome(null); }}
         />
       )}
@@ -1566,7 +1580,7 @@ export default function App() {
           transactions={transactions}
           rules={rules}
           transaction={editingTransaction}
-          onSave={(id, data) => { updateTransaction(id, data); setModal(null); setEditingTransaction(null); }}
+          onSave={(id, data) => updateTransaction(id, data)}
           defaultCategoryId={settings?.defaultCategoryId}
           onClose={() => { setModal(null); setEditingTransaction(null); }}
         />
@@ -1591,7 +1605,7 @@ export default function App() {
           expenseCategories={categories}
           wishlistCategories={wishlistCategories}
           item={editingWishlistItem}
-          onSave={(id, data) => { updateWishlistItem(id, data); setModal(null); setEditingWishlistItem(null); }}
+          onSave={(id, data) => updateWishlistItem(id, data)}
           onClose={() => { setModal(null); setEditingWishlistItem(null); }}
         />
       )}
@@ -1599,7 +1613,7 @@ export default function App() {
         <EditWishlistListModal
           list={editingWishlistList}
           wishlistCategories={wishlistCategories}
-          onSave={(id, data) => { updateWishlistCategory(id, data); setModal(null); setEditingWishlistList(null); }}
+          onSave={(id, data) => updateWishlistCategory(id, data)}
           onClose={() => { setModal(null); setEditingWishlistList(null); }}
         />
       )}
@@ -1657,7 +1671,7 @@ export default function App() {
         <AddGoalModal
           goal={editingGoal}
           incomes={incomes}
-          onSave={(id, data) => { updateGoal(id, data); setModal(null); setEditingGoal(null); }}
+          onSave={(id, data) => updateGoal(id, data)}
           onClose={() => { setModal(null); setEditingGoal(null); }}
         />
       )}

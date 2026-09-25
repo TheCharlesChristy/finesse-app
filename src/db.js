@@ -716,10 +716,7 @@ export async function addSplitTransaction({ accountId = null, parts = [], note =
 
   const splitGroupId = `split-${targetAccountId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const when = date || new Date().toISOString();
-  const ids = [];
-
-  for (const part of cleanParts) {
-    ids.push(await addTransaction({
+  const rows = cleanParts.map(part => ({
       accountId: targetAccountId,
       categoryId: part.categoryId,
       amount: part.amount,
@@ -729,8 +726,35 @@ export async function addSplitTransaction({ accountId = null, parts = [], note =
       tags,
       type,
       splitGroupId,
-    }));
+  }));
+  const ids = [];
+  const deltaByCategory = new Map();
+  let accountDelta = 0;
+
+  for (const row of rows) {
+    const signed = getSignedAmount(row);
+    deltaByCategory.set(row.categoryId, roundMoney((deltaByCategory.get(row.categoryId) || 0) + signed));
+    accountDelta = roundMoney(accountDelta + signed);
   }
+
+  // A split is one purchase, so every part and its balance effects commit or
+  // roll back together. Separate addTransaction calls could leave a partial
+  // split behind if the phone suspended the app between parts.
+  await db.transaction('rw', db.transactions, db.categories, db.accounts, async () => {
+    for (const row of rows) ids.push(await db.transactions.add(row));
+
+    for (const [categoryId, delta] of deltaByCategory) {
+      const category = await db.categories.get(categoryId);
+      if (category) await db.categories.update(categoryId, applyCategorySpendDelta(category, delta));
+    }
+
+    const account = await db.accounts.get(targetAccountId);
+    if (account) {
+      await db.accounts.update(targetAccountId, {
+        balance: roundMoney((account.balance || 0) - accountDelta),
+      });
+    }
+  });
 
   return ids;
 }

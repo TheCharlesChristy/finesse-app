@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   db,
@@ -486,6 +486,32 @@ describe('split transactions', () => {
     expect(await addSplitTransaction({ accountId, parts: [] })).toEqual([]);
   });
 
+  it('rolls every part back if one part cannot be written', async () => {
+    const foodId = await makeCategory({ name: 'Food' });
+    const funId = await makeCategory({ name: 'Fun' });
+    const originalAdd = db.transactions.add;
+    let calls = 0;
+    const addSpy = vi.spyOn(db.transactions, 'add').mockImplementation(async (...args) => {
+      calls += 1;
+      if (calls === 2) throw new Error('simulated write failure');
+      return originalAdd.apply(db.transactions, args);
+    });
+
+    try {
+      await expect(addSplitTransaction({
+        accountId,
+        parts: [{ categoryId: foodId, amount: 60 }, { categoryId: funId, amount: 15 }],
+      })).rejects.toThrow('simulated write failure');
+    } finally {
+      addSpy.mockRestore();
+    }
+
+    expect(await db.transactions.count()).toBe(0);
+    expect((await getCategory(foodId)).spent).toBe(0);
+    expect((await getCategory(funId)).spent).toBe(0);
+    expect((await getAccount(accountId)).balance).toBe(1000);
+  });
+
   it('lets one part be deleted independently', async () => {
     const foodId = await makeCategory({ name: 'Food' });
     const funId = await makeCategory({ name: 'Fun' });
@@ -680,7 +706,9 @@ describe('recalculateSpendCounters day boundaries', () => {
 
   it('still excludes spend from before the reset day', async () => {
     const catId = await makeCategory({ lastReset: new Date('2026-07-15T09:00:00Z').toISOString() });
-    await addTransaction({ accountId, categoryId: catId, amount: 10, date: new Date('2026-07-14T23:00:00Z').toISOString() });
+    // Keep this before local midnight in Europe/London as well as UTC: 23:00Z
+    // in July is already the reset day locally, and should be counted.
+    await addTransaction({ accountId, categoryId: catId, amount: 10, date: new Date('2026-07-14T22:00:00Z').toISOString() });
     await addTransaction({ accountId, categoryId: catId, amount: 25, date: new Date('2026-07-16T09:00:00Z').toISOString() });
 
     await recalculateSpendCounters(accountId);

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Modal, Field } from '../ui';
+import { useModalAction } from '../useModalAction';
 import {
   fmt,
   getCategorySpare,
@@ -21,6 +22,7 @@ export function AdjustBudgetModal({
   onResetTopUps,
   onClose,
 }) {
+  const modalAction = useModalAction(onClose, 'Could not adjust this budget. Please try again.');
   const firstCatId = categories[0]?.id ? String(categories[0].id) : '';
   const defaultId = defaultCategoryId ? String(defaultCategoryId) : firstCatId;
 
@@ -80,20 +82,16 @@ export function AdjustBudgetModal({
     setAmount(over > 0 ? String(over) : '');
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = () => {
     if (!canSubmit) return;
-    if (effectiveSourceKey === 'income') {
-      await onTopUpFromIncome(Number(catId), parsedAmount);
-    } else {
-      await onBorrowFromCategory(Number(effectiveSourceKey), Number(catId), parsedAmount);
-    }
-    onClose();
+    return modalAction.run(() => effectiveSourceKey === 'income'
+      ? onTopUpFromIncome(Number(catId), parsedAmount)
+      : onBorrowFromCategory(Number(effectiveSourceKey), Number(catId), parsedAmount));
   };
 
-  const handleUndo = async () => {
+  const handleUndo = () => {
     if (!cat) return;
-    await onResetTopUps(Number(catId));
-    onClose();
+    return modalAction.run(() => onResetTopUps(Number(catId)));
   };
 
   // Live preview
@@ -109,7 +107,7 @@ export function AdjustBudgetModal({
     : `Add ${fmt(parsedAmount || 0)}`;
 
   return (
-    <Modal title={cat ? `Adjust — ${cat.name}` : 'Adjust budget'} onClose={onClose}>
+    <Modal title={cat ? `Adjust — ${cat.name}` : 'Adjust budget'} onClose={modalAction.dismiss}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0, lineHeight: 1.6 }}>
           Give a category more to spend for this cycle. The extra is temporary and clears automatically at your next reset.
@@ -143,9 +141,9 @@ export function AdjustBudgetModal({
         {receivedTotal > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 12, color: 'var(--accent)', background: 'color-mix(in srgb, var(--accent) 6%, transparent)', borderRadius: 'var(--radius-xs)', padding: '8px 12px' }}>
             <span>Topped up by {fmt(receivedTotal)} this cycle</span>
-            <button type="button" className="btn-secondary" onClick={handleUndo}
+            <button type="button" className="btn-secondary" onClick={handleUndo} disabled={modalAction.isSubmitting}
               style={{ padding: '5px 10px', fontSize: 11, flexShrink: 0 }}>
-              Undo
+              {modalAction.isSubmitting ? 'Saving…' : 'Undo'}
             </button>
           </div>
         )}
@@ -156,7 +154,7 @@ export function AdjustBudgetModal({
               No spare budget available. Add a one-off income from the Income section, or edit a transaction to move it to another category.
             </div>
             <div className="form-actions" style={{ display: 'flex', marginTop: 4 }}>
-              <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Close</button>
+              <button className="btn-secondary" onClick={modalAction.dismiss} style={{ flex: 1 }} disabled={modalAction.isSubmitting}>Close</button>
             </div>
           </>
         ) : (
@@ -212,13 +210,14 @@ export function AdjustBudgetModal({
             )}
 
             <div className="form-actions" style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-              <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-              <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!canSubmit}>
-                {primaryLabel}
+              <button className="btn-secondary" onClick={modalAction.dismiss} style={{ flex: 1 }} disabled={modalAction.isSubmitting}>Cancel</button>
+              <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!canSubmit || modalAction.isSubmitting}>
+                {modalAction.isSubmitting ? 'Saving…' : primaryLabel}
               </button>
             </div>
           </>
         )}
+        {modalAction.error && <div className="field-error" role="alert">{modalAction.error}</div>}
       </div>
     </Modal>
   );

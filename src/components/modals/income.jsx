@@ -2,11 +2,13 @@ import { useState } from 'react';
 import { format } from 'date-fns';
 import DateInput from '../DateInput';
 import { Modal, Field } from '../ui';
+import { useModalAction } from '../useModalAction';
 import { dateOnlyToISO } from '../../utils';
 import { FrequencyFields } from './shared';
 
 // ── Add Income Modal ─────────────────────────────────────────────────────────
 export function AddIncomeModal({ onAdd, onClose, income = null, onSave }) {
+  const modalAction = useModalAction(onClose, 'Could not save this income. Your entries are still here; please try again.');
   const [name, setName] = useState(income?.name || '');
   const [amount, setAmount] = useState(income?.amount != null ? String(income.amount) : '');
   const [resetFrequency, setResetFrequency] = useState(income?.resetFrequency || 'monthly');
@@ -23,22 +25,19 @@ export function AddIncomeModal({ onAdd, onClose, income = null, onSave }) {
       holdActive: income?.holdActive || false,
       lastPaid: income?.lastPaid || null,
     };
-    if (isEditing && onSave) {
-      onSave(income.id, data);
-    } else {
-      onAdd(data);
-    }
-    onClose();
+    return modalAction.run(() => (
+      isEditing && onSave ? onSave(income.id, data) : onAdd(data)
+    ));
   };
 
   return (
-    <Modal title={isEditing ? 'Edit Income' : 'Add Income'} onClose={onClose}
+    <Modal title={isEditing ? 'Edit Income' : 'Add Income'} onClose={modalAction.dismiss}
       footer={<>
         <span className="spacer" />
-<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+<button className="btn-secondary" onClick={modalAction.dismiss} style={{ flex: 1 }} disabled={modalAction.isSubmitting}>Cancel</button>
           <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-            disabled={!name.trim() || !amount}>
-            {isEditing ? 'Save Changes' : 'Add Income'}
+            disabled={modalAction.isSubmitting || !name.trim() || !amount}>
+            {modalAction.isSubmitting ? 'Saving…' : isEditing ? 'Save Changes' : 'Add Income'}
           </button>
       </>}
     >
@@ -59,6 +58,7 @@ export function AddIncomeModal({ onAdd, onClose, income = null, onSave }) {
           resetFrequency={resetFrequency} setResetFrequency={setResetFrequency}
           payDayOfMonth={payDayOfMonth} setPayDayOfMonth={setPayDayOfMonth}
         />
+        {modalAction.error && <div className="field-error" role="alert">{modalAction.error}</div>}
       </div>
     </Modal>
   );
@@ -66,6 +66,7 @@ export function AddIncomeModal({ onAdd, onClose, income = null, onSave }) {
 
 // ── Add One-Off Income Modal ─────────────────────────────────────────────────
 export function AddOneOffIncomeModal({ onAdd, onClose, categories = [] }) {
+  const modalAction = useModalAction(onClose, 'Could not add this income. Your entries are still here; please try again.');
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
@@ -75,24 +76,24 @@ export function AddOneOffIncomeModal({ onAdd, onClose, categories = [] }) {
 
   const handleSubmit = () => {
     if (!name.trim() || parsedAmount <= 0 || !date) return;
-    onAdd({
+    const data = {
       name: name.trim(),
       amount: parsedAmount,
       date: dateOnlyToISO(date),
       note: note.trim(),
       categoryId: categoryId ? Number(categoryId) : null,
-    });
-    onClose();
+    };
+    return modalAction.run(() => onAdd(data));
   };
 
   return (
-    <Modal title="One-Off Income" onClose={onClose}
+    <Modal title="One-Off Income" onClose={modalAction.dismiss}
       footer={<>
         <span className="spacer" />
-<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
+<button className="btn-secondary" onClick={modalAction.dismiss} style={{ flex: 1 }} disabled={modalAction.isSubmitting}>Cancel</button>
           <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }}
-            disabled={!name.trim() || parsedAmount <= 0 || !date}>
-            Add to Account
+            disabled={modalAction.isSubmitting || !name.trim() || parsedAmount <= 0 || !date}>
+            {modalAction.isSubmitting ? 'Saving…' : 'Add to Account'}
           </button>
       </>}
     >
@@ -132,6 +133,7 @@ export function AddOneOffIncomeModal({ onAdd, onClose, categories = [] }) {
             )}
           </Field>
         )}
+        {modalAction.error && <div className="field-error" role="alert">{modalAction.error}</div>}
       </div>
     </Modal>
   );
@@ -139,15 +141,16 @@ export function AddOneOffIncomeModal({ onAdd, onClose, categories = [] }) {
 
 // ── Fast Forward Modal ───────────────────────────────────────────────────────
 export function FastForwardModal({ onConfirm, onClose }) {
+  const modalAction = useModalAction(onClose, 'Could not record this pay date. Please try again.');
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
 
   return (
-    <Modal title="Early Pay" onClose={onClose}
+    <Modal title="Early Pay" onClose={modalAction.dismiss}
       footer={<>
         <span className="spacer" />
-<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-        <button className="btn-primary" onClick={() => { onConfirm(dateOnlyToISO(date)); onClose(); }} style={{ flex: 2 }}>
-          Mark as Received
+<button className="btn-secondary" onClick={modalAction.dismiss} style={{ flex: 1 }} disabled={modalAction.isSubmitting}>Cancel</button>
+        <button className="btn-primary" onClick={() => modalAction.run(() => onConfirm(dateOnlyToISO(date)))} style={{ flex: 2 }} disabled={modalAction.isSubmitting}>
+          {modalAction.isSubmitting ? 'Saving…' : 'Mark as Received'}
         </button>
       </>}
     >
@@ -157,6 +160,7 @@ export function FastForwardModal({ onConfirm, onClose }) {
       <div style={{ marginBottom: 18 }}>
         <DateInput value={date} onChange={setDate} label="Pay received date" />
       </div>
+      {modalAction.error && <div className="field-error" role="alert">{modalAction.error}</div>}
     </Modal>
   );
 }

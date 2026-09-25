@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 
 import DateInput from '../DateInput';
 import { Modal, Field } from '../ui';
+import { useModalAction } from '../useModalAction';
 import { fmt, getDebtPayoff, getIncomeFrequency, roundMoney } from '../../utils';
 import { ColourPicker, PALETTE } from './shared';
 
@@ -14,6 +15,7 @@ const FREQ_NOUN = {
 };
 
 export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose }) {
+  const modalAction = useModalAction(onClose, 'Could not save this goal. Your entries are still here; please try again.');
   const isEditing = Boolean(goal);
 
   const [name, setName] = useState(goal?.name || '');
@@ -64,18 +66,18 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
       targetDate: useTargetDate && targetDate ? new Date(`${targetDate}T00:00:00`).toISOString() : null,
       color,
     };
-    if (isEditing && onSave) onSave(goal.id, data);
-    else onAdd(data);
-    onClose();
+    return modalAction.run(() => (
+      isEditing && onSave ? onSave(goal.id, data) : onAdd(data)
+    ));
   };
 
   return (
-    <Modal title={isEditing ? 'Edit Goal' : 'Add Goal'} onClose={onClose}
+    <Modal title={isEditing ? 'Edit Goal' : 'Add Goal'} onClose={modalAction.dismiss}
       footer={<>
         <span className="spacer" />
-<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!canSubmit}>
-            {isEditing ? 'Save Changes' : `Add ${isDebt ? 'Debt' : 'Goal'}`}
+<button className="btn-secondary" onClick={modalAction.dismiss} style={{ flex: 1 }} disabled={modalAction.isSubmitting}>Cancel</button>
+          <button className="btn-primary" onClick={handleSubmit} style={{ flex: 2 }} disabled={!canSubmit || modalAction.isSubmitting}>
+            {modalAction.isSubmitting ? 'Saving…' : isEditing ? 'Save Changes' : `Add ${isDebt ? 'Debt' : 'Goal'}`}
           </button>
       </>}
     >
@@ -194,6 +196,7 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
         )}
 
         <ColourPicker color={color} onChange={setColor} />
+        {modalAction.error && <div className="field-error" role="alert">{modalAction.error}</div>}
 
       </div>
     </Modal>
@@ -202,6 +205,7 @@ export function AddGoalModal({ goal = null, incomes = [], onAdd, onSave, onClose
 
 /** Turn a wishlist item into a funded goal, so saving for it is deliberate. */
 export function SaveForItemModal({ item, incomes = [], onConfirm, onClose }) {
+  const modalAction = useModalAction(onClose, 'Could not create this goal. Your entries are still here; please try again.');
   const [perCycle, setPerCycle] = useState('');
   const [incomeId, setIncomeId] = useState(incomes[0]?.id ? String(incomes[0].id) : '');
 
@@ -212,23 +216,20 @@ export function SaveForItemModal({ item, incomes = [], onConfirm, onClose }) {
   const cycleNoun = linkedIncome ? (FREQ_NOUN[getIncomeFrequency(linkedIncome)] || 'month') : 'month';
 
   return (
-    <Modal title={`Save for ${item?.name || 'this'}`} onClose={onClose}
+    <Modal title={`Save for ${item?.name || 'this'}`} onClose={modalAction.dismiss}
       footer={<>
         <span className="spacer" />
-<button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-          <button className="btn-primary" style={{ flex: 2 }}
-            onClick={() => {
-              onConfirm({
+<button className="btn-secondary" onClick={modalAction.dismiss} style={{ flex: 1 }} disabled={modalAction.isSubmitting}>Cancel</button>
+          <button className="btn-primary" style={{ flex: 2 }} disabled={modalAction.isSubmitting}
+            onClick={() => modalAction.run(() => onConfirm({
                 name: item.name,
                 kind: 'saving',
                 target: price,
                 perCycleContribution: perCycleValue,
                 incomeId: perCycleValue > 0 && incomeId ? Number(incomeId) : null,
                 wishlistItemId: item.id,
-              });
-              onClose();
-            }}>
-            Create Goal
+              }))}>
+            {modalAction.isSubmitting ? 'Saving…' : 'Create Goal'}
           </button>
       </>}
     >
@@ -254,6 +255,7 @@ export function SaveForItemModal({ item, incomes = [], onConfirm, onClose }) {
             )}
           </Field>
         )}
+        {modalAction.error && <div className="field-error" role="alert">{modalAction.error}</div>}
 
         {cycles != null && (
           <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', borderRadius: 'var(--radius-xs)', padding: '9px 12px' }}>
