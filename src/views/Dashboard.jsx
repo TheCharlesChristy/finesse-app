@@ -461,6 +461,7 @@ export default function Dashboard({
                 freq: catCycle.freq,
                 payDayOfMonth: settings?.payDayOfMonth,
                 anchor: catCycle.start,
+                resetAt: cat.overspendResetAt,
               });
               return (
                 <div key={cat.id}>

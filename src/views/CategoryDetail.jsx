@@ -34,6 +34,8 @@ export default function CategoryDetail({
   onAdjust,
   onEditTransaction,
   onDeleteTransaction,
+  onClearRollover,
+  onResetOverspend,
 }) {
   const cycle = useMemo(
     () => (category ? getCategoryCycle(category, incomes, settings) : null),
@@ -85,6 +87,7 @@ export default function CategoryDetail({
     freq: cycle?.freq,
     payDayOfMonth: settings?.payDayOfMonth,
     anchor: cycle?.start,
+    resetAt: category.overspendResetAt,
   });
   const perDay = cycle && cycle.remaining > 0 ? roundMoney(Math.max(0, left - upcomingSubs) / cycle.remaining) : 0;
   // A rollover category accumulates rather than resetting, so a pace measured
@@ -92,12 +95,22 @@ export default function CategoryDetail({
   // tags make.
   const pacedPeriod = category.rolloverEnabled ? null : getPacedPeriodStatus(category, transactions, cycle);
 
-  const stat = (label, value, hint, color) => (
+  const stat = (label, value, hint, color, action) => (
     <div className="card" style={{ borderRadius: 'var(--radius-md)', padding: '15px 16px' }}>
-      <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 5 }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 5 }}>{label}</div>
+        {action}
+      </div>
       <div style={{ fontSize: 20, fontWeight: 700, color }}>{value}</div>
       <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 3 }}>{hint}</div>
     </div>
+  );
+
+  const statAction = (label, onClick) => (
+    <button type="button" className="btn-secondary" onClick={onClick}
+      style={{ padding: '3px 8px', fontSize: 10, flexShrink: 0 }}>
+      {label}
+    </button>
   );
 
   return (
@@ -147,11 +160,19 @@ export default function CategoryDetail({
         {stat('Spent', fmt(spent), `${thisCycle.length} transaction${thisCycle.length === 1 ? '' : 's'}`)}
         {stat('Safe per day', fmt(perDay), cycle ? `for ${cycle.remaining} more day${cycle.remaining === 1 ? '' : 's'}` : '—', 'var(--good)')}
         {upcomingSubs > 0 && stat('Subscriptions due', fmt(upcomingSubs), 'before the next reset', 'var(--accent-3)')}
+        {roundMoney(category.rolloverBalance || 0) !== 0 && stat(
+          'Carried over',
+          `${category.rolloverBalance > 0 ? '+' : '−'}${fmt(Math.abs(category.rolloverBalance))}`,
+          'from previous cycles',
+          category.rolloverBalance > 0 ? 'var(--accent-2)' : 'var(--danger)',
+          onClearRollover && statAction('Remove', () => onClearRollover(category.id)),
+        )}
         {cumulative !== 0 && stat(
           cumulative > 0 ? 'Over, all time' : 'Under, all time',
           fmt(Math.abs(cumulative)),
           'across every cycle',
           cumulative > 0 ? 'var(--danger)' : 'var(--good)',
+          onResetOverspend && statAction('Reset', () => onResetOverspend(category.id)),
         )}
       </div>
 

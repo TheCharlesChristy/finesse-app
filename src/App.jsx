@@ -12,6 +12,7 @@ import { db, ensureDefaultAccount, addAccount, updateAccount, deleteAccount, tra
   addSubscription, updateSubscription, deleteSubscription, processDueSubscriptions,
   addVariable, updateVariable, deleteVariable,
   topUpCategoryFromIncome, borrowBudgetBetweenCategories, resetCategoryTopUps,
+  clearCategoryRollover, resetCategoryOverspend,
   addSplitTransaction, addRule, updateRule, deleteRule,
   addTemplate, deleteTemplate, logTemplate,
   addGoal, updateGoal, deleteGoal, contributeToGoal, autoContributeGoals,
@@ -841,6 +842,24 @@ export default function App() {
     resetCategoryTopUps(categoryId)
   ), []);
 
+  const handleClearRollover = useCallback(async (categoryId) => {
+    const ok = await showConfirm(
+      'Remove the amount carried over from previous cycles? This cycle\'s allowance and spend stay the same — rollover keeps building from here.',
+      { title: 'Remove carried-over balance', confirmText: 'Remove' },
+    );
+    if (!ok) return;
+    await clearCategoryRollover(categoryId);
+  }, [showConfirm]);
+
+  const handleResetOverspend = useCallback(async (categoryId) => {
+    const ok = await showConfirm(
+      'Reset the all-time over/under total back to zero? Nothing about this cycle\'s budget or the transactions behind it changes — only cycles from now on count toward the total.',
+      { title: 'Reset all-time total', confirmText: 'Reset' },
+    );
+    if (!ok) return;
+    await resetCategoryOverspend(categoryId);
+  }, [showConfirm]);
+
   const handleOpenAdjust = useCallback((categoryId = null) => {
     setAdjustCategoryId(categoryId);
     setModal('adjust');
@@ -1391,6 +1410,8 @@ export default function App() {
               onAdjust={handleOpenAdjust}
               onEditTransaction={handleEditTransaction}
               onDeleteTransaction={handleDeleteTransaction}
+              onClearRollover={handleClearRollover}
+              onResetOverspend={handleResetOverspend}
             />
           )}
           {view === 'goals' && (

@@ -423,6 +423,15 @@ describe('B8 — cumulative overspend buckets fixed-length cycles correctly', ()
     expect(getCumulativeOverspend(1, 0, [{ categoryId: 1, amount: 10, date: iso(new Date()) }])).toBe(0);
     expect(getCumulativeOverspend(1, 100, [])).toBe(0);
   });
+
+  it('excludes cycles before resetAt, without touching the transaction log', () => {
+    const transactions = [
+      { categoryId: 1, amount: 120, date: iso(subMonths(new Date(), 1)) },
+      { categoryId: 1, amount: 120, date: iso(new Date()) },
+    ];
+    expect(getCumulativeOverspend(1, 100, transactions, 1)).toBe(40);
+    expect(getCumulativeOverspend(1, 100, transactions, { payDayOfMonth: 1, resetAt: iso(new Date()) })).toBe(20);
+  });
 });
 
 describe('getSafeToSpend', () => {

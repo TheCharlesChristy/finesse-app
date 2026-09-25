@@ -675,7 +675,11 @@ export async function getTransactions(accountId = null) {
   const rows = accountId == null
     ? await db.transactions.toArray()
     : await db.transactions.where('accountId').equals(Number(accountId)).toArray();
-  return rows.sort((a, b) => new Date(b.date) - new Date(a.date));
+  // `date` alone ties every transaction logged on the same day — it carries
+  // no time of day (see dateOnlyToISO) — so a same-day tie falls back to
+  // `id`, which (auto-increment) reflects the order they were actually
+  // added, newest last-in first.
+  return rows.sort((a, b) => new Date(b.date) - new Date(a.date) || (Number(b.id) || 0) - (Number(a.id) || 0));
 }
 
 export async function addTransaction(tx) {
@@ -1453,6 +1457,26 @@ export async function resetCategoryTopUps(categoryId) {
       }
     }
   });
+}
+
+// Clear what a rollover category is carrying in from previous cycles. Only
+// `rolloverBalance` moves — the category stays opted into rollover, so it
+// starts accruing again from this cycle's leftover rather than turning
+// rollover off. See CategoryDetail's "Carried over" control.
+export async function clearCategoryRollover(categoryId) {
+  const catId = Number(categoryId);
+  if (!catId) return;
+  await db.categories.update(catId, { rolloverBalance: 0 });
+}
+
+// Zero the "Over/Under, all time" figure on CategoryDetail
+// (`getCumulativeOverspend`) by moving its baseline to now. Nothing about the
+// transaction log, `spent` or `allowance` changes — only cycles dated from
+// this point on are counted toward the running total from here on.
+export async function resetCategoryOverspend(categoryId) {
+  const catId = Number(categoryId);
+  if (!catId) return;
+  await db.categories.update(catId, { overspendResetAt: new Date().toISOString() });
 }
 
 // ── Integrity repair ─────────────────────────────────────────────────────────
