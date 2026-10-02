@@ -22,7 +22,7 @@ import {
   getSafeToSpend,
   isRefund,
 } from '../utils';
-import { addDays, format } from 'date-fns';
+import { addDays, format, isSameDay } from 'date-fns';
 import { CardTitle, EmptyState, IconButton } from '../components/ui';
 import Wizard from '../components/Wizard';
 
@@ -532,9 +532,9 @@ export default function Dashboard({
                                 Funding missing
                               </span>
                             )}
-                            {(allocations.length > 0 || cat.resetFrequency) && (
-                              <span title={`Resets ${format(catCycle.end, 'EEEE d MMMM yyyy')}`} style={{ fontSize: 10, color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--text-primary) 6%, transparent)', padding: '1px 6px', borderRadius: 'var(--radius-sm)' }}>
-                                Cycles {format(catCycle.end, 'd MMM')}
+                            {pacedPeriod && (
+                              <span title={`Next ${fmt(pacedPeriod.amount)}/${pacedPeriod.periodLabel} allowance is released ${format(pacedPeriod.end, 'EEEE d MMMM yyyy')}`} style={{ fontSize: 10, color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--text-primary) 6%, transparent)', padding: '1px 6px', borderRadius: 'var(--radius-sm)' }}>
+                                Next {fmt(pacedPeriod.amount)} {isSameDay(pacedPeriod.end, addDays(new Date(), 1)) ? 'tomorrow' : format(pacedPeriod.end, 'EEE d MMM')}
                               </span>
                             )}
                             {cat.allowanceFormula && (
