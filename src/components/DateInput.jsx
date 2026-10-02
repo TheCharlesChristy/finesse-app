@@ -133,7 +133,7 @@ export default function DateInput({ value, onChange, label = 'Date', disabled = 
       {open && createPortal(
         <div
           ref={popoverRef}
-          className="date-picker-popover"
+          className="date-picker-popover card-raised"
           role="dialog"
           aria-modal="false"
           aria-label="Choose date"
