@@ -533,6 +533,11 @@ export default function Dashboard({
                                 Funding missing
                               </span>
                             )}
+                            {(allocations.length > 0 || cat.resetFrequency) && (
+                              <span title={`Resets ${format(catCycle.end, 'EEEE d MMMM yyyy')}`} style={{ fontSize: 10, color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--text-primary) 6%, transparent)', padding: '1px 6px', borderRadius: 'var(--radius-sm)' }}>
+                                Cycles {format(catCycle.end, 'd MMM')}
+                              </span>
+                            )}
                             {cat.allowanceFormula && (
                               <span style={{ fontSize: 10, color: 'var(--accent)', background: 'color-mix(in srgb, var(--accent) 8%, transparent)', padding: '1px 6px', borderRadius: 'var(--radius-sm)' }}>
                                 ƒ formula
